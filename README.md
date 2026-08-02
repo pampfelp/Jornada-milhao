@@ -23,7 +23,8 @@ Essas chaves (`apiKey`, `projectId` etc.) são **públicas por design** no Fireb
 
 ## 2. Apps Script — Google Agenda + geração de PDF de contrato
 
-O `Code.gs` faz 2 coisas, e só essas duas:
+O `Code.gs` faz 3 coisas, e só essas três:
+- Lista os **calendários** que a conta implantada enxerga (alimenta o seletor em Configurações).
 - Lê eventos do **Google Agenda** num intervalo de datas (o navegador sozinho não acessa a Agenda).
 - Gera o **PDF do contrato** a partir de um modelo do Google Docs e salva no Drive.
 
@@ -42,11 +43,11 @@ O `Code.gs` faz 2 coisas, e só essas duas:
    | Propriedade | Valor |
    |---|---|
    | `CONTRATO_TEMPLATE_DOC_ID` | o ID copiado no passo 2.1 |
-   | `AGENDA_CALENDAR_ID` | opcional — o e-mail/ID do calendário do Henry, se não for o calendário principal da conta que implantar o script. Deixe em branco pra usar o calendário principal ("primary"). |
+   | `AGENDA_CALENDAR_ID` | opcional — usado só como calendário **padrão** antes de escolher um em Configurações (veja 2.3). Deixe em branco pra cair no calendário principal ("primary") até lá. |
 
 5. Rode a função `autorizar` uma vez direto no editor (▶) — vai pedir permissão de acesso à Agenda e ao Drive.
 6. **Implantar → Nova implantação** → tipo **"Aplicativo da Web"**:
-   - Executar como: **Eu** (o e-mail que tem acesso à Agenda certa)
+   - Executar como: **Eu** (a conta do Google cujos calendários você quer poder escolher — veja 2.3)
    - Quem pode acessar: **Qualquer pessoa**
    Copie a URL `.../exec` gerada.
 7. Cole essa URL na constante `APPS_SCRIPT_PROXY_URL`, em [`firebase-init.js`](firebase-init.js).
@@ -54,6 +55,32 @@ O `Code.gs` faz 2 coisas, e só essas duas:
 **Toda vez que editar `Code.gs`**, é preciso fazer uma nova implantação (ou "Gerenciar implantações → editar → Nova versão") pra que a URL publicada reflita o código novo.
 
 Enquanto isso não estiver configurado, o resto do sistema funciona normalmente — só os botões "Sincronizar Agenda" e a geração de PDF do contrato mostram um aviso.
+
+### 2.3. Escolher qual calendário sincronizar
+
+A conta que "Executa como" no passo 2.2 só enxerga os calendários dela (os
+que criou + os que foram compartilhados com ela). Em **Configurações → Calendário
+do Google Agenda**, clique em "🔄 Recarregar lista" pra ver esses calendários
+e escolha qual alimenta o Funil de Agendamento — sem precisar editar Script
+Properties. Essa escolha fica salva no Firestore (`config/geral`), então vale
+pra todo mundo que usa o sistema.
+
+Se o calendário que você quer é de **outra pessoa** (ex: um calendário
+dedicado a clientes do Benedito): ou ele compartilha esse calendário com a
+conta que implantou o `Code.gs` (Google Agenda → configurações do
+calendário dele → "Compartilhar com pessoas específicas"), ou o `Code.gs`
+precisa ser implantado a partir da própria conta dele (repita o passo 2.2
+logado como ele).
+
+**Eventos recorrentes**: o `CalendarApp` do Apps Script devolve o mesmo ID
+pra todas as ocorrências de uma série recorrente — o `Code.gs` já marca
+cada evento com `recorrente: true/false`, e o `app.js` usa isso pra tratar
+cada ocorrência de uma série como um card separado (por data), enquanto
+eventos únicos continuam detectando reagendamento de verdade (mesmo ID,
+data diferente). Limitação conhecida: se uma ocorrência específica de uma
+série for movida pra outra data, ela vira um card novo em vez de atualizar
+o card antigo (o Apps Script não expõe um ID estável por ocorrência
+reagendada) — o card antigo fica órfão e precisa ser excluído manualmente.
 
 ## 3. Planilha administrativa
 
@@ -96,6 +123,7 @@ preservam pastas ao arrastar arquivos soltos.
 - **despesas/{id}**: `descricao`, `categoria`, `tipo` (`despesa`/`outro_custo`), `valor`, `data`, `recorrente` (bool), `diaVencimento`, `ultimoMesLancado`, `origemRecorrenteId`.
 - **etapasAdminConfig/{id}**: `nome`, `ordem`, `prazoDiasPadrao` — colunas configuráveis do Funil Administrativo.
 - **cardsAdmin/{id}**: `contratoId`, `clienteId`, `clienteNome`, `valorTotal`, `etapa`, `dataEntrouEtapa`, `prazoEtapaAtual`, `createdAt`, `updatedAt` — Funil Administrativo, criado automaticamente ao gerar um contrato. Subcoleção `historico/`.
+- **config/geral**: documento único — `calendarioAgendaId`, `calendarioAgendaNome` — o calendário escolhido em Configurações para o Funil de Agendamento.
 
 ## Decisões tomadas nas perguntas em aberto do plano original
 

@@ -207,6 +207,22 @@
     </div>
 
     <div class="card">
+      <h2>Calendário do <span>Google Agenda</span></h2>
+      <p class="hint">Escolha qual calendário alimenta o Funil de Agendamento — assim dá pra usar um calendário dedicado a clientes em vez do pessoal. A lista vem da conta do Google que está com o <code>Code.gs</code> implantado; se o calendário que você quer for de outra pessoa (ex: Benedito), ele precisa compartilhar esse calendário com essa conta primeiro (ou o Code.gs precisa ser implantado a partir da conta dele).</p>
+      <div class="row">
+        <div class="field">
+          <label>Calendário selecionado</label>
+          <select id="cfg-calendario-select"><option value="">Carregando...</option></select>
+        </div>
+      </div>
+      <div class="modal-actions" style="justify-content:flex-start;margin-top:12px;">
+        <button class="btn" id="btn-recarregar-calendarios">🔄 Recarregar lista</button>
+        <button class="btn btn-primary" id="btn-salvar-calendario">Salvar calendário</button>
+      </div>
+      <p class="hint" id="cfg-calendario-atual"></p>
+    </div>
+
+    <div class="card">
       <h2>Integrações (Apps Script)</h2>
       <p class="hint">Sincronização com o Google Agenda e geração de PDF de contrato dependem do <code>Code.gs</code> implantado e configurado em <code>firebase-init.js</code> (constante <code>APPS_SCRIPT_PROXY_URL</code>). Veja o README do projeto para o passo a passo.</p>
     </div>

@@ -4,7 +4,7 @@
 
 import { db, APPS_SCRIPT_PROXY_URL } from "./firebase-init.js";
 import {
-  collection, addDoc, updateDoc, deleteDoc, doc,
+  collection, addDoc, updateDoc, deleteDoc, doc, setDoc,
   onSnapshot, query, orderBy, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 
@@ -18,6 +18,7 @@ const STATE = {
   despesas: [],
   etapasAdmin: [],
   cardsAdmin: [],
+  config: {},
   periodoFinanceiro: new Date().toISOString().slice(0, 7)
 };
 
@@ -131,6 +132,7 @@ async function encontrarOuCriarCliente(nome, telefone) {
 
 /* ══════════════ NAVEGAÇÃO ══════════════ */
 
+let calendariosCarregados = false;
 document.querySelectorAll(".sidebar a[data-view]").forEach((a) => {
   a.addEventListener("click", () => {
     document.querySelectorAll(".sidebar a[data-view]").forEach((x) => x.classList.remove("active"));
@@ -138,6 +140,10 @@ document.querySelectorAll(".sidebar a[data-view]").forEach((a) => {
     document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
     document.getElementById("view-" + a.dataset.view).classList.add("active");
     fecharMenuMobile();
+    if (a.dataset.view === "config" && !calendariosCarregados) {
+      calendariosCarregados = true;
+      carregarListaCalendarios();
+    }
   });
 });
 function fecharMenuMobile() {
@@ -369,18 +375,32 @@ async function sincronizarAgenda() {
   const from = addDias(hojeStr(), -7) + "T00:00:00";
   const to = addDias(hojeStr(), 60) + "T23:59:59";
   try {
-    const resp = await chamarAppsScript("listarEventosAgenda", { from, to });
+    const calendarId = STATE.config.calendarioAgendaId || undefined;
+    const resp = await chamarAppsScript("listarEventosAgenda", { from, to, calendarId });
     let criados = 0, atualizados = 0;
+    const processadosNestaSincronizacao = new Set();
     for (const ev of resp.eventos || []) {
       const inicio = new Date(ev.inicio);
       const dataStr = inicio.toISOString().slice(0, 10);
       const horaStr = inicio.toTimeString().slice(0, 5);
       const clienteNome = ev.titulo || "Sem título";
-      const existente = STATE.agendamentos.find((a) => a.googleEventId === ev.googleEventId);
+
+      // Eventos recorrentes compartilham o mesmo googleEventId em TODAS as
+      // ocorrências (limitação do CalendarApp do Apps Script) — sem isso,
+      // uma série semanal colapsaria num único card que ficaria "pulando"
+      // de data a cada sincronização, marcado como reagendado sem parar.
+      // Pra série recorrente, a chave real de uma ocorrência é (id + data).
+      // Pra evento único, o id sozinho já identifica a ocorrência — e ASSIM
+      // uma mudança de data nele é reagendamento de verdade.
+      const chave = ev.recorrente ? `${ev.googleEventId}|${dataStr}` : ev.googleEventId;
+      if (processadosNestaSincronizacao.has(chave)) continue;
+      processadosNestaSincronizacao.add(chave);
+
+      const existente = STATE.agendamentos.find((a) => a.googleEventId === chave);
       if (!existente) {
         await addDoc(collection(db, "agendamentos"), {
           clienteId: null, clienteNome, telefone: "", data: dataStr, hora: horaStr,
-          status: "agendado", origem: "agenda", googleEventId: ev.googleEventId,
+          status: "agendado", origem: "agenda", googleEventId: chave,
           observacoes: ev.descricao || "", convertido: false,
           createdAt: serverTimestamp(), updatedAt: serverTimestamp()
         });
@@ -959,6 +979,41 @@ function renderConfigEtapasAdmin() {
   </tr>`).join("") || `<tr><td colspan="4"><div class="empty">Nenhuma etapa cadastrada.</div></td></tr>`;
 }
 
+/* ══════════════ CONFIGURAÇÕES — CALENDÁRIO DO GOOGLE AGENDA ══════════════ */
+
+async function carregarListaCalendarios() {
+  const select = document.getElementById("cfg-calendario-select");
+  select.innerHTML = `<option value="">Carregando...</option>`;
+  try {
+    const resp = await chamarAppsScript("listarCalendarios", {});
+    const calendarios = resp.calendarios || [];
+    const atual = STATE.config.calendarioAgendaId || "";
+    select.innerHTML = calendarios.map((c) => (
+      `<option value="${esc(c.id)}" ${c.id === atual ? "selected" : ""}>${esc(c.nome)}</option>`
+    )).join("") || `<option value="">Nenhum calendário encontrado</option>`;
+  } catch (err) {
+    select.innerHTML = `<option value="">Erro ao carregar</option>`;
+    mostrarErro("Não foi possível listar os calendários: " + err.message);
+  }
+}
+document.getElementById("btn-recarregar-calendarios").addEventListener("click", carregarListaCalendarios);
+
+document.getElementById("btn-salvar-calendario").addEventListener("click", async () => {
+  const select = document.getElementById("cfg-calendario-select");
+  const calendarioAgendaId = select.value || null;
+  const nomeEscolhido = select.options[select.selectedIndex] ? select.options[select.selectedIndex].textContent : "";
+  try {
+    await setDoc(doc(db, "config", "geral"), { calendarioAgendaId, calendarioAgendaNome: nomeEscolhido }, { merge: true });
+    mostrarToast("Calendário salvo. A próxima sincronização já usa esse calendário.");
+  } catch (err) { mostrarErro(err.message); }
+});
+
+function renderConfigCalendario() {
+  document.getElementById("cfg-calendario-atual").textContent = STATE.config.calendarioAgendaId
+    ? `Calendário atual: ${STATE.config.calendarioAgendaNome || STATE.config.calendarioAgendaId}`
+    : "Nenhum calendário salvo ainda — sincronizando com o principal da conta que implantou o Code.gs.";
+}
+
 /* ══════════════ LISTENERS EM TEMPO REAL ══════════════ */
 
 const DEFAULT_ETAPAS_VENDA = [
@@ -975,6 +1030,11 @@ const DEFAULT_ETAPAS_ADMIN = [
 ];
 
 function iniciarListeners() {
+  onSnapshot(doc(db, "config", "geral"), (snap) => {
+    STATE.config = snap.exists() ? snap.data() : {};
+    renderConfigCalendario();
+  }, (err) => mostrarErro("Erro de conexão (config): " + err.message));
+
   onSnapshot(query(collection(db, "clientes"), orderBy("createdAt", "desc")), (snap) => {
     STATE.clientes = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderTabelaClientes();

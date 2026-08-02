@@ -57,7 +57,8 @@ function doPost(e) {
 function rotear_(body) {
   try {
     switch (body.action) {
-      case "listarEventosAgenda": return acaoListarEventosAgenda_(body.from, body.to);
+      case "listarCalendarios": return acaoListarCalendarios_();
+      case "listarEventosAgenda": return acaoListarEventosAgenda_(body.from, body.to, body.calendarId);
       case "gerarContratoPDF": return acaoGerarContratoPDF_(body.dados);
       default: return { ok: false, erro: "Ação desconhecida: " + body.action };
     }
@@ -68,20 +69,37 @@ function rotear_(body) {
 
 // ══════════════ GOOGLE AGENDA (só leitura) ══════════════
 
-// Lista eventos do calendário configurado entre "from" e "to" (strings
-// ISO, ex: "2026-08-01T00:00:00"). O app.js usa isso pra alimentar o Funil
-// de Agendamento — cada evento vira (ou atualiza) um card, comparado pelo
-// campo "googleEventId".
-function acaoListarEventosAgenda_(from, to) {
+// Lista os calendários que a conta que implantou este Code.gs enxerga
+// (os dela + os que foram compartilhados com ela) — alimenta o seletor de
+// calendário em Configurações, pra escolher qual Agenda vira o Funil de
+// Agendamento sem precisar editar Script Properties na mão.
+function acaoListarCalendarios_() {
+  var calendarios = CalendarApp.getAllCalendars().map(function (cal) {
+    return { id: cal.getId(), nome: cal.getName() };
+  });
+  return { ok: true, calendarios: calendarios };
+}
+
+// Lista eventos do calendário entre "from" e "to" (strings ISO, ex:
+// "2026-08-01T00:00:00"). O app.js usa isso pra alimentar o Funil de
+// Agendamento — cada evento vira (ou atualiza) um card, comparado pelo
+// campo "googleEventId". "calendarId" vem do calendário escolhido em
+// Configurações (guardado no Firestore); se não vier, cai pra Script
+// Property AGENDA_CALENDAR_ID e, por último, pro calendário principal.
+function acaoListarEventosAgenda_(from, to, calendarId) {
   if (!from || !to) return { ok: false, erro: "Parâmetros from/to são obrigatórios." };
-  var calendarId = obterCalendarId_();
-  var calendario = CalendarApp.getCalendarById(calendarId);
+  var calendario = CalendarApp.getCalendarById(calendarId || obterCalendarId_());
   if (!calendario) return { ok: false, erro: "Calendário não encontrado: " + calendarId };
 
   var eventos = calendario.getEvents(new Date(from), new Date(to));
   var lista = eventos.map(function (ev) {
     return {
+      // Eventos recorrentes compartilham o MESMO googleEventId em todas as
+      // ocorrências (limitação do CalendarApp) — o app.js usa "recorrente"
+      // pra saber quando precisa desambiguar ocorrências pela data, em vez
+      // de tratar uma mudança de data como reagendamento de verdade.
       googleEventId: ev.getId(),
+      recorrente: ev.isRecurringEvent(),
       titulo: ev.getTitle(),
       descricao: ev.getDescription(),
       inicio: ev.getStartTime().toISOString(),
