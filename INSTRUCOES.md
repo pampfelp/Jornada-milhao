@@ -8,6 +8,15 @@ Este pacote tem estes arquivos:
 - `planilha.html` → uma página separada pra você editar ou apagar dados direto, como se fosse uma planilha (veja o Passo 4 abaixo)
 - `manifest.json`, `service-worker.js`, ícones (`.png`/`.ico`) → deixam o sistema instalável como aplicativo. **Precisam ficar na mesma pasta que o `index.html`**, sempre que for hospedar — não são opcionais.
 
+## ⚠️ Já tem o sistema rodando? Republique as regras primeiro
+
+Se você já tinha esse sistema no ar antes, **as regras do Firestore
+mudaram** (o Funil de Agendamento agora usa "etapa" em vez de "status").
+Vá direto em **Firestore Database → Regras** no console do Firebase →
+apague o conteúdo → cole o de `firestore.rules` → **Publicar**. Sem isso,
+criar ou mover um agendamento vai dar erro — o resto do sistema continua
+funcionando normal.
+
 ## Passo 1 — Criar o banco de dados (Firebase)
 
 1. Acesse [console.firebase.google.com](https://console.firebase.google.com) e crie um projeto novo (gratuito).
@@ -84,26 +93,35 @@ Os 3 funis moram numa tela só ("Funis" no menu) — use os botões
 📅 Agendamento / 📈 Vendas / 🗂️ Administrativo no topo pra trocar qual
 kanban está visível, sem sair da tela.
 
+- **Etapas de cada funil são 100% suas** — vá em **Configurações** e crie,
+  edite ou apague as etapas de Agendamento, Vendas e Administrativo. Cada
+  etapa tem nome, ordem, e um SLA (🟡 amarelo / 🔴 vermelho) em horas ou
+  dias — o card fica com essa cor a partir do tempo que passou desde que
+  entrou na etapa, atualizado sozinho a cada minuto. As etapas que vêm de
+  fábrica (edite à vontade):
+  - **Agendamento**: Novo Lead, Tentativa de Contato, Retomar Contato,
+    Qualificação, Agendado, Reagendado, Perdido.
+  - **Vendas**: Reunião Agendada, Follow Up, Negociação, Fechado, Perdido.
+  - **Administrativo**: Recebimento da Entrada, Criação do Grupo, Envio do
+    Contrato, Enviado para Mentoria.
 - **Funil de Agendamento**: clique em "+ Agendamento manual", busque o
   cliente já cadastrado (ou crie um novo direto no campo) e preencha
-  data/hora. Ao salvar, o card já nasce em "Agendado" — o sistema cria o
-  evento na Google Agenda e já joga o cliente como novo lead no Funil de
-  Vendas, sem precisar de mais nenhum clique. Se o cliente não aparecer
-  (no-show), arraste o card pra "Não veio": ele (e o lead vinculado) ficam
-  com a tag 🔁 "Precisa reagendar" — pra reagendar de verdade, é só criar
-  um agendamento novo pro mesmo cliente.
+  data/hora. O card nasce na 1ª etapa (Novo Lead, por padrão) e você
+  arrasta ele pelas etapas conforme o contato avança. Assim que o card
+  chega em **Agendado** ou **Reagendado** (marcadas "Entra em Vendas" em
+  Configurações), o sistema cria a oportunidade automaticamente no Funil
+  de Vendas e o evento na Google Agenda, sem precisar de mais nenhum
+  clique. Arrastar pra **Perdido** pede o motivo.
 - **Funil de Vendas**: arraste o card entre as etapas normalmente. Ao
-  arrastar pra etapa marcada como "fechamento" (configurável em
-  Configurações — vem como "Fechado" por padrão), abre a tela de gerar
-  contrato. Ao arrastar pra "❌ Perdido", pede o motivo.
-- **Gerador de Contrato**: preenche valor, forma de pagamento (à vista ou
-  entrada + parcelas) e gera o PDF automaticamente — as parcelas já entram
-  no financeiro como "esperadas", e um card novo aparece no Funil
-  Administrativo.
+  arrastar pra etapa marcada como "fechamento" (vem como "Fechado" por
+  padrão), o card **não é movido ainda** — abre o gerador de contrato com
+  cliente e valor já preenchidos; complete o que faltar (telefone, e-mail,
+  forma de pagamento) e gere. Só depois disso o card entra de fato em
+  "Fechado", as parcelas aparecem no financeiro e um card novo nasce no
+  Funil Administrativo. Arrastar pra "Perdido" pede o motivo.
 - **Funil Administrativo**: arraste o card entre as etapas conforme o
-  atendimento avança — o prazo mostrado no card é recalculado sozinho a
-  partir do prazo padrão daquela etapa (edite os prazos em
-  Configurações).
+  atendimento avança — a cor do SLA no card reflete quanto tempo falta
+  (ou já passou) do prazo daquela etapa.
 - **Painel Financeiro**: escolha o mês no seletor do topo pra ver as
   métricas daquele período. Parcelas vencidas e não pagas aparecem
   destacadas pra cobrança manual.

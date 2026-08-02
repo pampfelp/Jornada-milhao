@@ -11,6 +11,7 @@ import {
 const STATE = {
   clientes: [],
   agendamentos: [],
+  etapasAgendamento: [],
   etapasVenda: [],
   oportunidades: [],
   contratos: [],
@@ -22,19 +23,16 @@ const STATE = {
   periodoFinanceiro: new Date().toISOString().slice(0, 7)
 };
 
-// "Reagendado" não é mais uma coluna — é uma TAG (precisaReagendar) que
-// aparece nos dois funis quando um agendamento leva no-show. Reagendar de
-// verdade significa criar um agendamento novo (ver "Não veio" abaixo).
-const COLUNAS_AGENDAMENTO = [
-  { id: "agendado", nome: "Agendado" },
-  { id: "realizado", nome: "Realizado" },
-  { id: "nao-veio", nome: "Não veio" }
-];
-
 let pendingContratoOportunidadeId = null;
 let pendingContratoEtapaFechamentoId = null;
-let pendingPerdaId = null;
+// Perda é genérica pros dois funis que têm etapa marcada como "perda"
+// (Agendamento e Vendas) — guarda qual coleção/id está pendente.
+let pendingPerda = null; // { colecao: "agendamentos"|"oportunidades", id }
+let pendingEtapaAgendamentoId = null;
+let pendingEtapaVendaId = null;
+let pendingEtapaAdminId = null;
 let lancandoRecorrentes = false;
+let etapasAgendamentoSeeded = false;
 let etapasVendaSeeded = false;
 let etapasAdminSeeded = false;
 
@@ -91,6 +89,30 @@ function diasNoMes(ano, mes) {
   return new Date(ano, mes, 0).getDate();
 }
 
+// ══════════════ SLA (verde/amarelo/vermelho) — comum aos 3 funis ══════════════
+// Cada etapa configura, opcionalmente, um limite pra virar amarelo e um pra
+// virar vermelho, contados a partir do momento em que o card ENTROU na
+// etapa atual (dataEntrouEtapa), em horas ou dias (slaUnidade). Sem limite
+// configurado, o card fica sempre "verde" (sem badge de alerta).
+function calcularStatusSla(dataEntrouEtapa, etapaCfg) {
+  if (!etapaCfg || !dataEntrouEtapa) return null;
+  const d = dataEntrouEtapa.toDate ? dataEntrouEtapa.toDate() : new Date(dataEntrouEtapa);
+  if (isNaN(d.getTime())) return null;
+  const unidadeMs = etapaCfg.slaUnidade === "horas" ? 3600000 : 86400000;
+  const decorrido = (Date.now() - d.getTime()) / unidadeMs;
+  let cor = "verde";
+  if (etapaCfg.slaVermelho != null && decorrido >= etapaCfg.slaVermelho) cor = "vermelho";
+  else if (etapaCfg.slaAmarelo != null && decorrido >= etapaCfg.slaAmarelo) cor = "amarelo";
+  return { cor, decorrido, unidade: etapaCfg.slaUnidade === "horas" ? "h" : "d" };
+}
+
+function renderBadgeSla(dataEntrouEtapa, etapaCfg) {
+  const sla = calcularStatusSla(dataEntrouEtapa, etapaCfg);
+  if (!sla) return "";
+  const valor = sla.decorrido < 1 ? "<1" : String(Math.floor(sla.decorrido));
+  return `<span class="sla-badge sla-${sla.cor}">${valor}${sla.unidade}</span>`;
+}
+
 function mostrarToast(msg, tipo) {
   const el = document.getElementById("toast-erro");
   document.querySelector("#toast-erro .toast-title").textContent = tipo === "erro" ? "Aviso" : "Pronto";
@@ -138,7 +160,7 @@ async function encontrarOuCriarCliente(nome, telefone) {
 // selecionar nada não conta como seleção, evitando cadastro por engano.
 // Se o nome digitado não bate com nenhum cliente existente, aparece uma
 // opção "+ Criar cliente" que cadastra na hora.
-function criarComboCliente(inputId, dropdownId) {
+function criarComboCliente(inputId, dropdownId, onSelecionar) {
   const input = document.getElementById(inputId);
   const dropdown = document.getElementById(dropdownId);
   const api = { clienteSelecionado: null };
@@ -174,10 +196,14 @@ function criarComboCliente(inputId, dropdownId) {
         input.value = cliente.nome;
         dropdown.classList.remove("active");
         mostrarToast(`Cliente "${cliente.nome}" cadastrado.`);
+        if (onSelecionar) onSelecionar(cliente);
       } catch (err) { mostrarErro(err.message); }
     } else if (item) {
       const c = STATE.clientes.find((x) => x.id === item.dataset.id);
-      if (c) { api.clienteSelecionado = c; input.value = c.nome; dropdown.classList.remove("active"); }
+      if (c) {
+        api.clienteSelecionado = c; input.value = c.nome; dropdown.classList.remove("active");
+        if (onSelecionar) onSelecionar(c);
+      }
     }
   });
 
@@ -191,7 +217,7 @@ function criarComboCliente(inputId, dropdownId) {
 
 const comboAgendamento = criarComboCliente("ma-cliente-busca", "ma-cliente-dropdown");
 const comboOportunidade = criarComboCliente("mo-cliente-busca", "mo-cliente-dropdown");
-const comboContrato = criarComboCliente("mct-cliente-busca", "mct-cliente-dropdown");
+const comboContrato = criarComboCliente("mct-cliente-busca", "mct-cliente-dropdown", (cliente) => preencherCamposFaltantesContrato(cliente.id));
 
 /* ══════════════ NAVEGAÇÃO ══════════════ */
 
@@ -397,51 +423,66 @@ function onMoveCard(funil, cardId, novaEtapa) {
 /* ══════════════ FUNIL DE AGENDAMENTO ══════════════ */
 
 function renderCardAgendamento(a) {
+  const etapaCfg = STATE.etapasAgendamento.find((e) => e.id === a.etapa);
   return `
     <div class="kcard-nome">${esc(a.clienteNome)}</div>
     <div class="kcard-sub">${esc(a.telefone || "")}</div>
     <div class="kcard-foot">
       <span class="kcard-prazo">${fmtData(a.data)} ${esc(a.hora || "")}</span>
+      ${renderBadgeSla(a.dataEntrouEtapa, etapaCfg)}
       <button class="btn-small" data-kcard-action title="Excluir" onclick="window.__jm.excluirAgendamento('${a.id}')">🗑</button>
     </div>
-    ${a.precisaReagendar ? `<div class="sublabel" style="margin-top:6px;color:var(--dourado);">🔁 Precisa reagendar (no-show)</div>` : ""}
+    ${a.motivoPerda ? `<div class="sublabel" style="margin-top:6px;">Motivo: ${esc(a.motivoPerda)}</div>` : ""}
   `;
 }
 
-function renderKanbanAgendamento() {
-  renderKanban("kanban-agendamento", "agendamento", COLUNAS_AGENDAMENTO, STATE.agendamentos, (a) => a.status, renderCardAgendamento);
+function colunasAgendamento() {
+  return [...STATE.etapasAgendamento].sort((a, b) => a.ordem - b.ordem).map((e) => ({ id: e.id, nome: e.nome }));
 }
 
-async function moverAgendamento(id, novoStatus) {
+function renderKanbanAgendamento() {
+  renderKanban("kanban-agendamento", "agendamento", colunasAgendamento(), STATE.agendamentos, (a) => a.etapa, renderCardAgendamento);
+}
+
+async function moverAgendamento(id, novaEtapa) {
   const ag = STATE.agendamentos.find((a) => a.id === id);
-  if (!ag || ag.status === novoStatus) return;
+  if (!ag || ag.etapa === novaEtapa) return;
+  const etapaCfg = STATE.etapasAgendamento.find((e) => e.id === novaEtapa);
+
+  if (etapaCfg && etapaCfg.perda) {
+    pendingPerda = { colecao: "agendamentos", id };
+    document.getElementById("mp-motivo").value = "";
+    abrirModal("modal-perda");
+    return;
+  }
+
   try {
-    await updateDoc(doc(db, "agendamentos", id), { status: novoStatus, updatedAt: serverTimestamp() });
-    await addDoc(collection(db, "agendamentos", id, "historico"), { tipo: "mudanca_status", para: novoStatus, timestamp: serverTimestamp() });
-    if (novoStatus === "agendado") await processarAgendamentoAgendado(id, ag);
-    else if (novoStatus === "nao-veio") await marcarPrecisaReagendar(id);
+    await updateDoc(doc(db, "agendamentos", id), { etapa: novaEtapa, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp() });
+    await addDoc(collection(db, "agendamentos", id, "historico"), { tipo: "mudanca_etapa", para: novaEtapa, timestamp: serverTimestamp() });
+    if (etapaCfg && etapaCfg.entraFunilVendas) await processarAgendamentoAgendado(id, { ...ag, etapa: novaEtapa });
   } catch (err) { mostrarErro("Não foi possível mover: " + err.message); }
 }
 
-// O funil de vendas começa quando o agendamento chega em "Agendado" — o
-// card já entra automaticamente como novo lead, sem precisar de um botão
-// manual de conversão. Chamado tanto na criação (já nasce "agendado")
-// quanto se um card for arrastado de volta pra essa coluna. As duas
+// As etapas marcadas "entra automaticamente no Funil de Vendas" (ex:
+// Agendado, Reagendado) disparam isso — o card já entra como novo lead,
+// sem precisar de botão manual. Chamado tanto na criação (se a 1ª etapa já
+// tiver a flag) quanto ao arrastar um card pra uma dessas etapas. As duas
 // metades (criar oportunidade / lançar na Agenda) são independentes: uma
 // falhar não deve impedir a outra, e os flags "convertido"/"enviadoAgenda"
-// evitam duplicar em re-execuções.
+// evitam duplicar em re-execuções (ex: passar de Agendado pra Reagendado,
+// as duas com a mesma flag).
 async function processarAgendamentoAgendado(agendamentoId, dados) {
   if (!dados.convertido) {
-    const primeiraEtapa = [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem)[0];
-    if (!primeiraEtapa) {
+    const primeiraEtapaVenda = [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem)[0];
+    if (!primeiraEtapaVenda) {
       mostrarErro("Cadastre ao menos uma etapa do Funil de Vendas em Configurações — o agendamento foi salvo, mas ainda não virou oportunidade.");
     } else {
       try {
         await addDoc(collection(db, "oportunidades"), {
           clienteId: dados.clienteId || null, clienteNome: dados.clienteNome, telefone: dados.telefone || "",
-          agendamentoId, etapa: primeiraEtapa.id, valorProposto: 0, observacoes: dados.observacoes || "",
-          perdida: false, motivoPerda: "", fechada: false, precisaReagendar: false,
-          createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+          agendamentoId, etapa: primeiraEtapaVenda.id, valorProposto: 0, observacoes: dados.observacoes || "",
+          perdida: false, motivoPerda: "", fechada: false,
+          dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp()
         });
         await updateDoc(doc(db, "agendamentos", agendamentoId), { convertido: true });
       } catch (err) { mostrarErro("Não foi possível criar a oportunidade: " + err.message); }
@@ -464,18 +505,6 @@ async function processarAgendamentoAgendado(agendamentoId, dados) {
   }
 }
 
-// No-show: o agendamento e a oportunidade vinculada (se já existir) ficam
-// marcados com a tag "precisa reagendar" nos dois funis. Reagendar de
-// verdade é criar um agendamento NOVO pro mesmo cliente (ver botão "+
-// Agendamento manual") — isso já cria um evento novo na Agenda sozinho.
-async function marcarPrecisaReagendar(agendamentoId) {
-  await updateDoc(doc(db, "agendamentos", agendamentoId), { precisaReagendar: true });
-  const oportunidadeVinculada = STATE.oportunidades.find((o) => o.agendamentoId === agendamentoId);
-  if (oportunidadeVinculada) {
-    await updateDoc(doc(db, "oportunidades", oportunidadeVinculada.id), { precisaReagendar: true, updatedAt: serverTimestamp() });
-  }
-}
-
 async function excluirAgendamento(id) {
   if (!confirm("Excluir este agendamento?")) return;
   try { await deleteDoc(doc(db, "agendamentos", id)); } catch (err) { mostrarErro(err.message); }
@@ -492,46 +521,46 @@ document.getElementById("btn-novo-agendamento").addEventListener("click", () => 
 document.getElementById("btn-salvar-agendamento").addEventListener("click", async () => {
   const cliente = comboAgendamento.clienteSelecionado;
   if (!cliente) { mostrarErro("Selecione um cliente da lista, ou clique em \"+ Criar cliente\" pra cadastrar um novo."); return; }
+  const primeiraEtapa = [...STATE.etapasAgendamento].sort((a, b) => a.ordem - b.ordem)[0];
+  if (!primeiraEtapa) { mostrarErro("Cadastre ao menos uma etapa do Funil de Agendamento em Configurações."); return; }
   const dados = {
     clienteId: cliente.id, clienteNome: cliente.nome,
     telefone: document.getElementById("ma-telefone").value.trim() || cliente.telefone || "",
     data: document.getElementById("ma-data").value || hojeStr(),
     hora: document.getElementById("ma-hora").value || "",
-    status: "agendado", googleEventId: null, convertido: false, enviadoAgenda: false, precisaReagendar: false,
+    etapa: primeiraEtapa.id, googleEventId: null, convertido: false, enviadoAgenda: false, motivoPerda: "",
     observacoes: document.getElementById("ma-obs").value.trim()
   };
   try {
-    const ref = await addDoc(collection(db, "agendamentos"), { ...dados, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    const ref = await addDoc(collection(db, "agendamentos"), { ...dados, dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
     fecharModal("modal-agendamento");
     mostrarToast("Agendamento criado.");
-    await processarAgendamentoAgendado(ref.id, dados);
+    if (primeiraEtapa.entraFunilVendas) await processarAgendamentoAgendado(ref.id, dados);
   } catch (err) { mostrarErro(err.message); }
 });
 
 /* ══════════════ FUNIL DE VENDAS ══════════════ */
 
 function colunasVendas() {
-  const cfg = [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem).map((e) => ({ id: e.id, nome: e.nome }));
-  cfg.push({ id: "perdido", nome: "❌ Perdido" });
-  return cfg;
+  return [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem).map((e) => ({ id: e.id, nome: e.nome }));
 }
 
 function renderCardOportunidade(o) {
+  const etapaCfg = STATE.etapasVenda.find((e) => e.id === o.etapa);
   return `
     <div class="kcard-nome">${esc(o.clienteNome)}</div>
     <div class="kcard-sub">${esc(o.telefone || "")}</div>
     <div class="kcard-foot">
       <span class="kcard-valor">${fmtMoeda(o.valorProposto)}</span>
+      ${renderBadgeSla(o.dataEntrouEtapa, etapaCfg)}
       <button class="btn-small" data-kcard-action title="Excluir" onclick="window.__jm.excluirOportunidade('${o.id}')">🗑</button>
     </div>
     ${o.perdida && o.motivoPerda ? `<div class="sublabel" style="margin-top:6px;">Motivo: ${esc(o.motivoPerda)}</div>` : ""}
-    ${o.precisaReagendar ? `<div class="sublabel" style="margin-top:6px;color:var(--dourado);">🔁 Precisa reagendar (no-show)</div>` : ""}
   `;
 }
 
 function renderKanbanVendas() {
-  const colunas = colunasVendas();
-  renderKanban("kanban-vendas", "vendas", colunas, STATE.oportunidades, (o) => o.etapa, renderCardOportunidade);
+  renderKanban("kanban-vendas", "vendas", colunasVendas(), STATE.oportunidades, (o) => o.etapa, renderCardOportunidade);
   const ativas = STATE.oportunidades.filter((o) => !o.perdida);
   const valorTotal = ativas.reduce((s, o) => s + (Number(o.valorProposto) || 0), 0);
   document.getElementById("vendas-kpis").innerHTML = `
@@ -543,30 +572,33 @@ function renderKanbanVendas() {
 async function moverOportunidade(id, novaEtapa) {
   const op = STATE.oportunidades.find((o) => o.id === id);
   if (!op || op.etapa === novaEtapa) return;
+  const etapaCfg = STATE.etapasVenda.find((e) => e.id === novaEtapa);
 
-  if (novaEtapa === "perdido") {
-    pendingPerdaId = id;
+  if (etapaCfg && etapaCfg.perda) {
+    pendingPerda = { colecao: "oportunidades", id };
     document.getElementById("mp-motivo").value = "";
     abrirModal("modal-perda");
     return;
   }
 
-  const etapaCfg = STATE.etapasVenda.find((e) => e.id === novaEtapa);
   if (etapaCfg && etapaCfg.fechamento) {
     pendingContratoOportunidadeId = id;
     pendingContratoEtapaFechamentoId = novaEtapa;
     comboContrato.selecionar({ id: op.clienteId || null, nome: op.clienteNome, telefone: op.telefone || "" });
+    document.getElementById("mct-telefone").value = op.telefone || "";
+    document.getElementById("mct-email").value = "";
     document.getElementById("mct-valor").value = op.valorProposto ? String(op.valorProposto).replace(".", ",") : "";
     document.getElementById("mct-forma").value = "avista";
     document.getElementById("mct-primeiraparcela").value = hojeStr();
     document.getElementById("mct-linha-parcelamento").style.display = "none";
     atualizarPreviewParcelas();
+    preencherCamposFaltantesContrato(op.clienteId);
     abrirModal("modal-contrato");
     return;
   }
 
   try {
-    await updateDoc(doc(db, "oportunidades", id), { etapa: novaEtapa, updatedAt: serverTimestamp() });
+    await updateDoc(doc(db, "oportunidades", id), { etapa: novaEtapa, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp() });
     await addDoc(collection(db, "oportunidades", id, "historico"), { tipo: "mudanca_etapa", para: novaEtapa, timestamp: serverTimestamp() });
   } catch (err) { mostrarErro("Não foi possível mover: " + err.message); }
 }
@@ -576,15 +608,23 @@ async function excluirOportunidade(id) {
   try { await deleteDoc(doc(db, "oportunidades", id)); } catch (err) { mostrarErro(err.message); }
 }
 
+// Compartilhado entre Agendamento e Vendas — qualquer etapa marcada como
+// "perda" (Perdido, em ambos os funis) passa por aqui antes de mover de
+// verdade, pra registrar o motivo.
 document.getElementById("btn-confirmar-perda").addEventListener("click", async () => {
-  if (!pendingPerdaId) return;
+  if (!pendingPerda) return;
+  const { colecao, id } = pendingPerda;
   const motivo = document.getElementById("mp-motivo").value.trim();
+  const novaEtapa = colecao === "agendamentos"
+    ? STATE.etapasAgendamento.find((e) => e.perda)
+    : STATE.etapasVenda.find((e) => e.perda);
+  if (!novaEtapa) { mostrarErro("Etapa de perda não encontrada."); return; }
   try {
-    await updateDoc(doc(db, "oportunidades", pendingPerdaId), {
-      etapa: "perdido", perdida: true, motivoPerda: motivo, updatedAt: serverTimestamp()
-    });
+    const patch = { etapa: novaEtapa.id, motivoPerda: motivo, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp() };
+    if (colecao === "oportunidades") patch.perdida = true;
+    await updateDoc(doc(db, colecao, id), patch);
     fecharModal("modal-perda");
-    pendingPerdaId = null;
+    pendingPerda = null;
   } catch (err) { mostrarErro(err.message); }
 });
 
@@ -607,8 +647,8 @@ document.getElementById("btn-salvar-oportunidade").addEventListener("click", asy
       agendamentoId: null, etapa: primeiraEtapa.id,
       valorProposto: parseMoeda(document.getElementById("mo-valor").value),
       observacoes: document.getElementById("mo-obs").value.trim(),
-      perdida: false, motivoPerda: "", fechada: false, precisaReagendar: false,
-      createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+      perdida: false, motivoPerda: "", fechada: false,
+      dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp()
     });
     fecharModal("modal-oportunidade");
     mostrarToast("Oportunidade criada.");
@@ -667,12 +707,21 @@ document.getElementById("mct-forma").addEventListener("change", (e) => {
 });
 
 function limparFormularioContrato() {
-  ["mct-valor", "mct-entrada"].forEach((id) => (document.getElementById(id).value = ""));
+  ["mct-valor", "mct-entrada", "mct-telefone", "mct-email"].forEach((id) => (document.getElementById(id).value = ""));
   comboContrato.reset();
   document.getElementById("mct-numparcelas").value = 1;
   document.getElementById("mct-diavencimento").value = 10;
   document.getElementById("mct-forma").value = "avista";
   document.getElementById("mct-preview-parcelas").textContent = "";
+}
+
+// "todos os dados de todas as tabelas que faltam" pro contrato — hoje isso
+// é telefone/e-mail do cliente. Só preenche o que já existe; o que faltar
+// fica em branco pra pessoa completar ali mesmo, na hora de gerar.
+function preencherCamposFaltantesContrato(clienteId) {
+  const cliente = STATE.clientes.find((c) => c.id === clienteId);
+  document.getElementById("mct-telefone").value = cliente ? (cliente.telefone || "") : "";
+  document.getElementById("mct-email").value = cliente ? (cliente.email || "") : "";
 }
 
 document.getElementById("btn-novo-contrato").addEventListener("click", () => {
@@ -697,6 +746,18 @@ async function gerarContrato() {
     // antigo) ainda pode cair aqui sem id — busca/cria pelo nome nesse
     // caso; senão, a seleção do combobox já é confiável.
     const cliente = clienteSelecionado.id ? clienteSelecionado : await encontrarOuCriarCliente(clienteSelecionado.nome, "");
+
+    // "todos os dados que faltam pro contrato" — completa telefone/e-mail
+    // do cadastro do cliente se estavam em branco (nunca sobrescreve o que
+    // já existia).
+    const telefoneContrato = document.getElementById("mct-telefone").value.trim();
+    const emailContrato = document.getElementById("mct-email").value.trim();
+    const clienteAtual = STATE.clientes.find((c) => c.id === cliente.id);
+    const patchCliente = {};
+    if (telefoneContrato && !(clienteAtual && clienteAtual.telefone)) patchCliente.telefone = telefoneContrato;
+    if (emailContrato && !(clienteAtual && clienteAtual.email)) patchCliente.email = emailContrato;
+    if (Object.keys(patchCliente).length) await updateDoc(doc(db, "clientes", cliente.id), patchCliente);
+
     const contratoRef = await addDoc(collection(db, "contratos"), {
       oportunidadeId: pendingContratoOportunidadeId || null,
       clienteId: cliente.id, clienteNome: cliente.nome,
@@ -717,12 +778,10 @@ async function gerarContrato() {
 
     const primeiraEtapaAdmin = [...STATE.etapasAdmin].sort((a, b) => a.ordem - b.ordem)[0];
     if (primeiraEtapaAdmin) {
-      const hoje = hojeStr();
       await addDoc(collection(db, "cardsAdmin"), {
         contratoId: contratoRef.id, clienteId: cliente.id, clienteNome: cliente.nome,
-        valorTotal: f.valorTotal, etapa: primeiraEtapaAdmin.id, dataEntrouEtapa: hoje,
-        prazoEtapaAtual: addDias(hoje, primeiraEtapaAdmin.prazoDiasPadrao || 0),
-        createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+        valorTotal: f.valorTotal, etapa: primeiraEtapaAdmin.id,
+        dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp()
       });
     }
 
@@ -785,12 +844,12 @@ async function excluirContrato(id) {
 /* ══════════════ FUNIL ADMINISTRATIVO ══════════════ */
 
 function renderCardAdmin(c) {
-  const atrasado = c.prazoEtapaAtual && c.prazoEtapaAtual < hojeStr();
+  const etapaCfg = STATE.etapasAdmin.find((e) => e.id === c.etapa);
   return `
     <div class="kcard-nome">${esc(c.clienteNome)}</div>
     <div class="kcard-sub">${fmtMoeda(c.valorTotal)}</div>
     <div class="kcard-foot">
-      <span class="kcard-prazo ${atrasado ? "atrasado" : ""}">prazo ${fmtData(c.prazoEtapaAtual)}</span>
+      ${renderBadgeSla(c.dataEntrouEtapa, etapaCfg)}
     </div>
   `;
 }
@@ -803,12 +862,9 @@ function renderKanbanAdministrativo() {
 async function moverCardAdmin(id, novaEtapa) {
   const card = STATE.cardsAdmin.find((c) => c.id === id);
   if (!card || card.etapa === novaEtapa) return;
-  const etapaCfg = STATE.etapasAdmin.find((e) => e.id === novaEtapa);
-  const prazoDias = etapaCfg ? (etapaCfg.prazoDiasPadrao || 0) : 0;
-  const hoje = hojeStr();
   try {
     await updateDoc(doc(db, "cardsAdmin", id), {
-      etapa: novaEtapa, dataEntrouEtapa: hoje, prazoEtapaAtual: addDias(hoje, prazoDias), updatedAt: serverTimestamp()
+      etapa: novaEtapa, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp()
     });
     await addDoc(collection(db, "cardsAdmin", id, "historico"), { tipo: "mudanca_etapa", para: novaEtapa, timestamp: serverTimestamp() });
   } catch (err) { mostrarErro("Não foi possível mover: " + err.message); }
@@ -988,22 +1044,107 @@ function renderTabelaClientes() {
 }
 
 /* ══════════════ CONFIGURAÇÕES — ETAPAS DOS FUNIS ══════════════ */
+// Os 3 funis seguem o mesmo padrão de configuração: nome, ordem, e um SLA
+// (verde/amarelo/vermelho) contado em horas ou dias a partir do momento em
+// que o card entrou na etapa. Cada modal tem os campos extras específicos
+// do seu funil (entraFunilVendas/perda em Agendamento, fechamento/perda em
+// Vendas). Os 3 suportam criar E editar — abrir o modal com um id pendente
+// faz o botão "Salvar" atualizar em vez de criar.
 
+function lerCamposSla(prefixo) {
+  return {
+    slaUnidade: document.getElementById(`${prefixo}-sla-unidade`).value,
+    slaAmarelo: parseFloat(document.getElementById(`${prefixo}-sla-amarelo`).value) || 0,
+    slaVermelho: parseFloat(document.getElementById(`${prefixo}-sla-vermelho`).value) || 0
+  };
+}
+function preencherCamposSla(prefixo, etapa) {
+  document.getElementById(`${prefixo}-sla-unidade`).value = (etapa && etapa.slaUnidade) || "dias";
+  document.getElementById(`${prefixo}-sla-amarelo`).value = etapa && etapa.slaAmarelo != null ? etapa.slaAmarelo : 1;
+  document.getElementById(`${prefixo}-sla-vermelho`).value = etapa && etapa.slaVermelho != null ? etapa.slaVermelho : 3;
+}
+
+// ── Agendamento ──
+document.getElementById("btn-nova-etapa-agendamento").addEventListener("click", () => {
+  pendingEtapaAgendamentoId = null;
+  document.getElementById("modal-etapa-agendamento-titulo").textContent = "Etapa do Funil de Agendamento";
+  document.getElementById("mea2-nome").value = "";
+  document.getElementById("mea2-ordem").value = STATE.etapasAgendamento.length + 1;
+  document.getElementById("mea2-entra-vendas").checked = false;
+  document.getElementById("mea2-perda").checked = false;
+  preencherCamposSla("mea2", null);
+  abrirModal("modal-etapa-agendamento");
+});
+function editarEtapaAgendamento(id) {
+  const e = STATE.etapasAgendamento.find((x) => x.id === id);
+  if (!e) return;
+  pendingEtapaAgendamentoId = id;
+  document.getElementById("modal-etapa-agendamento-titulo").textContent = `Editar etapa — ${e.nome}`;
+  document.getElementById("mea2-nome").value = e.nome;
+  document.getElementById("mea2-ordem").value = e.ordem;
+  document.getElementById("mea2-entra-vendas").checked = !!e.entraFunilVendas;
+  document.getElementById("mea2-perda").checked = !!e.perda;
+  preencherCamposSla("mea2", e);
+  abrirModal("modal-etapa-agendamento");
+}
+document.getElementById("btn-salvar-etapa-agendamento").addEventListener("click", async () => {
+  const nome = document.getElementById("mea2-nome").value.trim();
+  if (!nome) { mostrarErro("Informe o nome da etapa."); return; }
+  const dados = {
+    nome, ordem: parseInt(document.getElementById("mea2-ordem").value, 10) || (STATE.etapasAgendamento.length + 1),
+    entraFunilVendas: document.getElementById("mea2-entra-vendas").checked,
+    perda: document.getElementById("mea2-perda").checked,
+    ...lerCamposSla("mea2")
+  };
+  try {
+    if (pendingEtapaAgendamentoId) await updateDoc(doc(db, "etapasAgendamentoConfig", pendingEtapaAgendamentoId), dados);
+    else await addDoc(collection(db, "etapasAgendamentoConfig"), dados);
+    fecharModal("modal-etapa-agendamento");
+    pendingEtapaAgendamentoId = null;
+  } catch (err) { mostrarErro(err.message); }
+});
+async function excluirEtapaAgendamento(id) {
+  if (!confirm("Excluir esta etapa? Agendamentos nela ficarão sem coluna visível até serem movidos.")) return;
+  try { await deleteDoc(doc(db, "etapasAgendamentoConfig", id)); } catch (err) { mostrarErro(err.message); }
+}
+
+// ── Vendas ──
 document.getElementById("btn-nova-etapa-venda").addEventListener("click", () => {
+  pendingEtapaVendaId = null;
+  document.getElementById("modal-etapa-venda-titulo").textContent = "Etapa do Funil de Vendas";
   document.getElementById("mev-nome").value = "";
   document.getElementById("mev-ordem").value = STATE.etapasVenda.length + 1;
   document.getElementById("mev-fechamento").checked = false;
+  document.getElementById("mev-perda").checked = false;
+  preencherCamposSla("mev", null);
   abrirModal("modal-etapa-venda");
 });
+function editarEtapaVenda(id) {
+  const e = STATE.etapasVenda.find((x) => x.id === id);
+  if (!e) return;
+  pendingEtapaVendaId = id;
+  document.getElementById("modal-etapa-venda-titulo").textContent = `Editar etapa — ${e.nome}`;
+  document.getElementById("mev-nome").value = e.nome;
+  document.getElementById("mev-ordem").value = e.ordem;
+  document.getElementById("mev-fechamento").checked = !!e.fechamento;
+  document.getElementById("mev-perda").checked = !!e.perda;
+  preencherCamposSla("mev", e);
+  abrirModal("modal-etapa-venda");
+}
 document.getElementById("btn-salvar-etapa-venda").addEventListener("click", async () => {
   const nome = document.getElementById("mev-nome").value.trim();
   if (!nome) { mostrarErro("Informe o nome da etapa."); return; }
+  const dados = {
+    nome, ordem: parseInt(document.getElementById("mev-ordem").value, 10) || (STATE.etapasVenda.length + 1),
+    fechamento: document.getElementById("mev-fechamento").checked,
+    perda: document.getElementById("mev-perda").checked,
+    ...lerCamposSla("mev")
+  };
   try {
-    await addDoc(collection(db, "etapasVendaConfig"), {
-      nome, ordem: parseInt(document.getElementById("mev-ordem").value, 10) || (STATE.etapasVenda.length + 1),
-      fechamento: document.getElementById("mev-fechamento").checked
-    });
+    if (pendingEtapaVendaId) await updateDoc(doc(db, "etapasVendaConfig", pendingEtapaVendaId), dados);
+    else await addDoc(collection(db, "etapasVendaConfig"), dados);
     fecharModal("modal-etapa-venda");
+    pendingEtapaVendaId = null;
   } catch (err) { mostrarErro(err.message); }
 });
 async function excluirEtapaVenda(id) {
@@ -1011,21 +1152,37 @@ async function excluirEtapaVenda(id) {
   try { await deleteDoc(doc(db, "etapasVendaConfig", id)); } catch (err) { mostrarErro(err.message); }
 }
 
+// ── Administrativo ──
 document.getElementById("btn-nova-etapa-admin").addEventListener("click", () => {
+  pendingEtapaAdminId = null;
+  document.getElementById("modal-etapa-admin-titulo").textContent = "Etapa do Funil Administrativo";
   document.getElementById("mea-nome").value = "";
   document.getElementById("mea-ordem").value = STATE.etapasAdmin.length + 1;
-  document.getElementById("mea-prazo").value = 5;
+  preencherCamposSla("mea", null);
   abrirModal("modal-etapa-admin");
 });
+function editarEtapaAdmin(id) {
+  const e = STATE.etapasAdmin.find((x) => x.id === id);
+  if (!e) return;
+  pendingEtapaAdminId = id;
+  document.getElementById("modal-etapa-admin-titulo").textContent = `Editar etapa — ${e.nome}`;
+  document.getElementById("mea-nome").value = e.nome;
+  document.getElementById("mea-ordem").value = e.ordem;
+  preencherCamposSla("mea", e);
+  abrirModal("modal-etapa-admin");
+}
 document.getElementById("btn-salvar-etapa-admin").addEventListener("click", async () => {
   const nome = document.getElementById("mea-nome").value.trim();
   if (!nome) { mostrarErro("Informe o nome da etapa."); return; }
+  const dados = {
+    nome, ordem: parseInt(document.getElementById("mea-ordem").value, 10) || (STATE.etapasAdmin.length + 1),
+    ...lerCamposSla("mea")
+  };
   try {
-    await addDoc(collection(db, "etapasAdminConfig"), {
-      nome, ordem: parseInt(document.getElementById("mea-ordem").value, 10) || (STATE.etapasAdmin.length + 1),
-      prazoDiasPadrao: parseInt(document.getElementById("mea-prazo").value, 10) || 0
-    });
+    if (pendingEtapaAdminId) await updateDoc(doc(db, "etapasAdminConfig", pendingEtapaAdminId), dados);
+    else await addDoc(collection(db, "etapasAdminConfig"), dados);
     fecharModal("modal-etapa-admin");
+    pendingEtapaAdminId = null;
   } catch (err) { mostrarErro(err.message); }
 });
 async function excluirEtapaAdmin(id) {
@@ -1033,16 +1190,28 @@ async function excluirEtapaAdmin(id) {
   try { await deleteDoc(doc(db, "etapasAdminConfig", id)); } catch (err) { mostrarErro(err.message); }
 }
 
+function fmtSla(e) {
+  const unidade = e.slaUnidade === "horas" ? "h" : "d";
+  if (!e.slaAmarelo && !e.slaVermelho) return "—";
+  return `🟡 ${e.slaAmarelo || 0}${unidade} · 🔴 ${e.slaVermelho || 0}${unidade}`;
+}
+
+function renderConfigEtapasAgendamento() {
+  document.getElementById("tabela-etapas-agendamento").innerHTML = [...STATE.etapasAgendamento].sort((a, b) => a.ordem - b.ordem).map((e) => `<tr>
+    <td>${e.ordem}</td><td>${esc(e.nome)}</td><td>${e.entraFunilVendas ? "Sim" : "—"}</td><td>${e.perda ? "Sim" : "—"}</td><td>${fmtSla(e)}</td>
+    <td><button class="btn-small" onclick="window.__jm.editarEtapaAgendamento('${e.id}')">✏️</button> <button class="btn-small" onclick="window.__jm.excluirEtapaAgendamento('${e.id}')">🗑</button></td>
+  </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma etapa cadastrada.</div></td></tr>`;
+}
 function renderConfigEtapasVenda() {
   document.getElementById("tabela-etapas-venda").innerHTML = [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem).map((e) => `<tr>
-    <td>${e.ordem}</td><td>${esc(e.nome)}</td><td>${e.fechamento ? "Sim" : "—"}</td>
-    <td><button class="btn-small" onclick="window.__jm.excluirEtapaVenda('${e.id}')">🗑</button></td>
-  </tr>`).join("") || `<tr><td colspan="4"><div class="empty">Nenhuma etapa cadastrada.</div></td></tr>`;
+    <td>${e.ordem}</td><td>${esc(e.nome)}</td><td>${e.fechamento ? "Sim" : "—"}</td><td>${e.perda ? "Sim" : "—"}</td><td>${fmtSla(e)}</td>
+    <td><button class="btn-small" onclick="window.__jm.editarEtapaVenda('${e.id}')">✏️</button> <button class="btn-small" onclick="window.__jm.excluirEtapaVenda('${e.id}')">🗑</button></td>
+  </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma etapa cadastrada.</div></td></tr>`;
 }
 function renderConfigEtapasAdmin() {
   document.getElementById("tabela-etapas-admin").innerHTML = [...STATE.etapasAdmin].sort((a, b) => a.ordem - b.ordem).map((e) => `<tr>
-    <td>${e.ordem}</td><td>${esc(e.nome)}</td><td>${e.prazoDiasPadrao}</td>
-    <td><button class="btn-small" onclick="window.__jm.excluirEtapaAdmin('${e.id}')">🗑</button></td>
+    <td>${e.ordem}</td><td>${esc(e.nome)}</td><td>${fmtSla(e)}</td>
+    <td><button class="btn-small" onclick="window.__jm.editarEtapaAdmin('${e.id}')">✏️</button> <button class="btn-small" onclick="window.__jm.excluirEtapaAdmin('${e.id}')">🗑</button></td>
   </tr>`).join("") || `<tr><td colspan="4"><div class="empty">Nenhuma etapa cadastrada.</div></td></tr>`;
 }
 
@@ -1083,17 +1252,30 @@ function renderConfigCalendario() {
 
 /* ══════════════ LISTENERS EM TEMPO REAL ══════════════ */
 
+// Defaults ajustáveis em Configurações a qualquer momento — servem só de
+// ponto de partida. SLA padrão de 1 dia (amarelo) / 3 dias (vermelho) pra
+// todas, exceto onde comentado.
+const DEFAULT_ETAPAS_AGENDAMENTO = [
+  { nome: "Novo Lead", ordem: 1, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 2 },
+  { nome: "Tentativa de Contato", ordem: 2, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
+  { nome: "Retomar Contato", ordem: 3, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
+  { nome: "Qualificação", ordem: 4, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
+  { nome: "Agendado", ordem: 5, entraFunilVendas: true, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
+  { nome: "Reagendado", ordem: 6, entraFunilVendas: true, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
+  { nome: "Perdido", ordem: 7, entraFunilVendas: false, perda: true, slaUnidade: "dias", slaAmarelo: 0, slaVermelho: 0 }
+];
 const DEFAULT_ETAPAS_VENDA = [
-  { nome: "Novo Lead", ordem: 1, fechamento: false },
-  { nome: "Proposta Enviada", ordem: 2, fechamento: false },
-  { nome: "Negociação", ordem: 3, fechamento: false },
-  { nome: "Fechado", ordem: 4, fechamento: true }
+  { nome: "Reunião Agendada", ordem: 1, fechamento: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
+  { nome: "Follow Up", ordem: 2, fechamento: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
+  { nome: "Negociação", ordem: 3, fechamento: false, perda: false, slaUnidade: "dias", slaAmarelo: 2, slaVermelho: 5 },
+  { nome: "Fechado", ordem: 4, fechamento: true, perda: false, slaUnidade: "dias", slaAmarelo: 0, slaVermelho: 0 },
+  { nome: "Perdido", ordem: 5, fechamento: false, perda: true, slaUnidade: "dias", slaAmarelo: 0, slaVermelho: 0 }
 ];
 const DEFAULT_ETAPAS_ADMIN = [
-  { nome: "Pagamento da entrada", ordem: 1, prazoDiasPadrao: 3 },
-  { nome: "Criação do grupo", ordem: 2, prazoDiasPadrao: 2 },
-  { nome: "Execução", ordem: 3, prazoDiasPadrao: 15 },
-  { nome: "Entrega", ordem: 4, prazoDiasPadrao: 5 }
+  { nome: "Recebimento da Entrada", ordem: 1, slaUnidade: "dias", slaAmarelo: 2, slaVermelho: 5 },
+  { nome: "Criação do Grupo", ordem: 2, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 2 },
+  { nome: "Envio do Contrato", ordem: 3, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 2 },
+  { nome: "Enviado para Mentoria", ordem: 4, slaUnidade: "dias", slaAmarelo: 3, slaVermelho: 7 }
 ];
 
 function iniciarListeners() {
@@ -1106,6 +1288,17 @@ function iniciarListeners() {
     STATE.clientes = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderTabelaClientes();
   }, (err) => mostrarErro("Erro de conexão (clientes): " + err.message));
+
+  onSnapshot(query(collection(db, "etapasAgendamentoConfig"), orderBy("ordem")), async (snap) => {
+    STATE.etapasAgendamento = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (!etapasAgendamentoSeeded && STATE.etapasAgendamento.length === 0) {
+      etapasAgendamentoSeeded = true;
+      for (const e of DEFAULT_ETAPAS_AGENDAMENTO) await addDoc(collection(db, "etapasAgendamentoConfig"), e);
+      return;
+    }
+    renderKanbanAgendamento();
+    renderConfigEtapasAgendamento();
+  }, (err) => mostrarErro("Erro de conexão (etapas de agendamento): " + err.message));
 
   onSnapshot(query(collection(db, "agendamentos"), orderBy("createdAt", "desc")), (snap) => {
     STATE.agendamentos = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -1170,7 +1363,19 @@ window.__jm = {
   excluirAgendamento,
   excluirOportunidade, marcarParcelaPaga,
   excluirContrato, excluirDespesa, excluirCliente,
-  excluirEtapaVenda, excluirEtapaAdmin
+  excluirEtapaAgendamento, editarEtapaAgendamento,
+  excluirEtapaVenda, editarEtapaVenda,
+  excluirEtapaAdmin, editarEtapaAdmin
 };
 
 iniciarListeners();
+
+// As cores do badge de SLA (verde/amarelo/vermelho) dependem só do relógio
+// — sem isso, um card ficaria "verde" pra sempre até a próxima escrita no
+// Firestore. Reaplica o render dos 3 kanbans a cada minuto pra refletir o
+// tempo passando, mesmo sem ninguém mexer em nada.
+setInterval(() => {
+  renderKanbanAgendamento();
+  renderKanbanVendas();
+  renderKanbanAdministrativo();
+}, 60000);

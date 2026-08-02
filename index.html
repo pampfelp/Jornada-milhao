@@ -187,10 +187,21 @@
     <header class="top"><div><h1>Configurações</h1></div></header>
 
     <div class="card">
-      <div class="section-head"><h2>Etapas do <span>Funil de Vendas</span></h2><div class="hint">a etapa marcada como fechamento dispara a geração de contrato</div></div>
+      <div class="section-head"><h2>Etapas do <span>Funil de Agendamento</span></h2><div class="hint">"entra em Vendas" converte automaticamente em oportunidade; "perda" pede motivo ao arrastar</div></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Ordem</th><th>Nome</th><th>Etapa de fechamento?</th><th></th></tr></thead>
+          <thead><tr><th>Ordem</th><th>Nome</th><th>Entra em Vendas?</th><th>É perda?</th><th>SLA</th><th></th></tr></thead>
+          <tbody id="tabela-etapas-agendamento"></tbody>
+        </table>
+      </div>
+      <p class="hint"><button class="btn-small" id="btn-nova-etapa-agendamento">+ Etapa</button></p>
+    </div>
+
+    <div class="card">
+      <div class="section-head"><h2>Etapas do <span>Funil de Vendas</span></h2><div class="hint">"fechamento" abre o gerador de contrato; "perda" pede motivo ao arrastar</div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Ordem</th><th>Nome</th><th>Fechamento?</th><th>É perda?</th><th>SLA</th><th></th></tr></thead>
           <tbody id="tabela-etapas-venda"></tbody>
         </table>
       </div>
@@ -198,10 +209,10 @@
     </div>
 
     <div class="card">
-      <div class="section-head"><h2>Etapas do <span>Funil Administrativo</span></h2><div class="hint">prazo padrão em dias, a partir do momento em que o card entra na etapa</div></div>
+      <div class="section-head"><h2>Etapas do <span>Funil Administrativo</span></h2><div class="hint">SLA contado a partir do momento em que o card entra na etapa</div></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Ordem</th><th>Nome</th><th>Prazo padrão (dias)</th><th></th></tr></thead>
+          <thead><tr><th>Ordem</th><th>Nome</th><th>SLA</th><th></th></tr></thead>
           <tbody id="tabela-etapas-admin"></tbody>
         </table>
       </div>
@@ -293,11 +304,11 @@
   </div>
 </div>
 
-<!-- ═══ MODAL: PERDA DE OPORTUNIDADE ═══ -->
+<!-- ═══ MODAL: PERDA (Agendamento ou Vendas) ═══ -->
 <div class="modal-overlay" id="modal-perda">
   <div class="modal-box">
     <h2>Marcar como perdido</h2>
-    <div class="field"><label>Motivo</label><textarea id="mp-motivo" placeholder="Por que a venda não avançou?"></textarea></div>
+    <div class="field"><label>Motivo</label><textarea id="mp-motivo" placeholder="Por que não avançou?"></textarea></div>
     <div class="modal-actions">
       <button class="btn" data-fechar-modal="modal-perda">Cancelar</button>
       <button class="btn btn-danger" id="btn-confirmar-perda">Marcar como perdido</button>
@@ -315,6 +326,11 @@
         <input type="text" id="mct-cliente-busca" placeholder="Digite pra buscar um cliente já cadastrado..." autocomplete="off">
         <div class="combo-dropdown" id="mct-cliente-dropdown"></div>
       </div>
+    </div>
+    <p class="hint" id="mct-dados-faltando" style="margin:2px 0 10px;">Complete os dados do cliente que estiverem faltando — ficam salvos no cadastro dele.</p>
+    <div class="row">
+      <div class="field"><label>Telefone</label><input type="text" id="mct-telefone"></div>
+      <div class="field"><label>E-mail</label><input type="text" id="mct-email"></div>
     </div>
     <div class="row">
       <div class="field"><label>Valor total</label><input type="text" inputmode="decimal" id="mct-valor" placeholder="0,00"></div>
@@ -367,13 +383,47 @@
   </div>
 </div>
 
+<!-- ═══ MODAL: ETAPA DE AGENDAMENTO ═══ -->
+<div class="modal-overlay" id="modal-etapa-agendamento">
+  <div class="modal-box">
+    <h2 id="modal-etapa-agendamento-titulo">Etapa do Funil de Agendamento</h2>
+    <div class="field"><label>Nome</label><input type="text" id="mea2-nome"></div>
+    <div class="field"><label>Ordem</label><input type="number" id="mea2-ordem" min="1"></div>
+    <label class="checkbox-field"><input type="checkbox" id="mea2-entra-vendas"> Entra automaticamente no Funil de Vendas (ex: Agendado, Reagendado)</label>
+    <label class="checkbox-field"><input type="checkbox" id="mea2-perda"> É a etapa de perda (pede motivo ao arrastar um card pra cá)</label>
+    <p class="hint" style="margin:14px 0 6px;">SLA — quanto tempo até o card virar amarelo/vermelho nesta etapa</p>
+    <div class="row">
+      <div class="field">
+        <label>Unidade</label>
+        <select id="mea2-sla-unidade"><option value="dias">Dias</option><option value="horas">Horas</option></select>
+      </div>
+      <div class="field"><label>🟡 Amarelo após</label><input type="number" id="mea2-sla-amarelo" min="0" step="0.5"></div>
+      <div class="field"><label>🔴 Vermelho após</label><input type="number" id="mea2-sla-vermelho" min="0" step="0.5"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-etapa-agendamento">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-etapa-agendamento">Salvar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ MODAL: ETAPA DE VENDA ═══ -->
 <div class="modal-overlay" id="modal-etapa-venda">
   <div class="modal-box">
-    <h2>Etapa do Funil de Vendas</h2>
+    <h2 id="modal-etapa-venda-titulo">Etapa do Funil de Vendas</h2>
     <div class="field"><label>Nome</label><input type="text" id="mev-nome"></div>
     <div class="field"><label>Ordem</label><input type="number" id="mev-ordem" min="1"></div>
     <label class="checkbox-field"><input type="checkbox" id="mev-fechamento"> Etapa de fechamento (dispara gerador de contrato)</label>
+    <label class="checkbox-field"><input type="checkbox" id="mev-perda"> É a etapa de perda (pede motivo ao arrastar um card pra cá)</label>
+    <p class="hint" style="margin:14px 0 6px;">SLA — quanto tempo até o card virar amarelo/vermelho nesta etapa</p>
+    <div class="row">
+      <div class="field">
+        <label>Unidade</label>
+        <select id="mev-sla-unidade"><option value="dias">Dias</option><option value="horas">Horas</option></select>
+      </div>
+      <div class="field"><label>🟡 Amarelo após</label><input type="number" id="mev-sla-amarelo" min="0" step="0.5"></div>
+      <div class="field"><label>🔴 Vermelho após</label><input type="number" id="mev-sla-vermelho" min="0" step="0.5"></div>
+    </div>
     <div class="modal-actions">
       <button class="btn" data-fechar-modal="modal-etapa-venda">Cancelar</button>
       <button class="btn btn-primary" id="btn-salvar-etapa-venda">Salvar</button>
@@ -384,11 +434,17 @@
 <!-- ═══ MODAL: ETAPA ADMINISTRATIVA ═══ -->
 <div class="modal-overlay" id="modal-etapa-admin">
   <div class="modal-box">
-    <h2>Etapa do Funil Administrativo</h2>
+    <h2 id="modal-etapa-admin-titulo">Etapa do Funil Administrativo</h2>
     <div class="field"><label>Nome</label><input type="text" id="mea-nome"></div>
+    <div class="field"><label>Ordem</label><input type="number" id="mea-ordem" min="1"></div>
+    <p class="hint" style="margin:14px 0 6px;">SLA — quanto tempo até o card virar amarelo/vermelho nesta etapa</p>
     <div class="row">
-      <div class="field"><label>Ordem</label><input type="number" id="mea-ordem" min="1"></div>
-      <div class="field"><label>Prazo padrão (dias)</label><input type="number" id="mea-prazo" min="0"></div>
+      <div class="field">
+        <label>Unidade</label>
+        <select id="mea-sla-unidade"><option value="dias">Dias</option><option value="horas">Horas</option></select>
+      </div>
+      <div class="field"><label>🟡 Amarelo após</label><input type="number" id="mea-sla-amarelo" min="0" step="0.5"></div>
+      <div class="field"><label>🔴 Vermelho após</label><input type="number" id="mea-sla-vermelho" min="0" step="0.5"></div>
     </div>
     <div class="modal-actions">
       <button class="btn" data-fechar-modal="modal-etapa-admin">Cancelar</button>

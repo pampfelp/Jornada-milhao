@@ -16,6 +16,19 @@ um único funil (Agendamento → Vendas → Administrativo) que alimenta
 automaticamente o Painel Financeiro, com o Gerador de Contrato como a ponte
 entre Vendas e Administrativo.
 
+## ⚠️ Ação necessária: republicar as regras do Firestore
+
+As `firestore.rules` deste pacote mudaram (o Funil de Agendamento passou a
+usar `etapa` em vez de `status`, entre outras mudanças). **Enquanto as
+regras publicadas no seu projeto Firebase não forem atualizadas, criar ou
+mover agendamentos vai falhar com "permission-denied"** — o resto do
+sistema (Vendas, Administrativo, Financeiro) continua funcionando
+normalmente, já que essas coleções não mudaram de forma incompatível.
+
+Pra corrigir: **Firestore Database → Regras** no console do Firebase →
+apague o conteúdo → cole o de [`firestore.rules`](firestore.rules) →
+**Publicar**.
+
 ## 1. Criar o projeto Firebase
 
 1. Acesse o [console do Firebase](https://console.firebase.google.com) e crie um projeto novo (gratuito, plano Spark).
@@ -113,23 +126,31 @@ preservam pastas ao arrastar arquivos soltos.
 
 ## Estrutura de dados no Firestore
 
+Os 3 funis (Agendamento, Vendas, Administrativo) seguem o mesmo padrão:
+uma coleção `etapasXConfig` guarda as colunas do kanban (nome, ordem, SLA),
+e os cards referenciam a etapa atual pelo id do documento. Todos os cards
+guardam `dataEntrouEtapa` (Timestamp) — é a partir dela que o badge de SLA
+é calculado, ao vivo, no navegador (não é um valor gravado, recalcula toda
+vez que a tela renderiza).
+
 - **clientes/{id}**: `nome`, `telefone`, `email`, `origem`, `observacoes`, `createdAt` — tabela auxiliar de consulta.
-- **agendamentos/{id}**: `clienteId`, `clienteNome`, `telefone`, `data` (yyyy-MM-dd), `hora`, `status` (`agendado`/`realizado`/`nao-veio`), `convertido` (bool — já virou oportunidade?), `enviadoAgenda` (bool — já criou o evento no Google?), `googleEventId`, `precisaReagendar` (bool — tag de no-show), `observacoes`, `createdAt`, `updatedAt` — Funil de Agendamento. Subcoleção `historico/` (create-only).
-- **etapasVendaConfig/{id}**: `nome`, `ordem`, `fechamento` (bool) — colunas configuráveis do Funil de Vendas; a marcada como `fechamento` dispara o Gerador de Contrato quando um card é solto nela.
-- **oportunidades/{id}**: `clienteId`, `clienteNome`, `telefone`, `agendamentoId`, `etapa`, `valorProposto`, `observacoes`, `perdida` (bool), `motivoPerda`, `fechada` (bool), `precisaReagendar` (bool), `contratoId`, `createdAt`, `updatedAt` — Funil de Vendas. Subcoleção `historico/`.
+- **etapasAgendamentoConfig/{id}**: `nome`, `ordem`, `entraFunilVendas` (bool — dispara a criação automática da oportunidade + evento na Agenda), `perda` (bool — pede motivo ao arrastar um card pra cá), `slaUnidade` (`dias`/`horas`), `slaAmarelo`, `slaVermelho`.
+- **agendamentos/{id}**: `clienteId`, `clienteNome`, `telefone`, `data` (yyyy-MM-dd), `hora`, `etapa` (id de `etapasAgendamentoConfig`), `dataEntrouEtapa`, `convertido` (bool — já virou oportunidade?), `enviadoAgenda` (bool — já criou o evento no Google?), `googleEventId`, `motivoPerda`, `observacoes`, `createdAt`, `updatedAt` — Funil de Agendamento. Subcoleção `historico/` (create-only).
+- **etapasVendaConfig/{id}**: `nome`, `ordem`, `fechamento` (bool — abre o gerador de contrato), `perda` (bool), `slaUnidade`, `slaAmarelo`, `slaVermelho`.
+- **oportunidades/{id}**: `clienteId`, `clienteNome`, `telefone`, `agendamentoId`, `etapa` (id de `etapasVendaConfig`), `dataEntrouEtapa`, `valorProposto`, `observacoes`, `perdida` (bool), `motivoPerda`, `fechada` (bool), `contratoId`, `createdAt`, `updatedAt` — Funil de Vendas. Subcoleção `historico/`.
 - **contratos/{id}**: `oportunidadeId`, `clienteId`, `clienteNome`, `valorTotal`, `formaPagamento` (`avista`/`entrada_parcelas`), `valorEntrada`, `numParcelas`, `diaVencimento`, `dataGeracao`, `pdfUrl`, `status`.
 - **parcelas/{id}**: `contratoId`, `clienteId`, `clienteNome`, `numero` (0 = entrada), `valor`, `vencimento` (yyyy-MM-dd), `status` (`esperado`/`realizado`), `dataPagamento` — geradas automaticamente ao gerar um contrato.
 - **despesas/{id}**: `descricao`, `categoria`, `tipo` (`despesa`/`outro_custo`), `valor`, `data`, `recorrente` (bool), `diaVencimento`, `ultimoMesLancado`, `origemRecorrenteId`.
-- **etapasAdminConfig/{id}**: `nome`, `ordem`, `prazoDiasPadrao` — colunas configuráveis do Funil Administrativo.
-- **cardsAdmin/{id}**: `contratoId`, `clienteId`, `clienteNome`, `valorTotal`, `etapa`, `dataEntrouEtapa`, `prazoEtapaAtual`, `createdAt`, `updatedAt` — Funil Administrativo, criado automaticamente ao gerar um contrato. Subcoleção `historico/`.
-- **config/geral**: documento único — `calendarioAgendaId`, `calendarioAgendaNome` — o calendário escolhido em Configurações para o Funil de Agendamento.
+- **etapasAdminConfig/{id}**: `nome`, `ordem`, `slaUnidade`, `slaAmarelo`, `slaVermelho`.
+- **cardsAdmin/{id}**: `contratoId`, `clienteId`, `clienteNome`, `valorTotal`, `etapa` (id de `etapasAdminConfig`), `dataEntrouEtapa`, `createdAt`, `updatedAt` — Funil Administrativo, criado automaticamente ao gerar um contrato. Subcoleção `historico/`.
+- **config/geral**: documento único — `calendarioAgendaId`, `calendarioAgendaNome` — o calendário escolhido em Configurações para onde os agendamentos são lançados.
 
-## Decisões tomadas nas perguntas em aberto do plano original
+## Decisões tomadas
 
-`plano_financeiro_funil.md` deixava várias perguntas em aberto (seções 2.3,
-3.4, 4.3). Para poder construir a v1 inteira de uma vez, as seguintes
-decisões padrão foram tomadas — todas ajustáveis depois, direto no app ou
-na `planilha.html`:
+`plano_financeiro_funil.md` deixava várias perguntas em aberto, e os
+pedidos foram evoluindo ao longo do desenvolvimento. As decisões abaixo
+são as que valem **na versão atual** — todas ajustáveis depois, direto no
+app (Configurações) ou na `planilha.html`:
 
 - **Despesas e outros custos** entram por lançamento manual (aba "Despesas
   & Custos"), com opção de marcar como **recorrente** — nesse caso o
@@ -141,32 +162,51 @@ na `planilha.html`:
 - **Contrato**: só geração de PDF por enquanto, sem assinatura eletrônica.
   Um único modelo de contrato (Google Docs com placeholders) — se precisar
   de mais de um modelo por tipo de serviço, dá pra estender
-  `CONTRATO_TEMPLATE_DOC_ID` para um mapa de modelos.
-- **Etapas do Funil Administrativo**: como a lista completa e os prazos
-  reais ainda não foram confirmados, o sistema já sobe com 4 etapas
-  padrão de exemplo ("Pagamento da entrada", "Criação do grupo",
-  "Execução", "Entrega") — edite, apague ou crie as etapas reais em
-  **Configurações**, a qualquer momento.
-- **Gatilho de conversão em oportunidade**: o funil de vendas começa
-  quando o agendamento chega em "Agendado" — nesse momento o sistema já
-  cria a oportunidade automaticamente (como novo lead) e o evento na
-  Google Agenda, sem precisar de nenhum botão manual. "Realizado" é só
-  status de acompanhamento (não dispara nada).
-- **No-show / reagendamento**: quando um agendamento é movido pra "Não
-  veio", ele (e a oportunidade vinculada, se já existir) ganham a tag
-  🔁 "Precisa reagendar", visível nos dois funis. Reagendar de verdade é
-  criar um **agendamento novo** pro mesmo cliente (mesmo fluxo de sempre) —
-  isso cria um evento novo na Agenda; o card antigo permanece como
-  histórico do no-show.
+  `CONTRATO_TEMPLATE_DOC_ID` para um mapa de modelos. O modal de contrato
+  também coleta telefone/e-mail do cliente se estiverem faltando no
+  cadastro (só preenche o que estava em branco, nunca sobrescreve).
+- **Etapas dos 3 funis são 100% configuráveis** — nome, ordem, e um SLA
+  (verde/amarelo/vermelho) contado em horas ou dias a partir do momento em
+  que o card entrou na etapa. Os defaults que vêm no pacote (editáveis a
+  qualquer momento em **Configurações**):
+  - **Agendamento**: Novo Lead → Tentativa de Contato → Retomar Contato →
+    Qualificação → Agendado → Reagendado → Perdido. "Agendado" e
+    "Reagendado" são as únicas marcadas `entraFunilVendas`; "Perdido" é a
+    etapa de perda.
+  - **Vendas**: Reunião Agendada → Follow Up → Negociação → Fechado →
+    Perdido. "Fechado" é a etapa de fechamento; "Perdido" é a etapa de
+    perda.
+  - **Administrativo**: Recebimento da Entrada → Criação do Grupo → Envio
+    do Contrato → Enviado para Mentoria.
+- **Gatilho de conversão em oportunidade**: quando um agendamento chega
+  numa etapa marcada `entraFunilVendas` (Agendado ou Reagendado, por
+  padrão), o sistema cria a oportunidade automaticamente (como novo lead,
+  na 1ª etapa do Funil de Vendas) e o evento na Google Agenda — sem
+  precisar de nenhum botão manual. Os flags `convertido`/`enviadoAgenda`
+  evitam duplicar caso o card passe por mais de uma etapa com essa flag
+  (ex: Agendado → depois Reagendado).
+- **Perda (Agendamento e Vendas)**: arrastar um card pra qualquer etapa
+  marcada `perda` abre um modal pedindo o motivo antes de mover de
+  verdade — o card só sai da etapa atual depois de confirmar.
+- **Gerador de contrato obrigatório no fechamento**: arrastar um card do
+  Funil de Vendas pra etapa marcada `fechamento` **não move o card** —
+  abre o modal do contrato na hora, já com cliente/valor pré-preenchidos.
+  O card só entra de fato em "Fechado" depois de gerar o contrato (que já
+  cria as parcelas no financeiro e o card no Funil Administrativo,
+  automaticamente).
 - **Quem move o card entre etapas**: por padrão é manual (arrastar no
-  Kanban), exceto as duas transições automáticas do parágrafo acima
-  (Agendado → oportunidade + evento na Agenda; venda fechada → contrato
-  gerado → topo do administrativo).
-- **Cliente no agendamento manual**: o campo "Cliente" só aceita alguém já
-  cadastrado (busca com filtro ao digitar) ou a criação explícita de um
-  cliente novo pelo botão "+ Criar cliente" dentro do próprio campo —
-  nunca cria um cliente sem essa escolha deliberada, pra evitar duplicata
-  por erro de digitação.
+  Kanban), exceto as transições automáticas descritas acima.
+- **Cliente em qualquer formulário do sistema** (agendamento, oportunidade,
+  contrato): sempre um combobox que só aceita alguém já cadastrado (busca
+  com filtro ao digitar) ou a criação explícita de um cliente novo pelo
+  botão "+ Criar cliente" dentro do próprio campo — nunca um `<select>` ou
+  `<input list>` nativo (no Android eles jogam as sugestões coladas no
+  teclado), e nunca cria um cliente sem essa escolha deliberada, pra
+  evitar duplicata por erro de digitação.
+- **SLA é calculado ao vivo, não gravado**: a cor do badge (verde/amarelo/
+  vermelho) é recalculada toda vez que a tela renderiza (inclusive por um
+  `setInterval` de 1 minuto) a partir de `dataEntrouEtapa` — não existe um
+  campo "prazo" gravado que precise ser recalculado a cada mudança de SLA.
 
 ## Observações
 
