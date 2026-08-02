@@ -1,0 +1,113 @@
+rules_version = '2';
+
+// Regras de FORMATO, não de identidade — este projeto não usa Firebase Auth
+// (mesmo trade-off do padrão de referência, Financeiro Pamplona). Isso barra
+// gravações mal-formadas, mas não impede alguém tecnicamente hábil de abrir
+// o DevTools e escrever fora das regras de negócio do app.js. Trade-off
+// aceitável pra uso interno da equipe — como este sistema guarda dados
+// financeiros e de clientes, reavalie introduzir Firebase Auth se o número
+// de pessoas com acesso crescer.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /clientes/{id} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['nome'])
+                    && request.resource.data.nome is string
+                    && request.resource.data.nome.size() > 0
+                    && request.resource.data.nome.size() < 200;
+      allow update: if request.resource.data.nome is string
+                    && request.resource.data.nome.size() < 200;
+      allow delete: if true;
+    }
+
+    match /agendamentos/{id} {
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasAll(['clienteNome', 'status'])
+                    && request.resource.data.clienteNome is string
+                    && request.resource.data.status is string;
+      allow delete: if true;
+
+      match /historico/{logId} {
+        allow read: if true;
+        allow create: if true;
+        allow update, delete: if false;
+      }
+    }
+
+    match /etapasVendaConfig/{id} {
+      allow read: if true;
+      allow create, update: if request.resource.data.nome is string
+                    && request.resource.data.ordem is number;
+      allow delete: if true;
+    }
+
+    match /oportunidades/{id} {
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
+                    && request.resource.data.clienteNome is string
+                    && request.resource.data.etapa is string;
+      allow delete: if true;
+
+      match /historico/{logId} {
+        allow read: if true;
+        allow create: if true;
+        allow update, delete: if false;
+      }
+    }
+
+    match /contratos/{id} {
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasAll(['clienteNome', 'valorTotal'])
+                    && request.resource.data.clienteNome is string
+                    && request.resource.data.valorTotal is number;
+      allow delete: if true;
+    }
+
+    match /parcelas/{id} {
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasAll(['contratoId', 'valor', 'vencimento', 'status'])
+                    && request.resource.data.contratoId is string
+                    && request.resource.data.valor is number
+                    && request.resource.data.status is string;
+      allow delete: if true;
+    }
+
+    match /despesas/{id} {
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasAll(['descricao', 'valor', 'tipo'])
+                    && request.resource.data.descricao is string
+                    && request.resource.data.valor is number
+                    && request.resource.data.tipo is string;
+      allow delete: if true;
+    }
+
+    match /etapasAdminConfig/{id} {
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasAll(['nome', 'ordem', 'prazoDiasPadrao'])
+                    && request.resource.data.nome is string
+                    && request.resource.data.ordem is number
+                    && request.resource.data.prazoDiasPadrao is number;
+      allow delete: if true;
+    }
+
+    match /cardsAdmin/{id} {
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
+                    && request.resource.data.clienteNome is string
+                    && request.resource.data.etapa is string;
+      allow delete: if true;
+
+      match /historico/{logId} {
+        allow read: if true;
+        allow create: if true;
+        allow update, delete: if false;
+      }
+    }
+
+    match /config/{id} {
+      allow read: if true;
+      allow write: if true;
+    }
+  }
+}

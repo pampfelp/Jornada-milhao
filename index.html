@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jornada do Milhão · Painel</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#0A0A0A">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Jornada do Milhão">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+<div class="mobile-topbar">
+  <button class="hamburger" id="btn-abrir-menu">☰</button>
+  <div class="mobile-topbar-title">Jornada do Milhão</div>
+</div>
+
+<aside class="sidebar" id="sidebar">
+  <div class="brandmark">
+    <img src="logo_bussola.png" alt="Jornada do Milhão">
+    <div>
+      <div class="co-nome">JORNADA DO <span>M1LHÃO</span></div>
+      <div class="co-sub">Mentoria Exclusiva</div>
+    </div>
+  </div>
+  <nav>
+    <a data-view="financeiro" class="active"><span class="ico">💰</span>Painel Financeiro</a>
+    <a data-view="agendamento"><span class="ico">📅</span>Funil de Agendamento</a>
+    <a data-view="vendas"><span class="ico">📈</span>Funil de Vendas</a>
+    <a data-view="administrativo"><span class="ico">🗂️</span>Funil Administrativo</a>
+    <a data-view="contratos"><span class="ico">📄</span>Contratos</a>
+    <a data-view="despesas"><span class="ico">🧾</span>Despesas &amp; Custos</a>
+    <a data-view="clientes"><span class="ico">👤</span>Clientes</a>
+    <a data-view="config"><span class="ico">⚙️</span>Configurações</a>
+  </nav>
+</aside>
+
+<main class="app">
+
+  <!-- ═══ PAINEL FINANCEIRO ═══ -->
+  <section id="view-financeiro" class="view active">
+    <header class="top">
+      <div>
+        <h1>Painel Financeiro</h1>
+        <div class="view-desc">Faturamento é a venda fechada; fluxo de caixa é o dinheiro que efetivamente entra, mês a mês, conforme as parcelas vencem/pagam.</div>
+      </div>
+      <div class="top-actions">
+        <input type="month" id="fin-periodo" class="btn">
+        <button class="btn btn-primary" id="btn-nova-despesa">+ Despesa/Custo</button>
+      </div>
+    </header>
+
+    <div class="kpi-grid" id="fin-kpis"></div>
+
+    <div class="card">
+      <h2>Parcelas vencidas e não pagas <span style="color:var(--ink-faint);font-weight:500;font-size:12px;">— sinalizadas para cobrança manual</span></h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Cliente</th><th>Parcela</th><th>Vencimento</th><th>Valor</th><th></th></tr></thead>
+          <tbody id="tabela-parcelas-vencidas"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Parcelas do período selecionado</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Cliente</th><th>Parcela</th><th>Vencimento</th><th>Valor</th><th>Status</th><th></th></tr></thead>
+          <tbody id="tabela-parcelas-periodo"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ FUNIL DE AGENDAMENTO ═══ -->
+  <section id="view-agendamento" class="view">
+    <header class="top">
+      <div>
+        <h1>Funil de Agendamento</h1>
+        <div class="view-desc">Todo evento do Google Agenda entra automaticamente aqui. Quando a reunião acontece, converta o card em oportunidade — ele vira o topo do Funil de Vendas.</div>
+      </div>
+      <div class="top-actions">
+        <button class="btn" id="btn-sync-agenda">🔄 Sincronizar Agenda</button>
+        <button class="btn btn-primary" id="btn-novo-agendamento">+ Agendamento manual</button>
+      </div>
+    </header>
+    <div class="kanban-wrap" id="kanban-agendamento"></div>
+  </section>
+
+  <!-- ═══ FUNIL DE VENDAS ═══ -->
+  <section id="view-vendas" class="view">
+    <header class="top">
+      <div>
+        <h1>Funil de Vendas</h1>
+        <div class="view-desc">O topo vem do fim do Funil de Agendamento. Ao mover um card para uma etapa de fechamento, gere o contrato — o card sai daqui e entra no Funil Administrativo.</div>
+      </div>
+      <div class="top-actions">
+        <button class="btn btn-primary" id="btn-nova-oportunidade">+ Nova oportunidade</button>
+      </div>
+    </header>
+    <div class="funil-kpis" id="vendas-kpis"></div>
+    <div class="kanban-wrap" id="kanban-vendas"></div>
+  </section>
+
+  <!-- ═══ FUNIL ADMINISTRATIVO ═══ -->
+  <section id="view-administrativo" class="view">
+    <header class="top">
+      <div>
+        <h1>Funil Administrativo</h1>
+        <div class="view-desc">Pós-venda: prazos, grupo, recebimento, execução. O topo é alimentado automaticamente pela geração do contrato.</div>
+      </div>
+    </header>
+    <div class="kanban-wrap" id="kanban-administrativo"></div>
+  </section>
+
+  <!-- ═══ CONTRATOS ═══ -->
+  <section id="view-contratos" class="view">
+    <header class="top">
+      <div><h1>Contratos</h1></div>
+      <div class="top-actions">
+        <button class="btn btn-primary" id="btn-novo-contrato">+ Novo contrato</button>
+      </div>
+    </header>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Cliente</th><th>Valor total</th><th>Forma de pagamento</th><th>Parcelas pagas</th><th>Gerado em</th><th>PDF</th><th></th></tr></thead>
+        <tbody id="tabela-contratos"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══ DESPESAS & CUSTOS ═══ -->
+  <section id="view-despesas" class="view">
+    <header class="top">
+      <div>
+        <h1>Despesas &amp; Custos</h1>
+        <div class="view-desc">Despesas operacionais (tráfego, folha, ferramentas) e outros custos (impostos, taxas) lançados manualmente. Marcadas como recorrentes são relançadas sozinhas todo mês.</div>
+      </div>
+      <div class="top-actions">
+        <button class="btn btn-primary" id="btn-nova-despesa-2">+ Nova despesa/custo</button>
+      </div>
+    </header>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Data</th><th>Recorrente</th><th></th></tr></thead>
+        <tbody id="tabela-despesas"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══ CLIENTES ═══ -->
+  <section id="view-clientes" class="view">
+    <header class="top">
+      <div>
+        <h1>Clientes</h1>
+        <div class="view-desc">Tabela auxiliar de consulta — o funil é quem alimenta os dados, não o contrário.</div>
+      </div>
+      <div class="top-actions">
+        <button class="btn btn-primary" id="btn-novo-cliente">+ Novo cliente</button>
+      </div>
+    </header>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Nome</th><th>Telefone</th><th>E-mail</th><th>Origem</th></tr></thead>
+        <tbody id="tabela-clientes"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══ CONFIGURAÇÕES ═══ -->
+  <section id="view-config" class="view">
+    <header class="top"><div><h1>Configurações</h1></div></header>
+
+    <div class="card">
+      <div class="section-head"><h2>Etapas do <span>Funil de Vendas</span></h2><div class="hint">a etapa marcada como fechamento dispara a geração de contrato</div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Ordem</th><th>Nome</th><th>Etapa de fechamento?</th><th></th></tr></thead>
+          <tbody id="tabela-etapas-venda"></tbody>
+        </table>
+      </div>
+      <p class="hint"><button class="btn-small" id="btn-nova-etapa-venda">+ Etapa</button></p>
+    </div>
+
+    <div class="card">
+      <div class="section-head"><h2>Etapas do <span>Funil Administrativo</span></h2><div class="hint">prazo padrão em dias, a partir do momento em que o card entra na etapa</div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Ordem</th><th>Nome</th><th>Prazo padrão (dias)</th><th></th></tr></thead>
+          <tbody id="tabela-etapas-admin"></tbody>
+        </table>
+      </div>
+      <p class="hint"><button class="btn-small" id="btn-nova-etapa-admin">+ Etapa</button></p>
+    </div>
+
+    <div class="card">
+      <h2>Integrações (Apps Script)</h2>
+      <p class="hint">Sincronização com o Google Agenda e geração de PDF de contrato dependem do <code>Code.gs</code> implantado e configurado em <code>firebase-init.js</code> (constante <code>APPS_SCRIPT_PROXY_URL</code>). Veja o README do projeto para o passo a passo.</p>
+    </div>
+  </section>
+
+</main>
+
+<!-- ═══ MODAL: CLIENTE ═══ -->
+<div class="modal-overlay" id="modal-cliente">
+  <div class="modal-box">
+    <h2 id="modal-cliente-titulo">Novo cliente</h2>
+    <div class="field"><label>Nome</label><input type="text" id="mc-nome"></div>
+    <div class="field"><label>Telefone</label><input type="text" id="mc-telefone"></div>
+    <div class="field"><label>E-mail</label><input type="text" id="mc-email"></div>
+    <div class="field"><label>Origem</label><input type="text" id="mc-origem" placeholder="ex: Instagram, indicação..."></div>
+    <div class="field"><label>Observações</label><textarea id="mc-obs"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-cliente">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-cliente">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: AGENDAMENTO MANUAL ═══ -->
+<div class="modal-overlay" id="modal-agendamento">
+  <div class="modal-box">
+    <h2>Novo agendamento manual</h2>
+    <div class="field"><label>Cliente</label><input type="text" id="ma-cliente" list="lista-clientes-datalist" placeholder="Nome do cliente"></div>
+    <div class="field"><label>Telefone</label><input type="text" id="ma-telefone"></div>
+    <div class="row">
+      <div class="field"><label>Data</label><input type="date" id="ma-data"></div>
+      <div class="field"><label>Hora</label><input type="time" id="ma-hora"></div>
+    </div>
+    <div class="field"><label>Observações</label><textarea id="ma-obs"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-agendamento">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-agendamento">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: OPORTUNIDADE ═══ -->
+<div class="modal-overlay" id="modal-oportunidade">
+  <div class="modal-box">
+    <h2>Nova oportunidade</h2>
+    <div class="field"><label>Cliente</label><input type="text" id="mo-cliente" list="lista-clientes-datalist" placeholder="Nome do cliente"></div>
+    <div class="field"><label>Telefone</label><input type="text" id="mo-telefone"></div>
+    <div class="field"><label>Valor proposto</label><input type="text" inputmode="decimal" id="mo-valor" placeholder="0,00"></div>
+    <div class="field"><label>Observações</label><textarea id="mo-obs"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-oportunidade">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-oportunidade">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: PERDA DE OPORTUNIDADE ═══ -->
+<div class="modal-overlay" id="modal-perda">
+  <div class="modal-box">
+    <h2>Marcar como perdido</h2>
+    <div class="field"><label>Motivo</label><textarea id="mp-motivo" placeholder="Por que a venda não avançou?"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-perda">Cancelar</button>
+      <button class="btn btn-danger" id="btn-confirmar-perda">Marcar como perdido</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: GERADOR DE CONTRATO ═══ -->
+<div class="modal-overlay" id="modal-contrato">
+  <div class="modal-box modal-wide">
+    <h2>Gerar contrato</h2>
+    <div class="field"><label>Cliente</label><input type="text" id="mct-cliente" list="lista-clientes-datalist" placeholder="Nome do cliente"></div>
+    <div class="row">
+      <div class="field"><label>Valor total</label><input type="text" inputmode="decimal" id="mct-valor" placeholder="0,00"></div>
+      <div class="field">
+        <label>Forma de pagamento</label>
+        <select id="mct-forma">
+          <option value="avista">À vista</option>
+          <option value="entrada_parcelas">Entrada + parcelas</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" id="mct-linha-parcelamento">
+      <div class="field"><label>Valor da entrada</label><input type="text" inputmode="decimal" id="mct-entrada" placeholder="0,00"></div>
+      <div class="field"><label>Nº de parcelas</label><input type="number" id="mct-numparcelas" min="1" value="1"></div>
+      <div class="field"><label>Vencimento — todo dia</label><input type="number" id="mct-diavencimento" min="1" max="28" value="10"></div>
+    </div>
+    <div class="field"><label>Data da 1ª parcela</label><input type="date" id="mct-primeiraparcela"></div>
+    <p class="hint" id="mct-preview-parcelas" style="margin:8px 0 4px;"></p>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-contrato">Cancelar</button>
+      <button class="btn btn-primary" id="btn-gerar-contrato">Gerar contrato e parcelas</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: DESPESA / CUSTO ═══ -->
+<div class="modal-overlay" id="modal-despesa">
+  <div class="modal-box">
+    <h2>Nova despesa/custo</h2>
+    <div class="field"><label>Descrição</label><input type="text" id="md-descricao"></div>
+    <div class="row">
+      <div class="field">
+        <label>Tipo</label>
+        <select id="md-tipo">
+          <option value="despesa">Despesa operacional</option>
+          <option value="outro_custo">Outro custo (imposto/taxa)</option>
+        </select>
+      </div>
+      <div class="field"><label>Categoria</label><input type="text" id="md-categoria" placeholder="ex: tráfego pago, folha..."></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Valor</label><input type="text" inputmode="decimal" id="md-valor" placeholder="0,00"></div>
+      <div class="field"><label>Data</label><input type="date" id="md-data"></div>
+    </div>
+    <label class="checkbox-field"><input type="checkbox" id="md-recorrente"> Despesa recorrente (relança sozinha todo mês)</label>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-despesa">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-despesa">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: ETAPA DE VENDA ═══ -->
+<div class="modal-overlay" id="modal-etapa-venda">
+  <div class="modal-box">
+    <h2>Etapa do Funil de Vendas</h2>
+    <div class="field"><label>Nome</label><input type="text" id="mev-nome"></div>
+    <div class="field"><label>Ordem</label><input type="number" id="mev-ordem" min="1"></div>
+    <label class="checkbox-field"><input type="checkbox" id="mev-fechamento"> Etapa de fechamento (dispara gerador de contrato)</label>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-etapa-venda">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-etapa-venda">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: ETAPA ADMINISTRATIVA ═══ -->
+<div class="modal-overlay" id="modal-etapa-admin">
+  <div class="modal-box">
+    <h2>Etapa do Funil Administrativo</h2>
+    <div class="field"><label>Nome</label><input type="text" id="mea-nome"></div>
+    <div class="row">
+      <div class="field"><label>Ordem</label><input type="number" id="mea-ordem" min="1"></div>
+      <div class="field"><label>Prazo padrão (dias)</label><input type="number" id="mea-prazo" min="0"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-etapa-admin">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-etapa-admin">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<datalist id="lista-clientes-datalist"></datalist>
+
+<div class="toast hidden" id="toast-erro">
+  <div class="toast-title">Aviso</div>
+  <div id="toast-msg"></div>
+</div>
+
+<!--
+  Ordem importa: firebase-init.js exporta `db`, app.js importa dele. Os dois
+  precisam ser type="module" para o import funcionar — não dá pra abrir este
+  arquivo direto do disco (file://) para testar, veja o README.
+-->
+<script type="module" src="firebase-init.js"></script>
+<script type="module" src="app.js"></script>
+<script>
+  // Registra o service worker — sem isso o navegador não considera o site
+  // "instalável" (ícone de instalar some do menu, e o Android não mostra o
+  // banner de "Adicionar à tela inicial" sozinho).
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("service-worker.js").catch((err) => {
+        console.error("Falha ao registrar service worker:", err);
+      });
+    });
+  }
+</script>
+</body>
+</html>
