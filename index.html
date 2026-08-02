@@ -157,7 +157,7 @@
     </header>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Data</th><th>Recorrente</th><th></th></tr></thead>
+        <thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Data</th><th>Recorrente</th></tr></thead>
         <tbody id="tabela-despesas"></tbody>
       </table>
     </div>
@@ -190,7 +190,7 @@
       <div class="section-head"><h2>Etapas do <span>Funil de Agendamento</span></h2><div class="hint">"entra em Vendas" converte automaticamente em oportunidade; "perda" pede motivo ao arrastar</div></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Ordem</th><th>Nome</th><th>Entra em Vendas?</th><th>É perda?</th><th>SLA</th><th></th></tr></thead>
+          <thead><tr><th>Ordem</th><th>Nome</th><th>Entra em Vendas?</th><th>É perda?</th><th>SLA</th></tr></thead>
           <tbody id="tabela-etapas-agendamento"></tbody>
         </table>
       </div>
@@ -201,7 +201,7 @@
       <div class="section-head"><h2>Etapas do <span>Funil de Vendas</span></h2><div class="hint">"fechamento" abre o gerador de contrato; "perda" pede motivo ao arrastar</div></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Ordem</th><th>Nome</th><th>Fechamento?</th><th>É perda?</th><th>SLA</th><th></th></tr></thead>
+          <thead><tr><th>Ordem</th><th>Nome</th><th>Fechamento?</th><th>É perda?</th><th>SLA</th></tr></thead>
           <tbody id="tabela-etapas-venda"></tbody>
         </table>
       </div>
@@ -212,7 +212,7 @@
       <div class="section-head"><h2>Etapas do <span>Funil Administrativo</span></h2><div class="hint">SLA contado a partir do momento em que o card entra na etapa</div></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Ordem</th><th>Nome</th><th>SLA</th><th></th></tr></thead>
+          <thead><tr><th>Ordem</th><th>Nome</th><th>SLA</th></tr></thead>
           <tbody id="tabela-etapas-admin"></tbody>
         </table>
       </div>
@@ -243,6 +243,23 @@
 
 </main>
 
+<!-- ═══ MODAL: DETALHE (genérico — ver antes de editar/excluir) ═══ -->
+<div class="modal-overlay" id="modal-detalhe">
+  <div class="modal-box">
+    <div class="detalhe-header">
+      <h2 id="mdt-titulo">Detalhes</h2>
+      <div class="detalhe-acoes">
+        <button class="btn-small" id="mdt-btn-editar" title="Editar">✏️</button>
+        <button class="btn-small" id="mdt-btn-excluir" title="Excluir">🗑️</button>
+      </div>
+    </div>
+    <div class="detalhe-corpo" id="mdt-corpo"></div>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-detalhe">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ MODAL: CLIENTE ═══ -->
 <div class="modal-overlay" id="modal-cliente">
   <div class="modal-box">
@@ -262,7 +279,7 @@
 <!-- ═══ MODAL: AGENDAMENTO MANUAL ═══ -->
 <div class="modal-overlay" id="modal-agendamento">
   <div class="modal-box">
-    <h2>Novo agendamento manual</h2>
+    <h2 id="modal-agendamento-titulo">Novo agendamento manual</h2>
     <div class="field">
       <label>Cliente</label>
       <div class="combo-wrap">
@@ -286,7 +303,7 @@
 <!-- ═══ MODAL: OPORTUNIDADE ═══ -->
 <div class="modal-overlay" id="modal-oportunidade">
   <div class="modal-box">
-    <h2>Nova oportunidade</h2>
+    <h2 id="modal-oportunidade-titulo">Nova oportunidade</h2>
     <div class="field">
       <label>Cliente</label>
       <div class="combo-wrap">
@@ -359,7 +376,7 @@
 <!-- ═══ MODAL: DESPESA / CUSTO ═══ -->
 <div class="modal-overlay" id="modal-despesa">
   <div class="modal-box">
-    <h2>Nova despesa/custo</h2>
+    <h2 id="modal-despesa-titulo">Nova despesa/custo</h2>
     <div class="field"><label>Descrição</label><input type="text" id="md-descricao"></div>
     <div class="row">
       <div class="field">
@@ -449,6 +466,63 @@
     <div class="modal-actions">
       <button class="btn" data-fechar-modal="modal-etapa-admin">Cancelar</button>
       <button class="btn btn-primary" id="btn-salvar-etapa-admin">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: STATUS DO CONTRATO ═══ -->
+<div class="modal-overlay" id="modal-contrato-status">
+  <div class="modal-box">
+    <h2 id="modal-contrato-status-titulo">Editar contrato</h2>
+    <div class="field">
+      <label>Status</label>
+      <select id="mcs-status">
+        <option value="ativo">Ativo</option>
+        <option value="cancelado">Cancelado</option>
+      </select>
+    </div>
+    <p class="hint">Valor, forma de pagamento e parcelas não são editáveis aqui — já geraram as parcelas no financeiro. Pra corrigir isso, exclua o contrato e gere um novo.</p>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-contrato-status">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-contrato-status">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: EDITAR PARCELA ═══ -->
+<div class="modal-overlay" id="modal-parcela">
+  <div class="modal-box">
+    <h2 id="modal-parcela-titulo">Editar parcela</h2>
+    <div class="row">
+      <div class="field"><label>Valor</label><input type="text" inputmode="decimal" id="mp2-valor" placeholder="0,00"></div>
+      <div class="field"><label>Vencimento</label><input type="date" id="mp2-vencimento"></div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>Status</label>
+        <select id="mp2-status">
+          <option value="esperado">Esperado</option>
+          <option value="realizado">Pago</option>
+        </select>
+      </div>
+      <div class="field"><label>Data do pagamento</label><input type="date" id="mp2-datapagamento"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-parcela">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-parcela">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: EDITAR CARD ADMINISTRATIVO ═══ -->
+<div class="modal-overlay" id="modal-cardadmin">
+  <div class="modal-box">
+    <h2 id="modal-cardadmin-titulo">Editar card</h2>
+    <div class="field"><label>Valor total</label><input type="text" inputmode="decimal" id="mca-valor" placeholder="0,00"></div>
+    <p class="hint">Cliente e contrato vinculado não são editáveis aqui — esse card foi criado automaticamente ao gerar o contrato.</p>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-cardadmin">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-cardadmin">Salvar</button>
     </div>
   </div>
 </div>

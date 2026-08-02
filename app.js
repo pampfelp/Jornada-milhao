@@ -31,6 +31,13 @@ let pendingPerda = null; // { colecao: "agendamentos"|"oportunidades", id }
 let pendingEtapaAgendamentoId = null;
 let pendingEtapaVendaId = null;
 let pendingEtapaAdminId = null;
+let pendingClienteId = null;
+let pendingDespesaId = null;
+let pendingParcelaId = null;
+let pendingContratoStatusId = null;
+let pendingAgendamentoEditId = null;
+let pendingOportunidadeEditId = null;
+let pendingCardAdminId = null;
 let lancandoRecorrentes = false;
 let etapasAgendamentoSeeded = false;
 let etapasVendaSeeded = false;
@@ -129,6 +136,29 @@ function fecharModal(id) { document.getElementById(id).classList.remove("active"
 
 document.querySelectorAll("[data-fechar-modal]").forEach((btn) => {
   btn.addEventListener("click", () => fecharModal(btn.dataset.fecharModal));
+});
+
+// Modal de detalhe genérico — toda linha de tabela e todo card de kanban
+// abre isto primeiro (só leitura). "onEditar"/"onExcluir" ficam atrás dos
+// botões ✏️/🗑 lá dentro; passar null esconde o botão correspondente
+// (usado por entidades sem edição, ex: cardAdmin sem link pra excluir
+// direto). "campos" é um array de [label, valorHtmlJaEscapado].
+let detalheAtual = null;
+function abrirDetalhe({ titulo, campos, onEditar, onExcluir }) {
+  document.getElementById("mdt-titulo").textContent = titulo;
+  document.getElementById("mdt-corpo").innerHTML = campos.map(([label, valor]) => (
+    `<div class="detalhe-campo"><span class="detalhe-label">${esc(label)}</span><span class="detalhe-valor">${valor}</span></div>`
+  )).join("");
+  detalheAtual = { onEditar, onExcluir };
+  document.getElementById("mdt-btn-editar").style.display = onEditar ? "" : "none";
+  document.getElementById("mdt-btn-excluir").style.display = onExcluir ? "" : "none";
+  abrirModal("modal-detalhe");
+}
+document.getElementById("mdt-btn-editar").addEventListener("click", () => {
+  if (detalheAtual && detalheAtual.onEditar) { fecharModal("modal-detalhe"); detalheAtual.onEditar(); }
+});
+document.getElementById("mdt-btn-excluir").addEventListener("click", () => {
+  if (detalheAtual && detalheAtual.onExcluir) { fecharModal("modal-detalhe"); detalheAtual.onExcluir(); }
 });
 
 async function chamarAppsScript(action, payload) {
@@ -342,12 +372,23 @@ function kbOnPointerMove(e) {
   kbUpdateAutoScroll(st.wrap, e.clientX);
 }
 function kbOnPointerUp(e) {
-  if (kbLongPress && kbLongPress.pointerId === e.pointerId) kbCancelLongPress();
+  if (kbLongPress && kbLongPress.pointerId === e.pointerId) {
+    // pointerup chegou antes do long-press disparar o arraste — no toque,
+    // isso é um toque rápido (clique), não uma tentativa de arrastar.
+    const lp = kbLongPress;
+    kbCancelLongPress();
+    onCardClick(lp.wrap.dataset.funil, lp.id);
+    return;
+  }
   const st = kbState;
   if (!st || st.pointerId !== e.pointerId) return;
   kbState = null;
   kbStopAutoScroll();
-  if (!st.dragging) return;
+  if (!st.dragging) {
+    // Mouse: pointerdown sem mover o suficiente pra virar arraste = clique.
+    onCardClick(st.wrap.dataset.funil, st.id);
+    return;
+  }
   const elUnder = document.elementFromPoint(e.clientX, e.clientY);
   const colFinal = elUnder ? elUnder.closest(".kanban-col") : null;
   document.querySelectorAll(".kanban-col.kanban-col-dragover").forEach((c) => c.classList.remove("kanban-col-dragover"));
@@ -381,7 +422,7 @@ function ativarDragKanban(wrap) {
       kbCancelLongPress();
       const pointerId = e.pointerId, clientX = e.clientX, clientY = e.clientY;
       kbLongPress = {
-        pointerId, startX: clientX, startY: clientY,
+        pointerId, startX: clientX, startY: clientY, card, wrap, id,
         timer: setTimeout(() => {
           kbLongPress = null;
           kbStartDrag(card, id, wrap, pointerId, clientX, clientY, offsetX, offsetY, rect.width);
@@ -420,6 +461,12 @@ function onMoveCard(funil, cardId, novaEtapa) {
   else if (funil === "administrativo") moverCardAdmin(cardId, novaEtapa);
 }
 
+function onCardClick(funil, cardId) {
+  if (funil === "agendamento") abrirDetalheAgendamento(cardId);
+  else if (funil === "vendas") abrirDetalheOportunidade(cardId);
+  else if (funil === "administrativo") abrirDetalheCardAdmin(cardId);
+}
+
 /* ══════════════ FUNIL DE AGENDAMENTO ══════════════ */
 
 function renderCardAgendamento(a) {
@@ -430,7 +477,6 @@ function renderCardAgendamento(a) {
     <div class="kcard-foot">
       <span class="kcard-prazo">${fmtData(a.data)} ${esc(a.hora || "")}</span>
       ${renderBadgeSla(a.dataEntrouEtapa, etapaCfg)}
-      <button class="btn-small" data-kcard-action title="Excluir" onclick="window.__jm.excluirAgendamento('${a.id}')">🗑</button>
     </div>
     ${a.motivoPerda ? `<div class="sublabel" style="margin-top:6px;">Motivo: ${esc(a.motivoPerda)}</div>` : ""}
   `;
@@ -511,6 +557,8 @@ async function excluirAgendamento(id) {
 }
 
 document.getElementById("btn-novo-agendamento").addEventListener("click", () => {
+  pendingAgendamentoEditId = null;
+  document.getElementById("modal-agendamento-titulo").textContent = "Novo agendamento manual";
   comboAgendamento.reset();
   document.getElementById("ma-telefone").value = "";
   document.getElementById("ma-data").value = hojeStr();
@@ -518,9 +566,39 @@ document.getElementById("btn-novo-agendamento").addEventListener("click", () => 
   document.getElementById("ma-obs").value = "";
   abrirModal("modal-agendamento");
 });
+function editarAgendamento(id) {
+  const a = STATE.agendamentos.find((x) => x.id === id);
+  if (!a) return;
+  pendingAgendamentoEditId = id;
+  document.getElementById("modal-agendamento-titulo").textContent = `Editar agendamento — ${a.clienteNome}`;
+  comboAgendamento.selecionar({ id: a.clienteId || null, nome: a.clienteNome, telefone: a.telefone || "" });
+  document.getElementById("ma-telefone").value = a.telefone || "";
+  document.getElementById("ma-data").value = a.data || "";
+  document.getElementById("ma-hora").value = a.hora || "";
+  document.getElementById("ma-obs").value = a.observacoes || "";
+  abrirModal("modal-agendamento");
+}
 document.getElementById("btn-salvar-agendamento").addEventListener("click", async () => {
   const cliente = comboAgendamento.clienteSelecionado;
   if (!cliente) { mostrarErro("Selecione um cliente da lista, ou clique em \"+ Criar cliente\" pra cadastrar um novo."); return; }
+
+  if (pendingAgendamentoEditId) {
+    try {
+      await updateDoc(doc(db, "agendamentos", pendingAgendamentoEditId), {
+        clienteId: cliente.id, clienteNome: cliente.nome,
+        telefone: document.getElementById("ma-telefone").value.trim() || cliente.telefone || "",
+        data: document.getElementById("ma-data").value || hojeStr(),
+        hora: document.getElementById("ma-hora").value || "",
+        observacoes: document.getElementById("ma-obs").value.trim(),
+        updatedAt: serverTimestamp()
+      });
+      fecharModal("modal-agendamento");
+      pendingAgendamentoEditId = null;
+      mostrarToast("Agendamento atualizado.");
+    } catch (err) { mostrarErro(err.message); }
+    return;
+  }
+
   const primeiraEtapa = [...STATE.etapasAgendamento].sort((a, b) => a.ordem - b.ordem)[0];
   if (!primeiraEtapa) { mostrarErro("Cadastre ao menos uma etapa do Funil de Agendamento em Configurações."); return; }
   const dados = {
@@ -539,6 +617,27 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
   } catch (err) { mostrarErro(err.message); }
 });
 
+function abrirDetalheAgendamento(id) {
+  const a = STATE.agendamentos.find((x) => x.id === id);
+  if (!a) return;
+  const etapaCfg = STATE.etapasAgendamento.find((e) => e.id === a.etapa);
+  abrirDetalhe({
+    titulo: a.clienteNome,
+    campos: [
+      ["Telefone", esc(a.telefone || "—")],
+      ["Data", esc(fmtData(a.data))],
+      ["Hora", esc(a.hora || "—")],
+      ["Etapa", esc(etapaCfg ? etapaCfg.nome : "—")],
+      ["Observações", esc(a.observacoes || "—")],
+      ["Já virou oportunidade?", a.convertido ? "Sim" : "Não"],
+      ["Evento criado na Agenda?", a.enviadoAgenda ? "Sim" : "Não"],
+      ...(a.motivoPerda ? [["Motivo da perda", esc(a.motivoPerda)]] : [])
+    ],
+    onEditar: () => editarAgendamento(id),
+    onExcluir: () => excluirAgendamento(id)
+  });
+}
+
 /* ══════════════ FUNIL DE VENDAS ══════════════ */
 
 function colunasVendas() {
@@ -553,7 +652,6 @@ function renderCardOportunidade(o) {
     <div class="kcard-foot">
       <span class="kcard-valor">${fmtMoeda(o.valorProposto)}</span>
       ${renderBadgeSla(o.dataEntrouEtapa, etapaCfg)}
-      <button class="btn-small" data-kcard-action title="Excluir" onclick="window.__jm.excluirOportunidade('${o.id}')">🗑</button>
     </div>
     ${o.perdida && o.motivoPerda ? `<div class="sublabel" style="margin-top:6px;">Motivo: ${esc(o.motivoPerda)}</div>` : ""}
   `;
@@ -629,15 +727,45 @@ document.getElementById("btn-confirmar-perda").addEventListener("click", async (
 });
 
 document.getElementById("btn-nova-oportunidade").addEventListener("click", () => {
+  pendingOportunidadeEditId = null;
+  document.getElementById("modal-oportunidade-titulo").textContent = "Nova oportunidade";
   comboOportunidade.reset();
   document.getElementById("mo-telefone").value = "";
   document.getElementById("mo-valor").value = "";
   document.getElementById("mo-obs").value = "";
   abrirModal("modal-oportunidade");
 });
+function editarOportunidade(id) {
+  const o = STATE.oportunidades.find((x) => x.id === id);
+  if (!o) return;
+  pendingOportunidadeEditId = id;
+  document.getElementById("modal-oportunidade-titulo").textContent = `Editar oportunidade — ${o.clienteNome}`;
+  comboOportunidade.selecionar({ id: o.clienteId || null, nome: o.clienteNome, telefone: o.telefone || "" });
+  document.getElementById("mo-telefone").value = o.telefone || "";
+  document.getElementById("mo-valor").value = o.valorProposto ? String(o.valorProposto).replace(".", ",") : "";
+  document.getElementById("mo-obs").value = o.observacoes || "";
+  abrirModal("modal-oportunidade");
+}
 document.getElementById("btn-salvar-oportunidade").addEventListener("click", async () => {
   const cliente = comboOportunidade.clienteSelecionado;
   if (!cliente) { mostrarErro("Selecione um cliente da lista, ou clique em \"+ Criar cliente\" pra cadastrar um novo."); return; }
+
+  if (pendingOportunidadeEditId) {
+    try {
+      await updateDoc(doc(db, "oportunidades", pendingOportunidadeEditId), {
+        clienteId: cliente.id, clienteNome: cliente.nome,
+        telefone: document.getElementById("mo-telefone").value.trim() || cliente.telefone || "",
+        valorProposto: parseMoeda(document.getElementById("mo-valor").value),
+        observacoes: document.getElementById("mo-obs").value.trim(),
+        updatedAt: serverTimestamp()
+      });
+      fecharModal("modal-oportunidade");
+      pendingOportunidadeEditId = null;
+      mostrarToast("Oportunidade atualizada.");
+    } catch (err) { mostrarErro(err.message); }
+    return;
+  }
+
   const primeiraEtapa = [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem)[0];
   if (!primeiraEtapa) { mostrarErro("Cadastre ao menos uma etapa do Funil de Vendas em Configurações."); return; }
   try {
@@ -654,6 +782,25 @@ document.getElementById("btn-salvar-oportunidade").addEventListener("click", asy
     mostrarToast("Oportunidade criada.");
   } catch (err) { mostrarErro(err.message); }
 });
+
+function abrirDetalheOportunidade(id) {
+  const o = STATE.oportunidades.find((x) => x.id === id);
+  if (!o) return;
+  const etapaCfg = STATE.etapasVenda.find((e) => e.id === o.etapa);
+  abrirDetalhe({
+    titulo: o.clienteNome,
+    campos: [
+      ["Telefone", esc(o.telefone || "—")],
+      ["Valor proposto", esc(fmtMoeda(o.valorProposto))],
+      ["Etapa", esc(etapaCfg ? etapaCfg.nome : "—")],
+      ["Observações", esc(o.observacoes || "—")],
+      ["Fechada?", o.fechada ? "Sim" : "Não"],
+      ...(o.motivoPerda ? [["Motivo da perda", esc(o.motivoPerda)]] : [])
+    ],
+    onEditar: () => editarOportunidade(id),
+    onExcluir: () => excluirOportunidade(id)
+  });
+}
 
 /* ══════════════ GERADOR DE CONTRATO ══════════════ */
 
@@ -819,16 +966,15 @@ function renderTabelaContratos() {
   document.getElementById("tabela-contratos").innerHTML = STATE.contratos.map((c) => {
     const parcelasDoContrato = STATE.parcelas.filter((p) => p.contratoId === c.id);
     const pagas = parcelasDoContrato.filter((p) => p.status === "realizado").length;
-    return `<tr>
+    return `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheContrato('${c.id}')">
       <td>${esc(c.clienteNome)}</td>
       <td class="num">${fmtMoeda(c.valorTotal)}</td>
       <td>${c.formaPagamento === "avista" ? "À vista" : `Entrada + ${c.numParcelas}x`}</td>
       <td>${pagas}/${parcelasDoContrato.length}</td>
       <td>${fmtDataHora(c.dataGeracao)}</td>
-      <td>${c.pdfUrl ? `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener">Ver PDF</a>` : "—"}</td>
-      <td><button class="btn-small" onclick="window.__jm.excluirContrato('${c.id}')">🗑</button></td>
+      <td>${c.pdfUrl ? `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Ver PDF</a>` : "—"}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="7"><div class="empty">Nenhum contrato ainda.</div></td></tr>`;
+  }).join("") || `<tr><td colspan="6"><div class="empty">Nenhum contrato ainda.</div></td></tr>`;
 }
 
 async function excluirContrato(id) {
@@ -839,6 +985,44 @@ async function excluirContrato(id) {
     await deleteDoc(doc(db, "contratos", id));
     mostrarToast("Contrato excluído.");
   } catch (err) { mostrarErro("Não foi possível excluir: " + err.message); }
+}
+
+function editarContratoStatus(id) {
+  const c = STATE.contratos.find((x) => x.id === id);
+  if (!c) return;
+  pendingContratoStatusId = id;
+  document.getElementById("modal-contrato-status-titulo").textContent = `Editar contrato — ${c.clienteNome}`;
+  document.getElementById("mcs-status").value = c.status || "ativo";
+  abrirModal("modal-contrato-status");
+}
+document.getElementById("btn-salvar-contrato-status").addEventListener("click", async () => {
+  if (!pendingContratoStatusId) return;
+  try {
+    await updateDoc(doc(db, "contratos", pendingContratoStatusId), { status: document.getElementById("mcs-status").value });
+    fecharModal("modal-contrato-status");
+    pendingContratoStatusId = null;
+    mostrarToast("Contrato atualizado.");
+  } catch (err) { mostrarErro(err.message); }
+});
+
+function abrirDetalheContrato(id) {
+  const c = STATE.contratos.find((x) => x.id === id);
+  if (!c) return;
+  const parcelasDoContrato = STATE.parcelas.filter((p) => p.contratoId === id);
+  const pagas = parcelasDoContrato.filter((p) => p.status === "realizado").length;
+  abrirDetalhe({
+    titulo: c.clienteNome,
+    campos: [
+      ["Valor total", esc(fmtMoeda(c.valorTotal))],
+      ["Forma de pagamento", c.formaPagamento === "avista" ? "À vista" : `Entrada de ${esc(fmtMoeda(c.valorEntrada))} + ${c.numParcelas}x`],
+      ["Parcelas pagas", `${pagas}/${parcelasDoContrato.length}`],
+      ["Gerado em", esc(fmtDataHora(c.dataGeracao))],
+      ["Status", esc(c.status === "cancelado" ? "Cancelado" : "Ativo")],
+      ["PDF", c.pdfUrl ? `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener">Ver PDF</a>` : "—"]
+    ],
+    onEditar: () => editarContratoStatus(id),
+    onExcluir: () => excluirContrato(id)
+  });
 }
 
 /* ══════════════ FUNIL ADMINISTRATIVO ══════════════ */
@@ -870,6 +1054,45 @@ async function moverCardAdmin(id, novaEtapa) {
   } catch (err) { mostrarErro("Não foi possível mover: " + err.message); }
 }
 
+function editarCardAdmin(id) {
+  const c = STATE.cardsAdmin.find((x) => x.id === id);
+  if (!c) return;
+  pendingCardAdminId = id;
+  document.getElementById("modal-cardadmin-titulo").textContent = `Editar — ${c.clienteNome}`;
+  document.getElementById("mca-valor").value = String(c.valorTotal || "").replace(".", ",");
+  abrirModal("modal-cardadmin");
+}
+document.getElementById("btn-salvar-cardadmin").addEventListener("click", async () => {
+  if (!pendingCardAdminId) return;
+  try {
+    await updateDoc(doc(db, "cardsAdmin", pendingCardAdminId), { valorTotal: parseMoeda(document.getElementById("mca-valor").value) });
+    fecharModal("modal-cardadmin");
+    pendingCardAdminId = null;
+    mostrarToast("Atualizado.");
+  } catch (err) { mostrarErro(err.message); }
+});
+
+async function excluirCardAdmin(id) {
+  if (!confirm("Excluir este card do Funil Administrativo? Isso NÃO exclui o contrato nem as parcelas vinculadas — use com cuidado.")) return;
+  try { await deleteDoc(doc(db, "cardsAdmin", id)); } catch (err) { mostrarErro(err.message); }
+}
+
+function abrirDetalheCardAdmin(id) {
+  const c = STATE.cardsAdmin.find((x) => x.id === id);
+  if (!c) return;
+  const etapaCfg = STATE.etapasAdmin.find((e) => e.id === c.etapa);
+  abrirDetalhe({
+    titulo: c.clienteNome,
+    campos: [
+      ["Valor total", esc(fmtMoeda(c.valorTotal))],
+      ["Etapa", esc(etapaCfg ? etapaCfg.nome : "—")],
+      ["Contrato vinculado", c.contratoId ? "Sim (veja em Contratos)" : "—"]
+    ],
+    onEditar: () => editarCardAdmin(id),
+    onExcluir: () => excluirCardAdmin(id)
+  });
+}
+
 /* ══════════════ PAINEL FINANCEIRO ══════════════ */
 
 document.getElementById("fin-periodo").value = STATE.periodoFinanceiro;
@@ -883,6 +1106,53 @@ async function marcarParcelaPaga(id) {
     await updateDoc(doc(db, "parcelas", id), { status: "realizado", dataPagamento: hojeStr() });
     mostrarToast("Parcela marcada como paga.");
   } catch (err) { mostrarErro(err.message); }
+}
+
+function editarParcela(id) {
+  const p = STATE.parcelas.find((x) => x.id === id);
+  if (!p) return;
+  pendingParcelaId = id;
+  document.getElementById("modal-parcela-titulo").textContent = `Editar parcela — ${p.clienteNome}`;
+  document.getElementById("mp2-valor").value = String(p.valor || "").replace(".", ",");
+  document.getElementById("mp2-vencimento").value = p.vencimento || "";
+  document.getElementById("mp2-status").value = p.status || "esperado";
+  document.getElementById("mp2-datapagamento").value = p.dataPagamento || "";
+  abrirModal("modal-parcela");
+}
+document.getElementById("btn-salvar-parcela").addEventListener("click", async () => {
+  if (!pendingParcelaId) return;
+  const status = document.getElementById("mp2-status").value;
+  try {
+    await updateDoc(doc(db, "parcelas", pendingParcelaId), {
+      valor: parseMoeda(document.getElementById("mp2-valor").value),
+      vencimento: document.getElementById("mp2-vencimento").value,
+      status, dataPagamento: status === "realizado" ? (document.getElementById("mp2-datapagamento").value || hojeStr()) : null
+    });
+    fecharModal("modal-parcela");
+    pendingParcelaId = null;
+    mostrarToast("Parcela atualizada.");
+  } catch (err) { mostrarErro(err.message); }
+});
+
+async function excluirParcela(id) {
+  if (!confirm("Excluir esta parcela? Isso NÃO ajusta o valor total do contrato — use com cuidado.")) return;
+  try { await deleteDoc(doc(db, "parcelas", id)); } catch (err) { mostrarErro(err.message); }
+}
+
+function abrirDetalheParcela(id) {
+  const p = STATE.parcelas.find((x) => x.id === id);
+  if (!p) return;
+  abrirDetalhe({
+    titulo: `${p.clienteNome} — ${p.numero === 0 ? "Entrada" : "Parcela " + p.numero}`,
+    campos: [
+      ["Valor", esc(fmtMoeda(p.valor))],
+      ["Vencimento", esc(fmtData(p.vencimento))],
+      ["Status", p.status === "realizado" ? "Pago" : "Esperado"],
+      ["Data do pagamento", esc(fmtData(p.dataPagamento))]
+    ],
+    onEditar: () => editarParcela(id),
+    onExcluir: () => excluirParcela(id)
+  });
 }
 
 function renderFinanceiro() {
@@ -914,25 +1184,27 @@ function renderFinanceiro() {
   `;
 
   const vencidas = STATE.parcelas.filter((p) => p.status === "esperado" && p.vencimento && p.vencimento < hojeStr()).sort((a, b) => a.vencimento.localeCompare(b.vencimento));
-  document.getElementById("tabela-parcelas-vencidas").innerHTML = vencidas.map((p) => `<tr>
+  document.getElementById("tabela-parcelas-vencidas").innerHTML = vencidas.map((p) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheParcela('${p.id}')">
     <td>${esc(p.clienteNome)}</td><td>${p.numero === 0 ? "Entrada" : "Parcela " + p.numero}</td>
     <td>${fmtData(p.vencimento)}</td><td class="num">${fmtMoeda(p.valor)}</td>
-    <td><button class="btn-small" onclick="window.__jm.marcarParcelaPaga('${p.id}')">Marcar paga</button></td>
+    <td><button class="btn-small" onclick="event.stopPropagation();window.__jm.marcarParcelaPaga('${p.id}')">Marcar paga</button></td>
   </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma parcela vencida. 🎉</div></td></tr>`;
 
   document.getElementById("tabela-parcelas-periodo").innerHTML = parcelasDoPeriodo
     .slice().sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""))
-    .map((p) => `<tr>
+    .map((p) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheParcela('${p.id}')">
       <td>${esc(p.clienteNome)}</td><td>${p.numero === 0 ? "Entrada" : "Parcela " + p.numero}</td>
       <td>${fmtData(p.vencimento)}</td><td class="num">${fmtMoeda(p.valor)}</td>
       <td><span class="stamp ${p.status}">${p.status === "realizado" ? "Pago" : "Esperado"}</span></td>
-      <td>${p.status === "esperado" ? `<button class="btn-small" onclick="window.__jm.marcarParcelaPaga('${p.id}')">Marcar paga</button>` : "—"}</td>
+      <td>${p.status === "esperado" ? `<button class="btn-small" onclick="event.stopPropagation();window.__jm.marcarParcelaPaga('${p.id}')">Marcar paga</button>` : "—"}</td>
     </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma parcela neste período.</div></td></tr>`;
 }
 
 /* ══════════════ DESPESAS & CUSTOS ══════════════ */
 
 function abrirModalDespesa() {
+  pendingDespesaId = null;
+  document.getElementById("modal-despesa-titulo").textContent = "Nova despesa/custo";
   document.getElementById("md-descricao").value = "";
   document.getElementById("md-categoria").value = "";
   document.getElementById("md-valor").value = "";
@@ -944,6 +1216,19 @@ function abrirModalDespesa() {
 document.getElementById("btn-nova-despesa").addEventListener("click", abrirModalDespesa);
 document.getElementById("btn-nova-despesa-2").addEventListener("click", abrirModalDespesa);
 
+function editarDespesa(id) {
+  const d = STATE.despesas.find((x) => x.id === id);
+  if (!d) return;
+  pendingDespesaId = id;
+  document.getElementById("modal-despesa-titulo").textContent = `Editar — ${d.descricao}`;
+  document.getElementById("md-descricao").value = d.descricao || "";
+  document.getElementById("md-categoria").value = d.categoria || "";
+  document.getElementById("md-valor").value = String(d.valor || "").replace(".", ",");
+  document.getElementById("md-data").value = d.data || hojeStr();
+  document.getElementById("md-tipo").value = d.tipo || "despesa";
+  document.getElementById("md-recorrente").checked = !!d.recorrente;
+  abrirModal("modal-despesa");
+}
 document.getElementById("btn-salvar-despesa").addEventListener("click", async () => {
   const descricao = document.getElementById("md-descricao").value.trim();
   const valor = parseMoeda(document.getElementById("md-valor").value);
@@ -951,15 +1236,22 @@ document.getElementById("btn-salvar-despesa").addEventListener("click", async ()
   if (!descricao) { mostrarErro("Informe a descrição."); return; }
   if (!valor) { mostrarErro("Informe o valor."); return; }
   const recorrente = document.getElementById("md-recorrente").checked;
+  const dados = {
+    descricao, categoria: document.getElementById("md-categoria").value.trim(),
+    tipo: document.getElementById("md-tipo").value, valor, data,
+    recorrente, diaVencimento: recorrente ? parseInt(data.split("-")[2], 10) : null
+  };
   try {
-    await addDoc(collection(db, "despesas"), {
-      descricao, categoria: document.getElementById("md-categoria").value.trim(),
-      tipo: document.getElementById("md-tipo").value, valor, data,
-      recorrente, diaVencimento: recorrente ? parseInt(data.split("-")[2], 10) : null,
-      ultimoMesLancado: recorrente ? data.slice(0, 7) : null,
-      origemRecorrenteId: null, createdAt: serverTimestamp()
-    });
+    if (pendingDespesaId) {
+      await updateDoc(doc(db, "despesas", pendingDespesaId), dados);
+    } else {
+      await addDoc(collection(db, "despesas"), {
+        ...dados, ultimoMesLancado: recorrente ? data.slice(0, 7) : null,
+        origemRecorrenteId: null, createdAt: serverTimestamp()
+      });
+    }
     fecharModal("modal-despesa");
+    pendingDespesaId = null;
     mostrarToast("Lançamento salvo.");
   } catch (err) { mostrarErro(err.message); }
 });
@@ -967,6 +1259,23 @@ document.getElementById("btn-salvar-despesa").addEventListener("click", async ()
 async function excluirDespesa(id) {
   if (!confirm("Excluir este lançamento?")) return;
   try { await deleteDoc(doc(db, "despesas", id)); } catch (err) { mostrarErro(err.message); }
+}
+
+function abrirDetalheDespesa(id) {
+  const d = STATE.despesas.find((x) => x.id === id);
+  if (!d) return;
+  abrirDetalhe({
+    titulo: d.descricao,
+    campos: [
+      ["Categoria", esc(d.categoria || "—")],
+      ["Tipo", d.tipo === "despesa" ? "Despesa" : "Outro custo"],
+      ["Valor", esc(fmtMoeda(d.valor))],
+      ["Data", esc(fmtData(d.data))],
+      ["Recorrente", d.recorrente ? `Sim (dia ${d.diaVencimento})` : "—"]
+    ],
+    onEditar: () => editarDespesa(id),
+    onExcluir: () => excluirDespesa(id)
+  });
 }
 
 // Sem Cloud Functions, não existe "servidor" lançando as despesas
@@ -1000,34 +1309,48 @@ async function lancarRecorrentesPendentes() {
 function renderTabelaDespesas() {
   document.getElementById("tabela-despesas").innerHTML = STATE.despesas
     .slice().sort((a, b) => (b.data || "").localeCompare(a.data || ""))
-    .map((d) => `<tr>
+    .map((d) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheDespesa('${d.id}')">
       <td>${esc(d.descricao)}</td><td>${esc(d.categoria || "—")}</td>
       <td>${d.tipo === "despesa" ? "Despesa" : "Outro custo"}</td>
       <td class="num">${fmtMoeda(d.valor)}</td><td>${fmtData(d.data)}</td>
       <td>${d.recorrente ? "Sim (dia " + d.diaVencimento + ")" : "—"}</td>
-      <td><button class="btn-small" onclick="window.__jm.excluirDespesa('${d.id}')">🗑</button></td>
-    </tr>`).join("") || `<tr><td colspan="7"><div class="empty">Nenhuma despesa lançada.</div></td></tr>`;
+    </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma despesa lançada.</div></td></tr>`;
 }
 
 /* ══════════════ CLIENTES ══════════════ */
 
 document.getElementById("btn-novo-cliente").addEventListener("click", () => {
+  pendingClienteId = null;
   document.getElementById("modal-cliente-titulo").textContent = "Novo cliente";
   ["mc-nome", "mc-telefone", "mc-email", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
   abrirModal("modal-cliente");
 });
+function editarCliente(id) {
+  const c = STATE.clientes.find((x) => x.id === id);
+  if (!c) return;
+  pendingClienteId = id;
+  document.getElementById("modal-cliente-titulo").textContent = `Editar cliente — ${c.nome}`;
+  document.getElementById("mc-nome").value = c.nome || "";
+  document.getElementById("mc-telefone").value = c.telefone || "";
+  document.getElementById("mc-email").value = c.email || "";
+  document.getElementById("mc-origem").value = c.origem || "";
+  document.getElementById("mc-obs").value = c.observacoes || "";
+  abrirModal("modal-cliente");
+}
 document.getElementById("btn-salvar-cliente").addEventListener("click", async () => {
   const nome = document.getElementById("mc-nome").value.trim();
   if (!nome) { mostrarErro("Informe o nome."); return; }
+  const dados = {
+    nome, telefone: document.getElementById("mc-telefone").value.trim(),
+    email: document.getElementById("mc-email").value.trim(),
+    origem: document.getElementById("mc-origem").value.trim(),
+    observacoes: document.getElementById("mc-obs").value.trim()
+  };
   try {
-    await addDoc(collection(db, "clientes"), {
-      nome, telefone: document.getElementById("mc-telefone").value.trim(),
-      email: document.getElementById("mc-email").value.trim(),
-      origem: document.getElementById("mc-origem").value.trim(),
-      observacoes: document.getElementById("mc-obs").value.trim(),
-      createdAt: serverTimestamp()
-    });
+    if (pendingClienteId) await updateDoc(doc(db, "clientes", pendingClienteId), dados);
+    else await addDoc(collection(db, "clientes"), { ...dados, createdAt: serverTimestamp() });
     fecharModal("modal-cliente");
+    pendingClienteId = null;
     mostrarToast("Cliente salvo.");
   } catch (err) { mostrarErro(err.message); }
 });
@@ -1037,8 +1360,24 @@ async function excluirCliente(id) {
   try { await deleteDoc(doc(db, "clientes", id)); } catch (err) { mostrarErro(err.message); }
 }
 
+function abrirDetalheCliente(id) {
+  const c = STATE.clientes.find((x) => x.id === id);
+  if (!c) return;
+  abrirDetalhe({
+    titulo: c.nome,
+    campos: [
+      ["Telefone", esc(c.telefone || "—")],
+      ["E-mail", esc(c.email || "—")],
+      ["Origem", esc(c.origem || "—")],
+      ["Observações", esc(c.observacoes || "—")]
+    ],
+    onEditar: () => editarCliente(id),
+    onExcluir: () => excluirCliente(id)
+  });
+}
+
 function renderTabelaClientes() {
-  document.getElementById("tabela-clientes").innerHTML = STATE.clientes.map((c) => `<tr>
+  document.getElementById("tabela-clientes").innerHTML = STATE.clientes.map((c) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheCliente('${c.id}')">
     <td>${esc(c.nome)}</td><td>${esc(c.telefone || "—")}</td><td>${esc(c.email || "—")}</td><td>${esc(c.origem || "—")}</td>
   </tr>`).join("") || `<tr><td colspan="4"><div class="empty">Nenhum cliente cadastrado.</div></td></tr>`;
 }
@@ -1197,22 +1536,63 @@ function fmtSla(e) {
 }
 
 function renderConfigEtapasAgendamento() {
-  document.getElementById("tabela-etapas-agendamento").innerHTML = [...STATE.etapasAgendamento].sort((a, b) => a.ordem - b.ordem).map((e) => `<tr>
+  document.getElementById("tabela-etapas-agendamento").innerHTML = [...STATE.etapasAgendamento].sort((a, b) => a.ordem - b.ordem).map((e) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheEtapaAgendamento('${e.id}')">
     <td>${e.ordem}</td><td>${esc(e.nome)}</td><td>${e.entraFunilVendas ? "Sim" : "—"}</td><td>${e.perda ? "Sim" : "—"}</td><td>${fmtSla(e)}</td>
-    <td><button class="btn-small" onclick="window.__jm.editarEtapaAgendamento('${e.id}')">✏️</button> <button class="btn-small" onclick="window.__jm.excluirEtapaAgendamento('${e.id}')">🗑</button></td>
-  </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma etapa cadastrada.</div></td></tr>`;
+  </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma etapa cadastrada.</div></td></tr>`;
 }
 function renderConfigEtapasVenda() {
-  document.getElementById("tabela-etapas-venda").innerHTML = [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem).map((e) => `<tr>
+  document.getElementById("tabela-etapas-venda").innerHTML = [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem).map((e) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheEtapaVenda('${e.id}')">
     <td>${e.ordem}</td><td>${esc(e.nome)}</td><td>${e.fechamento ? "Sim" : "—"}</td><td>${e.perda ? "Sim" : "—"}</td><td>${fmtSla(e)}</td>
-    <td><button class="btn-small" onclick="window.__jm.editarEtapaVenda('${e.id}')">✏️</button> <button class="btn-small" onclick="window.__jm.excluirEtapaVenda('${e.id}')">🗑</button></td>
-  </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma etapa cadastrada.</div></td></tr>`;
+  </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma etapa cadastrada.</div></td></tr>`;
 }
 function renderConfigEtapasAdmin() {
-  document.getElementById("tabela-etapas-admin").innerHTML = [...STATE.etapasAdmin].sort((a, b) => a.ordem - b.ordem).map((e) => `<tr>
+  document.getElementById("tabela-etapas-admin").innerHTML = [...STATE.etapasAdmin].sort((a, b) => a.ordem - b.ordem).map((e) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheEtapaAdmin('${e.id}')">
     <td>${e.ordem}</td><td>${esc(e.nome)}</td><td>${fmtSla(e)}</td>
-    <td><button class="btn-small" onclick="window.__jm.editarEtapaAdmin('${e.id}')">✏️</button> <button class="btn-small" onclick="window.__jm.excluirEtapaAdmin('${e.id}')">🗑</button></td>
-  </tr>`).join("") || `<tr><td colspan="4"><div class="empty">Nenhuma etapa cadastrada.</div></td></tr>`;
+  </tr>`).join("") || `<tr><td colspan="3"><div class="empty">Nenhuma etapa cadastrada.</div></td></tr>`;
+}
+
+function abrirDetalheEtapaAgendamento(id) {
+  const e = STATE.etapasAgendamento.find((x) => x.id === id);
+  if (!e) return;
+  abrirDetalhe({
+    titulo: e.nome,
+    campos: [
+      ["Ordem", String(e.ordem)],
+      ["Entra automaticamente em Vendas?", e.entraFunilVendas ? "Sim" : "Não"],
+      ["É a etapa de perda?", e.perda ? "Sim" : "Não"],
+      ["SLA", fmtSla(e)]
+    ],
+    onEditar: () => editarEtapaAgendamento(id),
+    onExcluir: () => excluirEtapaAgendamento(id)
+  });
+}
+function abrirDetalheEtapaVenda(id) {
+  const e = STATE.etapasVenda.find((x) => x.id === id);
+  if (!e) return;
+  abrirDetalhe({
+    titulo: e.nome,
+    campos: [
+      ["Ordem", String(e.ordem)],
+      ["Etapa de fechamento?", e.fechamento ? "Sim" : "Não"],
+      ["É a etapa de perda?", e.perda ? "Sim" : "Não"],
+      ["SLA", fmtSla(e)]
+    ],
+    onEditar: () => editarEtapaVenda(id),
+    onExcluir: () => excluirEtapaVenda(id)
+  });
+}
+function abrirDetalheEtapaAdmin(id) {
+  const e = STATE.etapasAdmin.find((x) => x.id === id);
+  if (!e) return;
+  abrirDetalhe({
+    titulo: e.nome,
+    campos: [
+      ["Ordem", String(e.ordem)],
+      ["SLA", fmtSla(e)]
+    ],
+    onEditar: () => editarEtapaAdmin(id),
+    onExcluir: () => excluirEtapaAdmin(id)
+  });
 }
 
 /* ══════════════ CONFIGURAÇÕES — CALENDÁRIO DO GOOGLE AGENDA ══════════════ */
@@ -1360,12 +1740,9 @@ function iniciarListeners() {
 // Funções chamadas a partir de HTML gerado por string (onclick inline) —
 // só assim dá pra referenciá-las de dentro de innerHTML num ES module.
 window.__jm = {
-  excluirAgendamento,
-  excluirOportunidade, marcarParcelaPaga,
-  excluirContrato, excluirDespesa, excluirCliente,
-  excluirEtapaAgendamento, editarEtapaAgendamento,
-  excluirEtapaVenda, editarEtapaVenda,
-  excluirEtapaAdmin, editarEtapaAdmin
+  marcarParcelaPaga,
+  abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela,
+  abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin
 };
 
 iniciarListeners();

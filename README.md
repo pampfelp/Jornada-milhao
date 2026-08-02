@@ -207,6 +207,16 @@ app (Configurações) ou na `planilha.html`:
   vermelho) é recalculada toda vez que a tela renderiza (inclusive por um
   `setInterval` de 1 minuto) a partir de `dataEntrouEtapa` — não existe um
   campo "prazo" gravado que precise ser recalculado a cada mudança de SLA.
+- **Padrão "ver antes de editar" em toda linha/card do sistema**: clicar
+  numa linha de tabela ou num card do kanban nunca abre a edição direto —
+  abre um modal de detalhe só leitura, com um botão ✏️ (editar) e 🗑
+  (excluir) no topo. Isso vale pra clientes, despesas, contratos, parcelas,
+  as 3 configurações de etapas, e os 3 tipos de card dos funis. Contratos
+  só permitem editar o `status` (ativo/cancelado) — valor, forma de
+  pagamento e parcelas já geradas não são editáveis por ali (excluir e
+  gerar de novo é o caminho pra corrigir esses dados). Cards do Funil
+  Administrativo só permitem editar o valor total (cliente e contrato
+  vinculado vêm de quando o contrato foi gerado).
 
 ## Observações
 
