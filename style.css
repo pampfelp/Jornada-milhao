@@ -94,6 +94,15 @@ header.top .view-desc{font-size:13px;color:var(--ink-soft);margin-top:6px;max-wi
 .checkbox-field{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-soft);font-weight:600;cursor:pointer;}
 .checkbox-field input{width:16px;height:16px;cursor:pointer;}
 
+.combo-wrap{position:relative;}
+.combo-dropdown{display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;max-height:220px;overflow-y:auto;background:var(--panel-2);border:1.5px solid var(--line);border-radius:9px;box-shadow:0 10px 28px rgba(0,0,0,.5);z-index:220;}
+.combo-dropdown.active{display:block;}
+.combo-item{padding:9px 12px;font-size:13.5px;color:var(--ink);cursor:pointer;}
+.combo-item:hover{background:rgba(255,255,255,.06);}
+.combo-item .combo-item-sub{font-size:11.5px;color:var(--ink-faint);}
+.combo-item.combo-item-criar{color:var(--dourado);font-weight:700;border-top:1px solid var(--line);}
+.combo-vazio{padding:9px 12px;font-size:13px;color:var(--ink-faint);}
+
 table{width:100%;border-collapse:collapse;background:var(--panel);border-radius:var(--radius);overflow:hidden;margin-top:4px;}
 thead th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);padding:10px 12px;border-bottom:2px solid var(--dourado);background:var(--panel-2);}
 tbody td{padding:11px 12px;border-bottom:1px solid var(--line);font-size:13.5px;}
@@ -124,6 +133,18 @@ tbody tr.linha-clicavel{cursor:pointer;}
 .fab-btn{pointer-events:auto;width:54px;height:54px;border-radius:50%;background:var(--dourado);color:#0A0A0A;border:none;font-size:28px;font-weight:400;line-height:1;cursor:pointer;box-shadow:0 8px 22px rgba(254,209,22,.35);display:flex;align-items:center;justify-content:center;transition:transform .15s ease,background .15s ease;}
 .fab-btn:hover{background:var(--dourado-deep);transform:scale(1.06);}
 .fab-btn:active{transform:scale(.96);}
+
+/* ══════════════ FUNIS — toggle + painéis (uma tela só) ══════════════ */
+.funil-toggle{display:flex;gap:6px;margin-bottom:20px;flex-wrap:wrap;background:var(--panel-2);border:1px solid var(--line);border-radius:11px;padding:5px;width:fit-content;}
+.funil-toggle-btn{background:none;border:none;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:700;color:var(--ink-soft);cursor:pointer;}
+.funil-toggle-btn:hover{color:var(--ink);}
+.funil-toggle-btn.active{background:var(--dourado);color:#0A0A0A;}
+.funil-pane{display:none;}
+.funil-pane.active{display:block;}
+@media(max-width:640px){
+  .funil-toggle{width:100%;}
+  .funil-toggle-btn{flex:1;padding:9px 8px;font-size:12px;}
+}
 
 /* ══════════════ KANBAN (funis de agendamento/vendas/administrativo) ══════════════ */
 .kanban-toolbar{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap;}

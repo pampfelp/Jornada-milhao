@@ -22,10 +22,12 @@ const STATE = {
   periodoFinanceiro: new Date().toISOString().slice(0, 7)
 };
 
+// "Reagendado" não é mais uma coluna — é uma TAG (precisaReagendar) que
+// aparece nos dois funis quando um agendamento leva no-show. Reagendar de
+// verdade significa criar um agendamento novo (ver "Não veio" abaixo).
 const COLUNAS_AGENDAMENTO = [
   { id: "agendado", nome: "Agendado" },
   { id: "realizado", nome: "Realizado" },
-  { id: "reagendado", nome: "Reagendado" },
   { id: "nao-veio", nome: "Não veio" }
 ];
 
@@ -130,6 +132,67 @@ async function encontrarOuCriarCliente(nome, telefone) {
   return { id: ref.id, nome, telefone: telefone || "" };
 }
 
+// Combobox de cliente: campo de texto que filtra a lista de clientes já
+// cadastrados enquanto digita (sem digitar nada, mostra todos). Só aceita
+// prosseguir com um cliente clicado na lista — digitar um nome sem
+// selecionar nada não conta como seleção, evitando cadastro por engano.
+// Se o nome digitado não bate com nenhum cliente existente, aparece uma
+// opção "+ Criar cliente" que cadastra na hora.
+function criarComboCliente(inputId, dropdownId) {
+  const input = document.getElementById(inputId);
+  const dropdown = document.getElementById(dropdownId);
+  const api = { clienteSelecionado: null };
+
+  function renderOpcoes(filtro) {
+    const termo = filtro.trim().toLowerCase();
+    const encontrados = termo ? STATE.clientes.filter((c) => c.nome.toLowerCase().includes(termo)) : STATE.clientes;
+    const existeExato = STATE.clientes.some((c) => c.nome.trim().toLowerCase() === termo);
+    let html = encontrados.slice(0, 30).map((c) => (
+      `<div class="combo-item" data-id="${esc(c.id)}">${esc(c.nome)}${c.telefone ? ` <span class="combo-item-sub">${esc(c.telefone)}</span>` : ""}</div>`
+    )).join("");
+    if (termo && !existeExato) {
+      html += `<div class="combo-item combo-item-criar" data-criar="1">+ Criar cliente "${esc(filtro.trim())}"</div>`;
+    }
+    dropdown.innerHTML = html || `<div class="combo-vazio">${termo ? "Nenhum cliente encontrado." : "Nenhum cliente cadastrado ainda."}</div>`;
+    dropdown.classList.add("active");
+  }
+
+  input.addEventListener("input", () => { api.clienteSelecionado = null; renderOpcoes(input.value); });
+  input.addEventListener("focus", () => renderOpcoes(input.value));
+  document.addEventListener("click", (e) => {
+    if (e.target !== input && !dropdown.contains(e.target)) dropdown.classList.remove("active");
+  });
+  dropdown.addEventListener("click", async (e) => {
+    const itemCriar = e.target.closest("[data-criar]");
+    const item = e.target.closest(".combo-item[data-id]");
+    if (itemCriar) {
+      const nome = input.value.trim();
+      if (!nome) return;
+      try {
+        const cliente = await encontrarOuCriarCliente(nome, "");
+        api.clienteSelecionado = cliente;
+        input.value = cliente.nome;
+        dropdown.classList.remove("active");
+        mostrarToast(`Cliente "${cliente.nome}" cadastrado.`);
+      } catch (err) { mostrarErro(err.message); }
+    } else if (item) {
+      const c = STATE.clientes.find((x) => x.id === item.dataset.id);
+      if (c) { api.clienteSelecionado = c; input.value = c.nome; dropdown.classList.remove("active"); }
+    }
+  });
+
+  api.reset = () => { api.clienteSelecionado = null; input.value = ""; dropdown.classList.remove("active"); dropdown.innerHTML = ""; };
+  // Preenche a seleção programaticamente (ex: reabrir o gerador de
+  // contrato já com o cliente da oportunidade que foi arrastada) — não é
+  // uma escolha do usuário, mas o valor já é confiável nesses casos.
+  api.selecionar = (cliente) => { api.clienteSelecionado = cliente; input.value = cliente ? cliente.nome : ""; };
+  return api;
+}
+
+const comboAgendamento = criarComboCliente("ma-cliente-busca", "ma-cliente-dropdown");
+const comboOportunidade = criarComboCliente("mo-cliente-busca", "mo-cliente-dropdown");
+const comboContrato = criarComboCliente("mct-cliente-busca", "mct-cliente-dropdown");
+
 /* ══════════════ NAVEGAÇÃO ══════════════ */
 
 let calendariosCarregados = false;
@@ -155,6 +218,18 @@ document.getElementById("btn-abrir-menu").addEventListener("click", () => {
   document.getElementById("sidebar-backdrop").classList.add("active");
 });
 document.getElementById("sidebar-backdrop").addEventListener("click", fecharMenuMobile);
+
+// Os 3 funis moram numa tela só — o toggle troca qual painel/kanban fica
+// visível, sem recarregar nada (os 3 já têm listener próprio rodando).
+function selecionarFunil(funil) {
+  document.querySelectorAll(".funil-toggle-btn").forEach((b) => b.classList.toggle("active", b.dataset.funil === funil));
+  document.querySelectorAll(".funil-pane").forEach((p) => p.classList.toggle("active", p.id === "pane-" + funil));
+  localStorage.setItem("jm_funil_ativo", funil);
+}
+document.querySelectorAll(".funil-toggle-btn").forEach((btn) => {
+  btn.addEventListener("click", () => selecionarFunil(btn.dataset.funil));
+});
+selecionarFunil(localStorage.getItem("jm_funil_ativo") || "agendamento");
 
 /* ══════════════ KANBAN — motor genérico (Pointer Events: mouse + toque) ══════════════
    Reaproveita cards e colunas pros 3 funis (agendamento/vendas/administrativo).
@@ -322,7 +397,6 @@ function onMoveCard(funil, cardId, novaEtapa) {
 /* ══════════════ FUNIL DE AGENDAMENTO ══════════════ */
 
 function renderCardAgendamento(a) {
-  const podeConverter = a.status === "realizado" && !a.convertido;
   return `
     <div class="kcard-nome">${esc(a.clienteNome)}</div>
     <div class="kcard-sub">${esc(a.telefone || "")}</div>
@@ -330,8 +404,7 @@ function renderCardAgendamento(a) {
       <span class="kcard-prazo">${fmtData(a.data)} ${esc(a.hora || "")}</span>
       <button class="btn-small" data-kcard-action title="Excluir" onclick="window.__jm.excluirAgendamento('${a.id}')">🗑</button>
     </div>
-    ${podeConverter ? `<button class="btn btn-primary" style="margin-top:8px;width:100%;padding:8px;font-size:12px;" data-kcard-action onclick="window.__jm.converterEmOportunidade('${a.id}')">→ Converter em oportunidade</button>` : ""}
-    ${a.convertido ? `<div class="sublabel" style="margin-top:6px;">✔ Convertido em oportunidade</div>` : ""}
+    ${a.precisaReagendar ? `<div class="sublabel" style="margin-top:6px;color:var(--dourado);">🔁 Precisa reagendar (no-show)</div>` : ""}
   `;
 }
 
@@ -345,24 +418,62 @@ async function moverAgendamento(id, novoStatus) {
   try {
     await updateDoc(doc(db, "agendamentos", id), { status: novoStatus, updatedAt: serverTimestamp() });
     await addDoc(collection(db, "agendamentos", id, "historico"), { tipo: "mudanca_status", para: novoStatus, timestamp: serverTimestamp() });
+    if (novoStatus === "agendado") await processarAgendamentoAgendado(id, ag);
+    else if (novoStatus === "nao-veio") await marcarPrecisaReagendar(id);
   } catch (err) { mostrarErro("Não foi possível mover: " + err.message); }
 }
 
-async function converterEmOportunidade(agendamentoId) {
-  const ag = STATE.agendamentos.find((a) => a.id === agendamentoId);
-  if (!ag || ag.convertido) return;
-  const primeiraEtapa = [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem)[0];
-  if (!primeiraEtapa) { mostrarErro("Cadastre ao menos uma etapa do Funil de Vendas em Configurações."); return; }
-  try {
-    await addDoc(collection(db, "oportunidades"), {
-      clienteId: ag.clienteId || null, clienteNome: ag.clienteNome, telefone: ag.telefone || "",
-      agendamentoId: ag.id, etapa: primeiraEtapa.id, valorProposto: 0, observacoes: "",
-      perdida: false, motivoPerda: "", fechada: false,
-      createdAt: serverTimestamp(), updatedAt: serverTimestamp()
-    });
-    await updateDoc(doc(db, "agendamentos", agendamentoId), { convertido: true });
-    mostrarToast("Oportunidade criada no Funil de Vendas.");
-  } catch (err) { mostrarErro("Não foi possível converter: " + err.message); }
+// O funil de vendas começa quando o agendamento chega em "Agendado" — o
+// card já entra automaticamente como novo lead, sem precisar de um botão
+// manual de conversão. Chamado tanto na criação (já nasce "agendado")
+// quanto se um card for arrastado de volta pra essa coluna. As duas
+// metades (criar oportunidade / lançar na Agenda) são independentes: uma
+// falhar não deve impedir a outra, e os flags "convertido"/"enviadoAgenda"
+// evitam duplicar em re-execuções.
+async function processarAgendamentoAgendado(agendamentoId, dados) {
+  if (!dados.convertido) {
+    const primeiraEtapa = [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem)[0];
+    if (!primeiraEtapa) {
+      mostrarErro("Cadastre ao menos uma etapa do Funil de Vendas em Configurações — o agendamento foi salvo, mas ainda não virou oportunidade.");
+    } else {
+      try {
+        await addDoc(collection(db, "oportunidades"), {
+          clienteId: dados.clienteId || null, clienteNome: dados.clienteNome, telefone: dados.telefone || "",
+          agendamentoId, etapa: primeiraEtapa.id, valorProposto: 0, observacoes: dados.observacoes || "",
+          perdida: false, motivoPerda: "", fechada: false, precisaReagendar: false,
+          createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+        });
+        await updateDoc(doc(db, "agendamentos", agendamentoId), { convertido: true });
+      } catch (err) { mostrarErro("Não foi possível criar a oportunidade: " + err.message); }
+    }
+  }
+  if (!dados.enviadoAgenda) {
+    try {
+      const calendarId = STATE.config.calendarioAgendaId || undefined;
+      // Assume que o fuso do navegador de quem usa o sistema é o mesmo do
+      // projeto Apps Script (Brasil) — sem isso, "hora" pode cair errado
+      // na Agenda. Ver README se algum dia isso passar a ser um problema.
+      const inicioISO = `${dados.data}T${dados.hora || "09:00"}:00`;
+      const resp = await chamarAppsScript("criarEventoAgenda", {
+        calendarId, titulo: dados.clienteNome, descricao: dados.observacoes || "", inicio: inicioISO
+      });
+      await updateDoc(doc(db, "agendamentos", agendamentoId), { enviadoAgenda: true, googleEventId: resp.googleEventId || null });
+    } catch (err) {
+      mostrarErro("Agendamento salvo, mas não foi possível criar o evento na Agenda: " + err.message);
+    }
+  }
+}
+
+// No-show: o agendamento e a oportunidade vinculada (se já existir) ficam
+// marcados com a tag "precisa reagendar" nos dois funis. Reagendar de
+// verdade é criar um agendamento NOVO pro mesmo cliente (ver botão "+
+// Agendamento manual") — isso já cria um evento novo na Agenda sozinho.
+async function marcarPrecisaReagendar(agendamentoId) {
+  await updateDoc(doc(db, "agendamentos", agendamentoId), { precisaReagendar: true });
+  const oportunidadeVinculada = STATE.oportunidades.find((o) => o.agendamentoId === agendamentoId);
+  if (oportunidadeVinculada) {
+    await updateDoc(doc(db, "oportunidades", oportunidadeVinculada.id), { precisaReagendar: true, updatedAt: serverTimestamp() });
+  }
 }
 
 async function excluirAgendamento(id) {
@@ -370,56 +481,8 @@ async function excluirAgendamento(id) {
   try { await deleteDoc(doc(db, "agendamentos", id)); } catch (err) { mostrarErro(err.message); }
 }
 
-document.getElementById("btn-sync-agenda").addEventListener("click", sincronizarAgenda);
-async function sincronizarAgenda() {
-  const from = addDias(hojeStr(), -7) + "T00:00:00";
-  const to = addDias(hojeStr(), 60) + "T23:59:59";
-  try {
-    const calendarId = STATE.config.calendarioAgendaId || undefined;
-    const resp = await chamarAppsScript("listarEventosAgenda", { from, to, calendarId });
-    let criados = 0, atualizados = 0;
-    const processadosNestaSincronizacao = new Set();
-    for (const ev of resp.eventos || []) {
-      const inicio = new Date(ev.inicio);
-      const dataStr = inicio.toISOString().slice(0, 10);
-      const horaStr = inicio.toTimeString().slice(0, 5);
-      const clienteNome = ev.titulo || "Sem título";
-
-      // Eventos recorrentes compartilham o mesmo googleEventId em TODAS as
-      // ocorrências (limitação do CalendarApp do Apps Script) — sem isso,
-      // uma série semanal colapsaria num único card que ficaria "pulando"
-      // de data a cada sincronização, marcado como reagendado sem parar.
-      // Pra série recorrente, a chave real de uma ocorrência é (id + data).
-      // Pra evento único, o id sozinho já identifica a ocorrência — e ASSIM
-      // uma mudança de data nele é reagendamento de verdade.
-      const chave = ev.recorrente ? `${ev.googleEventId}|${dataStr}` : ev.googleEventId;
-      if (processadosNestaSincronizacao.has(chave)) continue;
-      processadosNestaSincronizacao.add(chave);
-
-      const existente = STATE.agendamentos.find((a) => a.googleEventId === chave);
-      if (!existente) {
-        await addDoc(collection(db, "agendamentos"), {
-          clienteId: null, clienteNome, telefone: "", data: dataStr, hora: horaStr,
-          status: "agendado", origem: "agenda", googleEventId: chave,
-          observacoes: ev.descricao || "", convertido: false,
-          createdAt: serverTimestamp(), updatedAt: serverTimestamp()
-        });
-        criados++;
-      } else if (existente.data !== dataStr || existente.hora !== horaStr) {
-        await updateDoc(doc(db, "agendamentos", existente.id), {
-          data: dataStr, hora: horaStr, status: "reagendado", updatedAt: serverTimestamp()
-        });
-        atualizados++;
-      }
-    }
-    mostrarToast(`Agenda sincronizada: ${criados} novo(s), ${atualizados} reagendado(s).`);
-  } catch (err) {
-    mostrarErro("Não foi possível sincronizar a Agenda: " + err.message);
-  }
-}
-
 document.getElementById("btn-novo-agendamento").addEventListener("click", () => {
-  document.getElementById("ma-cliente").value = "";
+  comboAgendamento.reset();
   document.getElementById("ma-telefone").value = "";
   document.getElementById("ma-data").value = hojeStr();
   document.getElementById("ma-hora").value = "";
@@ -427,20 +490,21 @@ document.getElementById("btn-novo-agendamento").addEventListener("click", () => 
   abrirModal("modal-agendamento");
 });
 document.getElementById("btn-salvar-agendamento").addEventListener("click", async () => {
-  const clienteNome = document.getElementById("ma-cliente").value.trim();
-  if (!clienteNome) { mostrarErro("Informe o nome do cliente."); return; }
+  const cliente = comboAgendamento.clienteSelecionado;
+  if (!cliente) { mostrarErro("Selecione um cliente da lista, ou clique em \"+ Criar cliente\" pra cadastrar um novo."); return; }
+  const dados = {
+    clienteId: cliente.id, clienteNome: cliente.nome,
+    telefone: document.getElementById("ma-telefone").value.trim() || cliente.telefone || "",
+    data: document.getElementById("ma-data").value || hojeStr(),
+    hora: document.getElementById("ma-hora").value || "",
+    status: "agendado", googleEventId: null, convertido: false, enviadoAgenda: false, precisaReagendar: false,
+    observacoes: document.getElementById("ma-obs").value.trim()
+  };
   try {
-    await addDoc(collection(db, "agendamentos"), {
-      clienteId: null, clienteNome,
-      telefone: document.getElementById("ma-telefone").value.trim(),
-      data: document.getElementById("ma-data").value || hojeStr(),
-      hora: document.getElementById("ma-hora").value || "",
-      status: "agendado", origem: "manual", googleEventId: null, convertido: false,
-      observacoes: document.getElementById("ma-obs").value.trim(),
-      createdAt: serverTimestamp(), updatedAt: serverTimestamp()
-    });
+    const ref = await addDoc(collection(db, "agendamentos"), { ...dados, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
     fecharModal("modal-agendamento");
     mostrarToast("Agendamento criado.");
+    await processarAgendamentoAgendado(ref.id, dados);
   } catch (err) { mostrarErro(err.message); }
 });
 
@@ -461,6 +525,7 @@ function renderCardOportunidade(o) {
       <button class="btn-small" data-kcard-action title="Excluir" onclick="window.__jm.excluirOportunidade('${o.id}')">🗑</button>
     </div>
     ${o.perdida && o.motivoPerda ? `<div class="sublabel" style="margin-top:6px;">Motivo: ${esc(o.motivoPerda)}</div>` : ""}
+    ${o.precisaReagendar ? `<div class="sublabel" style="margin-top:6px;color:var(--dourado);">🔁 Precisa reagendar (no-show)</div>` : ""}
   `;
 }
 
@@ -490,7 +555,7 @@ async function moverOportunidade(id, novaEtapa) {
   if (etapaCfg && etapaCfg.fechamento) {
     pendingContratoOportunidadeId = id;
     pendingContratoEtapaFechamentoId = novaEtapa;
-    document.getElementById("mct-cliente").value = op.clienteNome;
+    comboContrato.selecionar({ id: op.clienteId || null, nome: op.clienteNome, telefone: op.telefone || "" });
     document.getElementById("mct-valor").value = op.valorProposto ? String(op.valorProposto).replace(".", ",") : "";
     document.getElementById("mct-forma").value = "avista";
     document.getElementById("mct-primeiraparcela").value = hojeStr();
@@ -524,25 +589,25 @@ document.getElementById("btn-confirmar-perda").addEventListener("click", async (
 });
 
 document.getElementById("btn-nova-oportunidade").addEventListener("click", () => {
-  document.getElementById("mo-cliente").value = "";
+  comboOportunidade.reset();
   document.getElementById("mo-telefone").value = "";
   document.getElementById("mo-valor").value = "";
   document.getElementById("mo-obs").value = "";
   abrirModal("modal-oportunidade");
 });
 document.getElementById("btn-salvar-oportunidade").addEventListener("click", async () => {
-  const clienteNome = document.getElementById("mo-cliente").value.trim();
-  if (!clienteNome) { mostrarErro("Informe o nome do cliente."); return; }
+  const cliente = comboOportunidade.clienteSelecionado;
+  if (!cliente) { mostrarErro("Selecione um cliente da lista, ou clique em \"+ Criar cliente\" pra cadastrar um novo."); return; }
   const primeiraEtapa = [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem)[0];
   if (!primeiraEtapa) { mostrarErro("Cadastre ao menos uma etapa do Funil de Vendas em Configurações."); return; }
   try {
     await addDoc(collection(db, "oportunidades"), {
-      clienteId: null, clienteNome,
-      telefone: document.getElementById("mo-telefone").value.trim(),
+      clienteId: cliente.id, clienteNome: cliente.nome,
+      telefone: document.getElementById("mo-telefone").value.trim() || cliente.telefone || "",
       agendamentoId: null, etapa: primeiraEtapa.id,
       valorProposto: parseMoeda(document.getElementById("mo-valor").value),
       observacoes: document.getElementById("mo-obs").value.trim(),
-      perdida: false, motivoPerda: "", fechada: false,
+      perdida: false, motivoPerda: "", fechada: false, precisaReagendar: false,
       createdAt: serverTimestamp(), updatedAt: serverTimestamp()
     });
     fecharModal("modal-oportunidade");
@@ -575,7 +640,6 @@ function calcularParcelas(valorTotal, forma, valorEntrada, numParcelas, diaVenci
 
 function lerFormularioContrato() {
   return {
-    nomeCliente: document.getElementById("mct-cliente").value.trim(),
     valorTotal: parseMoeda(document.getElementById("mct-valor").value),
     forma: document.getElementById("mct-forma").value,
     valorEntrada: parseMoeda(document.getElementById("mct-entrada").value),
@@ -603,7 +667,8 @@ document.getElementById("mct-forma").addEventListener("change", (e) => {
 });
 
 function limparFormularioContrato() {
-  ["mct-cliente", "mct-valor", "mct-entrada"].forEach((id) => (document.getElementById(id).value = ""));
+  ["mct-valor", "mct-entrada"].forEach((id) => (document.getElementById(id).value = ""));
+  comboContrato.reset();
   document.getElementById("mct-numparcelas").value = 1;
   document.getElementById("mct-diavencimento").value = 10;
   document.getElementById("mct-forma").value = "avista";
@@ -621,13 +686,17 @@ document.getElementById("btn-novo-contrato").addEventListener("click", () => {
 
 document.getElementById("btn-gerar-contrato").addEventListener("click", gerarContrato);
 async function gerarContrato() {
+  const clienteSelecionado = comboContrato.clienteSelecionado;
+  if (!clienteSelecionado) { mostrarErro("Selecione um cliente da lista, ou clique em \"+ Criar cliente\" pra cadastrar um novo."); return; }
   const f = lerFormularioContrato();
-  if (!f.nomeCliente) { mostrarErro("Informe o cliente."); return; }
   if (!f.valorTotal) { mostrarErro("Informe o valor total."); return; }
   const parcelasCalc = calcularParcelas(f.valorTotal, f.forma, f.valorEntrada, f.numParcelas, f.diaVencimento, f.dataPrimeira);
 
   try {
-    const cliente = await encontrarOuCriarCliente(f.nomeCliente, "");
+    // Pré-preenchido a partir de uma oportunidade sem clienteId (dado
+    // antigo) ainda pode cair aqui sem id — busca/cria pelo nome nesse
+    // caso; senão, a seleção do combobox já é confiável.
+    const cliente = clienteSelecionado.id ? clienteSelecionado : await encontrarOuCriarCliente(clienteSelecionado.nome, "");
     const contratoRef = await addDoc(collection(db, "contratos"), {
       oportunidadeId: pendingContratoOportunidadeId || null,
       clienteId: cliente.id, clienteNome: cliente.nome,
@@ -916,8 +985,6 @@ function renderTabelaClientes() {
   document.getElementById("tabela-clientes").innerHTML = STATE.clientes.map((c) => `<tr>
     <td>${esc(c.nome)}</td><td>${esc(c.telefone || "—")}</td><td>${esc(c.email || "—")}</td><td>${esc(c.origem || "—")}</td>
   </tr>`).join("") || `<tr><td colspan="4"><div class="empty">Nenhum cliente cadastrado.</div></td></tr>`;
-
-  document.getElementById("lista-clientes-datalist").innerHTML = STATE.clientes.map((c) => `<option value="${esc(c.nome)}">`).join("");
 }
 
 /* ══════════════ CONFIGURAÇÕES — ETAPAS DOS FUNIS ══════════════ */
@@ -1100,11 +1167,10 @@ function iniciarListeners() {
 // Funções chamadas a partir de HTML gerado por string (onclick inline) —
 // só assim dá pra referenciá-las de dentro de innerHTML num ES module.
 window.__jm = {
-  converterEmOportunidade, excluirAgendamento,
+  excluirAgendamento,
   excluirOportunidade, marcarParcelaPaga,
   excluirContrato, excluirDespesa, excluirCliente,
   excluirEtapaVenda, excluirEtapaAdmin
 };
 
 iniciarListeners();
-sincronizarAgenda().catch(() => {}); // melhor-esforço: silencioso se o Apps Script ainda não estiver configurado

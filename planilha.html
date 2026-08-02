@@ -110,9 +110,9 @@ import {
 // ══════════════ CONFIGURAÇÃO DO DOMÍNIO ══════════════
 const COLECOES = [
   { nome: "clientes", label: "Clientes", campos: ["nome", "telefone", "email", "origem", "observacoes"] },
-  { nome: "agendamentos", label: "Agendamentos", campos: ["clienteNome", "telefone", "data", "hora", "status", "origem", "googleEventId", "convertido", "observacoes"] },
+  { nome: "agendamentos", label: "Agendamentos", campos: ["clienteNome", "telefone", "data", "hora", "status", "convertido", "enviadoAgenda", "googleEventId", "precisaReagendar", "observacoes"] },
   { nome: "etapasVendaConfig", label: "Etapas de Venda", campos: ["nome", "ordem", "fechamento"] },
-  { nome: "oportunidades", label: "Oportunidades (Vendas)", campos: ["clienteNome", "telefone", "etapa", "valorProposto", "perdida", "motivoPerda", "fechada", "contratoId", "agendamentoId"] },
+  { nome: "oportunidades", label: "Oportunidades (Vendas)", campos: ["clienteNome", "telefone", "etapa", "valorProposto", "perdida", "motivoPerda", "precisaReagendar", "fechada", "contratoId", "agendamentoId"] },
   { nome: "contratos", label: "Contratos", campos: ["clienteNome", "valorTotal", "formaPagamento", "valorEntrada", "numParcelas", "diaVencimento", "pdfUrl", "status", "oportunidadeId"] },
   { nome: "parcelas", label: "Parcelas", campos: ["contratoId", "clienteNome", "numero", "valor", "vencimento", "status", "dataPagamento"] },
   { nome: "despesas", label: "Despesas & Custos", campos: ["descricao", "categoria", "tipo", "valor", "data", "recorrente", "diaVencimento", "ultimoMesLancado", "origemRecorrenteId"] },

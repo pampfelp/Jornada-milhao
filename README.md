@@ -6,6 +6,11 @@ e um Apps Script mínimo (`Code.gs`) usado **só como proxy de 2 APIs
 externas** — Google Agenda e geração de PDF de contrato — nunca como banco
 de dados.
 
+**Importante sobre a Agenda: o fluxo é sempre sistema → Google Agenda,
+nunca o contrário.** Nada é importado da Agenda pra dentro do sistema —
+todo agendamento nasce aqui (manual, pelo botão), e o sistema é quem cria o
+evento correspondente na Agenda, não o inverso.
+
 Este sistema implementa o plano descrito em `plano_financeiro_funil.md`:
 um único funil (Agendamento → Vendas → Administrativo) que alimenta
 automaticamente o Painel Financeiro, com o Gerador de Contrato como a ponte
@@ -25,7 +30,7 @@ Essas chaves (`apiKey`, `projectId` etc.) são **públicas por design** no Fireb
 
 O `Code.gs` faz 3 coisas, e só essas três:
 - Lista os **calendários** que a conta implantada enxerga (alimenta o seletor em Configurações).
-- Lê eventos do **Google Agenda** num intervalo de datas (o navegador sozinho não acessa a Agenda).
+- Cria um **evento na Google Agenda** quando um agendamento é criado no sistema (nunca lê nem importa nada da Agenda).
 - Gera o **PDF do contrato** a partir de um modelo do Google Docs e salva no Drive.
 
 ### 2.1. Preparar o modelo do contrato (Google Docs)
@@ -54,16 +59,20 @@ O `Code.gs` faz 3 coisas, e só essas três:
 
 **Toda vez que editar `Code.gs`**, é preciso fazer uma nova implantação (ou "Gerenciar implantações → editar → Nova versão") pra que a URL publicada reflita o código novo.
 
-Enquanto isso não estiver configurado, o resto do sistema funciona normalmente — só os botões "Sincronizar Agenda" e a geração de PDF do contrato mostram um aviso.
+Enquanto isso não estiver configurado, o resto do sistema funciona
+normalmente — só a criação do evento na Agenda e a geração de PDF do
+contrato mostram um aviso (o agendamento e a oportunidade são salvos no
+Firestore de qualquer forma).
 
-### 2.3. Escolher qual calendário sincronizar
+### 2.3. Escolher em qual calendário lançar os agendamentos
 
 A conta que "Executa como" no passo 2.2 só enxerga os calendários dela (os
-que criou + os que foram compartilhados com ela). Em **Configurações → Calendário
-do Google Agenda**, clique em "🔄 Recarregar lista" pra ver esses calendários
-e escolha qual alimenta o Funil de Agendamento — sem precisar editar Script
-Properties. Essa escolha fica salva no Firestore (`config/geral`), então vale
-pra todo mundo que usa o sistema.
+que criou + os que foram compartilhados com ela). Em **Configurações →
+Calendário do Google Agenda**, clique em "🔄 Recarregar lista" pra ver
+esses calendários e escolha em qual os agendamentos criados no sistema são
+lançados — sem precisar editar Script Properties. Essa escolha fica salva
+no Firestore (`config/geral`), então vale pra todo mundo que usa o
+sistema.
 
 Se o calendário que você quer é de **outra pessoa** (ex: um calendário
 dedicado a clientes do Benedito): ou ele compartilha esse calendário com a
@@ -71,16 +80,6 @@ conta que implantou o `Code.gs` (Google Agenda → configurações do
 calendário dele → "Compartilhar com pessoas específicas"), ou o `Code.gs`
 precisa ser implantado a partir da própria conta dele (repita o passo 2.2
 logado como ele).
-
-**Eventos recorrentes**: o `CalendarApp` do Apps Script devolve o mesmo ID
-pra todas as ocorrências de uma série recorrente — o `Code.gs` já marca
-cada evento com `recorrente: true/false`, e o `app.js` usa isso pra tratar
-cada ocorrência de uma série como um card separado (por data), enquanto
-eventos únicos continuam detectando reagendamento de verdade (mesmo ID,
-data diferente). Limitação conhecida: se uma ocorrência específica de uma
-série for movida pra outra data, ela vira um card novo em vez de atualizar
-o card antigo (o Apps Script não expõe um ID estável por ocorrência
-reagendada) — o card antigo fica órfão e precisa ser excluído manualmente.
 
 ## 3. Planilha administrativa
 
@@ -115,9 +114,9 @@ preservam pastas ao arrastar arquivos soltos.
 ## Estrutura de dados no Firestore
 
 - **clientes/{id}**: `nome`, `telefone`, `email`, `origem`, `observacoes`, `createdAt` — tabela auxiliar de consulta.
-- **agendamentos/{id}**: `clienteNome`, `telefone`, `data` (yyyy-MM-dd), `hora`, `status` (`agendado`/`realizado`/`reagendado`/`nao-veio`), `origem` (`agenda`/`manual`), `googleEventId`, `convertido` (bool), `observacoes`, `createdAt`, `updatedAt` — Funil de Agendamento. Subcoleção `historico/` (create-only).
+- **agendamentos/{id}**: `clienteId`, `clienteNome`, `telefone`, `data` (yyyy-MM-dd), `hora`, `status` (`agendado`/`realizado`/`nao-veio`), `convertido` (bool — já virou oportunidade?), `enviadoAgenda` (bool — já criou o evento no Google?), `googleEventId`, `precisaReagendar` (bool — tag de no-show), `observacoes`, `createdAt`, `updatedAt` — Funil de Agendamento. Subcoleção `historico/` (create-only).
 - **etapasVendaConfig/{id}**: `nome`, `ordem`, `fechamento` (bool) — colunas configuráveis do Funil de Vendas; a marcada como `fechamento` dispara o Gerador de Contrato quando um card é solto nela.
-- **oportunidades/{id}**: `clienteNome`, `telefone`, `agendamentoId`, `etapa`, `valorProposto`, `observacoes`, `perdida` (bool), `motivoPerda`, `fechada` (bool), `contratoId`, `createdAt`, `updatedAt` — Funil de Vendas. Subcoleção `historico/`.
+- **oportunidades/{id}**: `clienteId`, `clienteNome`, `telefone`, `agendamentoId`, `etapa`, `valorProposto`, `observacoes`, `perdida` (bool), `motivoPerda`, `fechada` (bool), `precisaReagendar` (bool), `contratoId`, `createdAt`, `updatedAt` — Funil de Vendas. Subcoleção `historico/`.
 - **contratos/{id}**: `oportunidadeId`, `clienteId`, `clienteNome`, `valorTotal`, `formaPagamento` (`avista`/`entrada_parcelas`), `valorEntrada`, `numParcelas`, `diaVencimento`, `dataGeracao`, `pdfUrl`, `status`.
 - **parcelas/{id}**: `contratoId`, `clienteId`, `clienteNome`, `numero` (0 = entrada), `valor`, `vencimento` (yyyy-MM-dd), `status` (`esperado`/`realizado`), `dataPagamento` — geradas automaticamente ao gerar um contrato.
 - **despesas/{id}**: `descricao`, `categoria`, `tipo` (`despesa`/`outro_custo`), `valor`, `data`, `recorrente` (bool), `diaVencimento`, `ultimoMesLancado`, `origemRecorrenteId`.
@@ -148,15 +147,26 @@ na `planilha.html`:
   padrão de exemplo ("Pagamento da entrada", "Criação do grupo",
   "Execução", "Entrega") — edite, apague ou crie as etapas reais em
   **Configurações**, a qualquer momento.
-- **Reagendamento**: se um evento da Agenda já convertido em oportunidade
-  for reagendado, o card de **agendamento** é atualizado (nova data/hora,
-  status "Reagendado") mas a **oportunidade** no Funil de Vendas não é
-  movida automaticamente — ela continua de onde estava.
+- **Gatilho de conversão em oportunidade**: o funil de vendas começa
+  quando o agendamento chega em "Agendado" — nesse momento o sistema já
+  cria a oportunidade automaticamente (como novo lead) e o evento na
+  Google Agenda, sem precisar de nenhum botão manual. "Realizado" é só
+  status de acompanhamento (não dispara nada).
+- **No-show / reagendamento**: quando um agendamento é movido pra "Não
+  veio", ele (e a oportunidade vinculada, se já existir) ganham a tag
+  🔁 "Precisa reagendar", visível nos dois funis. Reagendar de verdade é
+  criar um **agendamento novo** pro mesmo cliente (mesmo fluxo de sempre) —
+  isso cria um evento novo na Agenda; o card antigo permanece como
+  histórico do no-show.
 - **Quem move o card entre etapas**: por padrão é manual (arrastar no
-  Kanban). As duas transições automáticas pedidas no plano — fim do
-  agendamento → topo de vendas (via botão "Converter em oportunidade") e
-  venda fechada → contrato gerado → topo do administrativo — já estão
-  implementadas.
+  Kanban), exceto as duas transições automáticas do parágrafo acima
+  (Agendado → oportunidade + evento na Agenda; venda fechada → contrato
+  gerado → topo do administrativo).
+- **Cliente no agendamento manual**: o campo "Cliente" só aceita alguém já
+  cadastrado (busca com filtro ao digitar) ou a criação explícita de um
+  cliente novo pelo botão "+ Criar cliente" dentro do próprio campo —
+  nunca cria um cliente sem essa escolha deliberada, pra evitar duplicata
+  por erro de digitação.
 
 ## Observações
 
@@ -167,10 +177,8 @@ na `planilha.html`:
   tecnicamente hábil abrindo o DevTools. Trade-off aceitável pro uso
   interno da equipe; como este sistema guarda dados financeiros, vale
   reconsiderar Firebase Auth se o número de pessoas com acesso crescer.
-- **Sincronização da Agenda**: roda automaticamente (silenciosa) sempre que
-  alguém abre o sistema, e também pelo botão manual "🔄 Sincronizar
-  Agenda" no Funil de Agendamento. Sem Cloud Functions não existe um
-  "servidor" verificando a Agenda sozinho o tempo todo.
-- **Convenção assumida no evento da Agenda**: o **título do evento** vira o
-  nome do cliente no card. Ajuste a forma como o Henry nomeia os eventos na
-  Agenda se quiser um padrão diferente (ex: "Nome — Telefone").
+- **Fuso horário do evento na Agenda**: o horário digitado no agendamento é
+  enviado como está (sem conversão de fuso) — o sistema assume que quem
+  usa o app está no mesmo fuso do projeto Apps Script (Brasil). Se algum
+  dia isso passar a ser um problema (ex: equipe em fusos diferentes), vale
+  reconsiderar enviar o horário já em UTC.

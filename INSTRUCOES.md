@@ -26,7 +26,9 @@ Este pacote tem estes arquivos:
 6. **Implantar → Nova implantação → Aplicativo da Web** → Executar como "Eu" → Acesso "Qualquer pessoa" → Implantar. Copie a URL.
 7. Cole essa URL no `firebase-init.js`, na constante `APPS_SCRIPT_PROXY_URL`.
 
-Enquanto você não fizer isso, o resto do sistema já funciona normal — só a sincronização da Agenda e a geração do PDF do contrato ficam pendentes (aparece um aviso, sem travar o resto).
+Enquanto você não fizer isso, o resto do sistema já funciona normal — só a criação do evento na Agenda e a geração do PDF do contrato ficam pendentes (aparece um aviso, sem travar o resto).
+
+**Importante**: o fluxo é sempre sistema → Agenda, nunca o contrário — o sistema não lê nem importa nada da sua Agenda, só cria eventos novos quando você cria um agendamento por aqui. Em **Configurações → Calendário do Google Agenda**, escolha em qual calendário esses eventos são criados (pode ser um calendário dedicado a clientes, separado do seu pessoal).
 
 ## Passo 3 — Colocar no ar
 
@@ -78,10 +80,18 @@ mudanças valerem.
 
 ## Como usar o funil no dia a dia
 
-- **Funil de Agendamento**: os cards aparecem sozinhos quando alguém abre o
-  sistema (ele sincroniza com a Agenda automaticamente), ou clique em "🔄
-  Sincronizar Agenda" a qualquer momento. Depois da reunião, arraste o card
-  pra coluna "Realizado" e clique em "→ Converter em oportunidade".
+Os 3 funis moram numa tela só ("Funis" no menu) — use os botões
+📅 Agendamento / 📈 Vendas / 🗂️ Administrativo no topo pra trocar qual
+kanban está visível, sem sair da tela.
+
+- **Funil de Agendamento**: clique em "+ Agendamento manual", busque o
+  cliente já cadastrado (ou crie um novo direto no campo) e preencha
+  data/hora. Ao salvar, o card já nasce em "Agendado" — o sistema cria o
+  evento na Google Agenda e já joga o cliente como novo lead no Funil de
+  Vendas, sem precisar de mais nenhum clique. Se o cliente não aparecer
+  (no-show), arraste o card pra "Não veio": ele (e o lead vinculado) ficam
+  com a tag 🔁 "Precisa reagendar" — pra reagendar de verdade, é só criar
+  um agendamento novo pro mesmo cliente.
 - **Funil de Vendas**: arraste o card entre as etapas normalmente. Ao
   arrastar pra etapa marcada como "fechamento" (configurável em
   Configurações — vem como "Fechado" por padrão), abre a tela de gerar

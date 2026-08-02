@@ -37,9 +37,7 @@
   </div>
   <nav>
     <a data-view="financeiro" class="active"><span class="ico">💰</span>Painel Financeiro</a>
-    <a data-view="agendamento"><span class="ico">📅</span>Funil de Agendamento</a>
-    <a data-view="vendas"><span class="ico">📈</span>Funil de Vendas</a>
-    <a data-view="administrativo"><span class="ico">🗂️</span>Funil Administrativo</a>
+    <a data-view="funis"><span class="ico">🔀</span>Funis</a>
     <a data-view="contratos"><span class="ico">📄</span>Contratos</a>
     <a data-view="despesas"><span class="ico">🧾</span>Despesas &amp; Custos</a>
     <a data-view="clientes"><span class="ico">👤</span>Clientes</a>
@@ -85,45 +83,49 @@
     </div>
   </section>
 
-  <!-- ═══ FUNIL DE AGENDAMENTO ═══ -->
-  <section id="view-agendamento" class="view">
+  <!-- ═══ FUNIS (Agendamento / Vendas / Administrativo, uma tela só) ═══ -->
+  <section id="view-funis" class="view">
     <header class="top">
       <div>
-        <h1>Funil de Agendamento</h1>
-        <div class="view-desc">Todo evento do Google Agenda entra automaticamente aqui. Quando a reunião acontece, converta o card em oportunidade — ele vira o topo do Funil de Vendas.</div>
-      </div>
-      <div class="top-actions">
-        <button class="btn" id="btn-sync-agenda">🔄 Sincronizar Agenda</button>
-        <button class="btn btn-primary" id="btn-novo-agendamento">+ Agendamento manual</button>
+        <h1>Funis</h1>
+        <div class="view-desc">Agendamento → Vendas → Administrativo — o fim de um é o começo do próximo. Use os botões abaixo pra trocar qual funil está visível.</div>
       </div>
     </header>
-    <div class="kanban-wrap" id="kanban-agendamento"></div>
-  </section>
 
-  <!-- ═══ FUNIL DE VENDAS ═══ -->
-  <section id="view-vendas" class="view">
-    <header class="top">
-      <div>
-        <h1>Funil de Vendas</h1>
-        <div class="view-desc">O topo vem do fim do Funil de Agendamento. Ao mover um card para uma etapa de fechamento, gere o contrato — o card sai daqui e entra no Funil Administrativo.</div>
-      </div>
-      <div class="top-actions">
-        <button class="btn btn-primary" id="btn-nova-oportunidade">+ Nova oportunidade</button>
-      </div>
-    </header>
-    <div class="funil-kpis" id="vendas-kpis"></div>
-    <div class="kanban-wrap" id="kanban-vendas"></div>
-  </section>
+    <div class="funil-toggle" id="funil-toggle">
+      <button class="funil-toggle-btn active" data-funil="agendamento">📅 Agendamento</button>
+      <button class="funil-toggle-btn" data-funil="vendas">📈 Vendas</button>
+      <button class="funil-toggle-btn" data-funil="administrativo">🗂️ Administrativo</button>
+    </div>
 
-  <!-- ═══ FUNIL ADMINISTRATIVO ═══ -->
-  <section id="view-administrativo" class="view">
-    <header class="top">
-      <div>
-        <h1>Funil Administrativo</h1>
-        <div class="view-desc">Pós-venda: prazos, grupo, recebimento, execução. O topo é alimentado automaticamente pela geração do contrato.</div>
+    <div class="funil-pane active" id="pane-agendamento">
+      <div class="section-head">
+        <h2>Funil de <span>Agendamento</span></h2>
+        <div class="top-actions">
+          <button class="btn btn-primary" id="btn-novo-agendamento">+ Agendamento manual</button>
+        </div>
       </div>
-    </header>
-    <div class="kanban-wrap" id="kanban-administrativo"></div>
+      <p class="hint" style="margin-bottom:14px;">Agendamentos criados aqui viram evento na Google Agenda automaticamente e já entram como novo lead no Funil de Vendas. Um no-show fica marcado com a tag 🔁 nos dois funis — reagendar é criar um agendamento novo.</p>
+      <div class="kanban-wrap" id="kanban-agendamento"></div>
+    </div>
+
+    <div class="funil-pane" id="pane-vendas">
+      <div class="section-head">
+        <h2>Funil de <span>Vendas</span></h2>
+        <div class="top-actions">
+          <button class="btn btn-primary" id="btn-nova-oportunidade">+ Nova oportunidade</button>
+        </div>
+      </div>
+      <p class="hint" style="margin-bottom:14px;">O topo vem do fim do Funil de Agendamento. Ao mover um card para uma etapa de fechamento, gere o contrato — o card sai daqui e entra no Funil Administrativo.</p>
+      <div class="funil-kpis" id="vendas-kpis"></div>
+      <div class="kanban-wrap" id="kanban-vendas"></div>
+    </div>
+
+    <div class="funil-pane" id="pane-administrativo">
+      <div class="section-head"><h2>Funil <span>Administrativo</span></h2></div>
+      <p class="hint" style="margin-bottom:14px;">Pós-venda: prazos, grupo, recebimento, execução. O topo é alimentado automaticamente pela geração do contrato.</p>
+      <div class="kanban-wrap" id="kanban-administrativo"></div>
+    </div>
   </section>
 
   <!-- ═══ CONTRATOS ═══ -->
@@ -208,7 +210,7 @@
 
     <div class="card">
       <h2>Calendário do <span>Google Agenda</span></h2>
-      <p class="hint">Escolha qual calendário alimenta o Funil de Agendamento — assim dá pra usar um calendário dedicado a clientes em vez do pessoal. A lista vem da conta do Google que está com o <code>Code.gs</code> implantado; se o calendário que você quer for de outra pessoa (ex: Benedito), ele precisa compartilhar esse calendário com essa conta primeiro (ou o Code.gs precisa ser implantado a partir da conta dele).</p>
+      <p class="hint">Escolha em qual calendário os agendamentos criados no sistema são lançados — o fluxo é sempre sistema → Agenda, nunca o contrário (nada é importado de volta). Assim dá pra usar um calendário dedicado a clientes em vez do pessoal. A lista vem da conta do Google que está com o <code>Code.gs</code> implantado; se o calendário que você quer for de outra pessoa (ex: Benedito), ele precisa compartilhar esse calendário com essa conta primeiro (ou o Code.gs precisa ser implantado a partir da conta dele).</p>
       <div class="row">
         <div class="field">
           <label>Calendário selecionado</label>
@@ -250,8 +252,14 @@
 <div class="modal-overlay" id="modal-agendamento">
   <div class="modal-box">
     <h2>Novo agendamento manual</h2>
-    <div class="field"><label>Cliente</label><input type="text" id="ma-cliente" list="lista-clientes-datalist" placeholder="Nome do cliente"></div>
-    <div class="field"><label>Telefone</label><input type="text" id="ma-telefone"></div>
+    <div class="field">
+      <label>Cliente</label>
+      <div class="combo-wrap">
+        <input type="text" id="ma-cliente-busca" placeholder="Digite pra buscar um cliente já cadastrado..." autocomplete="off">
+        <div class="combo-dropdown" id="ma-cliente-dropdown"></div>
+      </div>
+    </div>
+    <div class="field"><label>Telefone</label><input type="text" id="ma-telefone" placeholder="preenche sozinho se o cliente já tiver telefone salvo"></div>
     <div class="row">
       <div class="field"><label>Data</label><input type="date" id="ma-data"></div>
       <div class="field"><label>Hora</label><input type="time" id="ma-hora"></div>
@@ -268,8 +276,14 @@
 <div class="modal-overlay" id="modal-oportunidade">
   <div class="modal-box">
     <h2>Nova oportunidade</h2>
-    <div class="field"><label>Cliente</label><input type="text" id="mo-cliente" list="lista-clientes-datalist" placeholder="Nome do cliente"></div>
-    <div class="field"><label>Telefone</label><input type="text" id="mo-telefone"></div>
+    <div class="field">
+      <label>Cliente</label>
+      <div class="combo-wrap">
+        <input type="text" id="mo-cliente-busca" placeholder="Digite pra buscar um cliente já cadastrado..." autocomplete="off">
+        <div class="combo-dropdown" id="mo-cliente-dropdown"></div>
+      </div>
+    </div>
+    <div class="field"><label>Telefone</label><input type="text" id="mo-telefone" placeholder="preenche sozinho se o cliente já tiver telefone salvo"></div>
     <div class="field"><label>Valor proposto</label><input type="text" inputmode="decimal" id="mo-valor" placeholder="0,00"></div>
     <div class="field"><label>Observações</label><textarea id="mo-obs"></textarea></div>
     <div class="modal-actions">
@@ -295,7 +309,13 @@
 <div class="modal-overlay" id="modal-contrato">
   <div class="modal-box modal-wide">
     <h2>Gerar contrato</h2>
-    <div class="field"><label>Cliente</label><input type="text" id="mct-cliente" list="lista-clientes-datalist" placeholder="Nome do cliente"></div>
+    <div class="field">
+      <label>Cliente</label>
+      <div class="combo-wrap">
+        <input type="text" id="mct-cliente-busca" placeholder="Digite pra buscar um cliente já cadastrado..." autocomplete="off">
+        <div class="combo-dropdown" id="mct-cliente-dropdown"></div>
+      </div>
+    </div>
     <div class="row">
       <div class="field"><label>Valor total</label><input type="text" inputmode="decimal" id="mct-valor" placeholder="0,00"></div>
       <div class="field">
@@ -376,8 +396,6 @@
     </div>
   </div>
 </div>
-
-<datalist id="lista-clientes-datalist"></datalist>
 
 <div class="toast hidden" id="toast-erro">
   <div class="toast-title">Aviso</div>

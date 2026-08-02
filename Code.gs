@@ -2,20 +2,24 @@
  * Jornada do Milhão — Apps Script mínimo, usado SÓ como proxy de APIs
  * externas (Google Agenda e geração de PDF de contrato). NÃO é o banco de
  * dados deste sistema (isso é o Firestore) e NÃO guarda nenhum dado de
- * negócio — só repassa 2 integrações que o navegador sozinho não consegue
+ * negócio — só repassa 3 integrações que o navegador sozinho não consegue
  * fazer:
  *
- *   1. "listarEventosAgenda" — lê eventos do Google Agenda num intervalo de
- *      datas (o Firestore não tem acesso à Agenda; o app.js compara o que
- *      volta daqui com a coleção "agendamentos" pra criar/atualizar cards
- *      no Funil de Agendamento).
- *   2. "gerarContratoPDF" — copia um modelo do Google Docs, substitui os
+ *   1. "listarCalendarios" — lista os calendários que a conta implantada
+ *      enxerga, pra alimentar o seletor em Configurações (pra escolher em
+ *      qual Agenda os agendamentos criados no sistema são lançados).
+ *   2. "criarEventoAgenda" — cria um evento novo na Agenda quando um
+ *      agendamento é criado (ou reagendado) no sistema. O fluxo é sempre
+ *      Firestore → Agenda, nunca o contrário: este sistema NÃO lê/importa
+ *      eventos da Agenda.
+ *   3. "gerarContratoPDF" — copia um modelo do Google Docs, substitui os
  *      placeholders pelos dados do contrato, exporta como PDF pro Google
  *      Drive e devolve o link. Sem isso o navegador não tem como gerar um
  *      PDF formatado nem guardá-lo em algum lugar de graça.
  *
- * ESCOPO — SÓ LEITURA na Agenda, SÓ CRIAÇÃO de arquivo no Drive: nenhuma
- * ação aqui edita ou apaga evento da Agenda, nem apaga arquivo do Drive.
+ * ESCOPO — SÓ CRIAÇÃO de evento na Agenda, SÓ CRIAÇÃO de arquivo no Drive:
+ * nenhuma ação aqui lê, edita ou apaga evento da Agenda, nem apaga arquivo
+ * do Drive.
  *
  * COMO USAR:
  * 1. Crie uma planilha Google Sheets em branco, só para servir de "casa"
@@ -58,7 +62,7 @@ function rotear_(body) {
   try {
     switch (body.action) {
       case "listarCalendarios": return acaoListarCalendarios_();
-      case "listarEventosAgenda": return acaoListarEventosAgenda_(body.from, body.to, body.calendarId);
+      case "criarEventoAgenda": return acaoCriarEventoAgenda_(body.calendarId, body.titulo, body.descricao, body.inicio, body.duracaoMinutos);
       case "gerarContratoPDF": return acaoGerarContratoPDF_(body.dados);
       default: return { ok: false, erro: "Ação desconhecida: " + body.action };
     }
@@ -67,12 +71,12 @@ function rotear_(body) {
   }
 }
 
-// ══════════════ GOOGLE AGENDA (só leitura) ══════════════
+// ══════════════ GOOGLE AGENDA (só criação de evento) ══════════════
 
 // Lista os calendários que a conta que implantou este Code.gs enxerga
 // (os dela + os que foram compartilhados com ela) — alimenta o seletor de
-// calendário em Configurações, pra escolher qual Agenda vira o Funil de
-// Agendamento sem precisar editar Script Properties na mão.
+// calendário em Configurações, pra escolher em qual Agenda os
+// agendamentos criados no sistema são lançados.
 function acaoListarCalendarios_() {
   var calendarios = CalendarApp.getAllCalendars().map(function (cal) {
     return { id: cal.getId(), nome: cal.getName() };
@@ -80,34 +84,23 @@ function acaoListarCalendarios_() {
   return { ok: true, calendarios: calendarios };
 }
 
-// Lista eventos do calendário entre "from" e "to" (strings ISO, ex:
-// "2026-08-01T00:00:00"). O app.js usa isso pra alimentar o Funil de
-// Agendamento — cada evento vira (ou atualiza) um card, comparado pelo
-// campo "googleEventId". "calendarId" vem do calendário escolhido em
-// Configurações (guardado no Firestore); se não vier, cai pra Script
-// Property AGENDA_CALENDAR_ID e, por último, pro calendário principal.
-function acaoListarEventosAgenda_(from, to, calendarId) {
-  if (!from || !to) return { ok: false, erro: "Parâmetros from/to são obrigatórios." };
+// Cria um evento novo na Agenda quando um agendamento é criado (ou
+// reagendado, depois de um no-show) no sistema — o fluxo é sempre
+// Firestore → Agenda, nunca o contrário. "calendarId" vem do calendário
+// escolhido em Configurações (guardado no Firestore); se não vier, cai
+// pra Script Property AGENDA_CALENDAR_ID e, por último, pro calendário
+// principal. "inicio" é uma string ISO (ex: "2026-08-10T14:00:00").
+function acaoCriarEventoAgenda_(calendarId, titulo, descricao, inicio, duracaoMinutos) {
+  if (!titulo || !inicio) return { ok: false, erro: "Parâmetros titulo/inicio são obrigatórios." };
   var calendario = CalendarApp.getCalendarById(calendarId || obterCalendarId_());
   if (!calendario) return { ok: false, erro: "Calendário não encontrado: " + calendarId };
 
-  var eventos = calendario.getEvents(new Date(from), new Date(to));
-  var lista = eventos.map(function (ev) {
-    return {
-      // Eventos recorrentes compartilham o MESMO googleEventId em todas as
-      // ocorrências (limitação do CalendarApp) — o app.js usa "recorrente"
-      // pra saber quando precisa desambiguar ocorrências pela data, em vez
-      // de tratar uma mudança de data como reagendamento de verdade.
-      googleEventId: ev.getId(),
-      recorrente: ev.isRecurringEvent(),
-      titulo: ev.getTitle(),
-      descricao: ev.getDescription(),
-      inicio: ev.getStartTime().toISOString(),
-      fim: ev.getEndTime().toISOString(),
-      localizacao: ev.getLocation()
-    };
-  });
-  return { ok: true, eventos: lista };
+  var dataInicio = new Date(inicio);
+  var duracao = duracaoMinutos || 60;
+  var dataFim = new Date(dataInicio.getTime() + duracao * 60000);
+
+  var evento = calendario.createEvent(titulo, dataInicio, dataFim, { description: descricao || "" });
+  return { ok: true, googleEventId: evento.getId(), url: evento.getHtmlLink ? evento.getHtmlLink() : "" };
 }
 
 function obterCalendarId_() {
