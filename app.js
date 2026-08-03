@@ -32,6 +32,13 @@ let pendingEtapaAgendamentoId = null;
 let pendingEtapaVendaId = null;
 let pendingEtapaAdminId = null;
 let pendingClienteId = null;
+// Quando o cadastro de cliente é aberto "por cima" de outro modal (via
+// "+ Criar cliente" no combobox, ou "✏️ Editar cliente" dentro do
+// Agendamento/Vendas), guarda o que fazer depois de salvar: qual callback
+// chamar com o cliente resultante, e quais modais reabrir por cima dos
+// quais ele foi empilhado.
+let pendingClienteRetornoCallback = null;
+let pendingClienteRetornoModais = [];
 let pendingDespesaId = null;
 let pendingParcelaId = null;
 let pendingContratoStatusId = null;
@@ -224,14 +231,17 @@ function criarComboCliente(inputId, dropdownId, onSelecionar) {
     if (itemCriar) {
       const nome = input.value.trim();
       if (!nome) return;
-      try {
-        const cliente = await encontrarOuCriarCliente(nome, "");
-        api.clienteSelecionado = cliente;
-        input.value = cliente.nome;
-        dropdown.classList.remove("active");
-        mostrarToast(`Cliente "${cliente.nome}" cadastrado.`);
-        if (onSelecionar) onSelecionar(cliente);
-      } catch (err) { mostrarErro(err.message); }
+      dropdown.classList.remove("active");
+      // Abre o cadastro completo do cliente (nome pré-preenchido) em vez
+      // de criar na hora só com o nome — contato (telefone/e-mail) e o
+      // resto dos dados são preenchidos ali, não neste combobox. Tudo bem
+      // deixar em branco por enquanto; só o nome é obrigatório.
+      abrirClienteEmbutido((clienteCriado) => {
+        if (!clienteCriado) return;
+        api.clienteSelecionado = clienteCriado;
+        input.value = clienteCriado.nome;
+        if (onSelecionar) onSelecionar(clienteCriado);
+      }, { nomeInicial: nome });
     } else if (item) {
       const c = STATE.clientes.find((x) => x.id === item.dataset.id);
       if (c) {
@@ -249,8 +259,8 @@ function criarComboCliente(inputId, dropdownId, onSelecionar) {
   return api;
 }
 
-const comboAgendamento = criarComboCliente("ma-cliente-busca", "ma-cliente-dropdown");
-const comboOportunidade = criarComboCliente("mo-cliente-busca", "mo-cliente-dropdown");
+const comboAgendamento = criarComboCliente("ma-cliente-busca", "ma-cliente-dropdown", (cliente) => atualizarContatoAgendamento(cliente));
+const comboOportunidade = criarComboCliente("mo-cliente-busca", "mo-cliente-dropdown", (cliente) => atualizarContatoOportunidade(cliente));
 const comboContrato = criarComboCliente("mct-cliente-busca", "mct-cliente-dropdown", (cliente) => preencherCamposFaltantesContrato(cliente.id));
 
 // Nível de interesse do lead/oportunidade — escala fixa de 5 pontos com
@@ -611,14 +621,15 @@ async function moverAgendamento(id, novaEtapa) {
     return;
   }
 
-  // Telefone, e-mail e data são obrigatórios só quando o lead chega numa
-  // etapa que dispara a Agenda ("Agendado") — sem isso, abre o modal
-  // pedindo as informações do agendamento antes de completar o
-  // movimento. Em qualquer outra etapa o card transita livre, sem pedir
-  // nada. O e-mail entrou aqui porque o convite da reunião é enviado
-  // direto pra ele via Google Agenda.
-  if (etapaCfg && etapaCfg.entraFunilVendas && (!ag.telefone || !ag.email || !ag.data)) {
-    mostrarErro(`Telefone, e-mail e data/hora são obrigatórios pra mover pra "${etapaCfg.nome}" — preencha e salve pra continuar.`);
+  // Telefone e e-mail são obrigatórios só quando o lead chega numa etapa
+  // que dispara a Agenda ("Agendado") — e vêm do CADASTRO DO CLIENTE, não
+  // de um campo digitado aqui (contato só se edita na ficha do cliente).
+  // Data/hora continuam sendo específicas do agendamento. Sem isso tudo
+  // preenchido, abre o modal pedindo antes de completar o movimento; em
+  // qualquer outra etapa o card transita livre, sem pedir nada.
+  const clienteDoLead = STATE.clientes.find((c) => c.id === ag.clienteId);
+  if (etapaCfg && etapaCfg.entraFunilVendas && (!clienteDoLead?.telefone || !clienteDoLead?.email || !ag.data)) {
+    mostrarErro(`Telefone e e-mail (no cadastro do cliente) e data/hora são obrigatórios pra mover pra "${etapaCfg.nome}" — preencha e salve pra continuar.`);
     pendingAgendamentoMoveEtapa = novaEtapa;
     editarAgendamento(id, { confirmarAgendamento: true });
     return;
@@ -631,15 +642,15 @@ async function moverAgendamento(id, novaEtapa) {
   } catch (err) { mostrarErro("Não foi possível mover: " + err.message); }
 }
 
-// Completa o cadastro do cliente com campos que vieram preenchidos em
-// algum outro formulário (agendamento, contrato...) mas ainda estavam em
-// branco no cadastro — nunca sobrescreve o que já existia.
-async function patchClienteSeFaltando(clienteId, campos) {
-  if (!clienteId) return;
-  const clienteAtual = STATE.clientes.find((c) => c.id === clienteId);
-  const patch = {};
-  Object.entries(campos).forEach(([k, v]) => { if (v && !(clienteAtual && clienteAtual[k])) patch[k] = v; });
-  if (Object.keys(patch).length) await updateDoc(doc(db, "clientes", clienteId), patch);
+// Mostra o contato do cliente selecionado no lead (só leitura — editar
+// contato é sempre pela ficha do cliente, nunca aqui) e liga/desliga o
+// botão "✏️ Editar cliente" conforme tem alguém selecionado ou não.
+function atualizarContatoAgendamento(cliente) {
+  const el = document.getElementById("ma-contato-cliente");
+  const btn = document.getElementById("ma-btn-editar-cliente");
+  if (!cliente) { el.textContent = "Selecione um cliente."; btn.disabled = true; return; }
+  btn.disabled = false;
+  el.textContent = `Tel: ${cliente.telefone || "não cadastrado"} · E-mail: ${cliente.email || "não cadastrado"}`;
 }
 
 // Só a etapa marcada "entra automaticamente no Funil de Vendas" (por
@@ -697,14 +708,22 @@ document.getElementById("btn-novo-agendamento").addEventListener("click", () => 
   pendingAgendamentoMoveEtapa = null;
   document.getElementById("modal-agendamento-titulo").textContent = "Novo lead";
   comboAgendamento.reset();
-  document.getElementById("ma-telefone").value = "";
-  document.getElementById("ma-email").value = "";
+  atualizarContatoAgendamento(null);
   document.getElementById("ma-data").value = "";
   document.getElementById("ma-hora").value = "";
   document.getElementById("ma-obs").value = "";
   pickerNivelAgendamento.set(null);
   document.getElementById("ma-campos-agendamento").style.display = "none";
   abrirModal("modal-agendamento");
+});
+document.getElementById("ma-btn-editar-cliente").addEventListener("click", () => {
+  const cliente = comboAgendamento.clienteSelecionado;
+  if (!cliente || !cliente.id) { mostrarErro("Selecione (ou crie) um cliente antes de editar o contato."); return; }
+  abrirClienteEmbutido((clienteAtualizado) => {
+    if (!clienteAtualizado) return;
+    comboAgendamento.selecionar(clienteAtualizado);
+    atualizarContatoAgendamento(clienteAtualizado);
+  }, { clienteId: cliente.id });
 });
 // opts.confirmarAgendamento: chamado pelo gate de mover pra "Agendado" —
 // nesse caso o bloco de data/hora aparece e fica implícito que é pra
@@ -718,9 +737,10 @@ function editarAgendamento(id, opts = {}) {
   document.getElementById("modal-agendamento-titulo").textContent = opts.confirmarAgendamento
     ? `Confirmar agendamento — ${a.clienteNome}`
     : `Editar lead — ${a.clienteNome}`;
-  comboAgendamento.selecionar({ id: a.clienteId || null, nome: a.clienteNome, telefone: a.telefone || "" });
-  document.getElementById("ma-telefone").value = a.telefone || "";
-  document.getElementById("ma-email").value = a.email || "";
+  const clienteDoLead = STATE.clientes.find((c) => c.id === a.clienteId)
+    || { id: a.clienteId || null, nome: a.clienteNome, telefone: a.telefone || "", email: a.email || "" };
+  comboAgendamento.selecionar(clienteDoLead);
+  atualizarContatoAgendamento(clienteDoLead);
   document.getElementById("ma-data").value = a.data || (opts.confirmarAgendamento ? hojeStr() : "");
   document.getElementById("ma-hora").value = a.hora || "";
   document.getElementById("ma-obs").value = a.observacoes || "";
@@ -733,28 +753,25 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
   if (!cliente) { mostrarErro("Selecione um cliente da lista, ou clique em \"+ Criar cliente\" pra cadastrar um novo."); return; }
 
   if (pendingAgendamentoEditId) {
-    const telefoneEditado = document.getElementById("ma-telefone").value.trim() || cliente.telefone || "";
-    const emailEditado = document.getElementById("ma-email").value.trim() || cliente.email || "";
     const dataEditada = document.getElementById("ma-data").value || "";
     const nivelEditado = pickerNivelAgendamento.valor;
     if (pendingAgendamentoMoveEtapa) {
-      if (!telefoneEditado) { mostrarErro("Telefone é obrigatório pra continuar."); return; }
-      if (!emailEditado) { mostrarErro("E-mail é obrigatório pra continuar."); return; }
+      if (!cliente.telefone) { mostrarErro("Telefone é obrigatório no cadastro do cliente — clique em \"✏️ Editar cliente\" pra preencher."); return; }
+      if (!cliente.email) { mostrarErro("E-mail é obrigatório no cadastro do cliente — clique em \"✏️ Editar cliente\" pra preencher."); return; }
       if (!dataEditada) { mostrarErro("Data é obrigatória pra continuar."); return; }
     }
     try {
       const agendamentoOriginal = STATE.agendamentos.find((a) => a.id === pendingAgendamentoEditId);
       await updateDoc(doc(db, "agendamentos", pendingAgendamentoEditId), {
         clienteId: cliente.id, clienteNome: cliente.nome,
-        telefone: telefoneEditado,
-        email: emailEditado,
+        telefone: cliente.telefone || "",
+        email: cliente.email || "",
         nivelInteresse: nivelEditado,
         data: dataEditada,
         hora: document.getElementById("ma-hora").value || "",
         observacoes: document.getElementById("ma-obs").value.trim(),
         updatedAt: serverTimestamp()
       });
-      await patchClienteSeFaltando(cliente.id, { telefone: telefoneEditado, email: emailEditado });
       // Se a edição foi disparada por uma tentativa de arrastar pra uma
       // etapa que exigia telefone, completa o movimento agora que ele foi
       // preenchido — sem isso o card ficaria só editado, sem nunca chegar
@@ -770,7 +787,7 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
         });
         if (etapaCfg && etapaCfg.entraFunilVendas) {
           await processarAgendamentoAgendado(pendingAgendamentoEditId, {
-            clienteId: cliente.id, clienteNome: cliente.nome, telefone: telefoneEditado, email: emailEditado, nivelInteresse: nivelEditado,
+            clienteId: cliente.id, clienteNome: cliente.nome, telefone: cliente.telefone || "", email: cliente.email || "", nivelInteresse: nivelEditado,
             data: document.getElementById("ma-data").value, hora: document.getElementById("ma-hora").value,
             observacoes: document.getElementById("ma-obs").value.trim(),
             convertido: agendamentoOriginal ? agendamentoOriginal.convertido : false,
@@ -787,21 +804,19 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
 
   const primeiraEtapa = [...STATE.etapasAgendamento].sort((a, b) => a.ordem - b.ordem)[0];
   if (!primeiraEtapa) { mostrarErro("Cadastre ao menos uma etapa do Funil de Agendamento em Configurações."); return; }
-  const telefoneNovo = document.getElementById("ma-telefone").value.trim() || cliente.telefone || "";
-  const emailNovo = document.getElementById("ma-email").value.trim() || cliente.email || "";
   const dataNova = document.getElementById("ma-data").value || "";
   // Normalmente a 1ª etapa é "Novo Lead" (sem entraFunilVendas), então um
   // lead novo não pede telefone/e-mail/data — só se alguém configurar o
   // funil pra já nascer direto em "Agendado".
   if (primeiraEtapa.entraFunilVendas) {
-    if (!telefoneNovo) { mostrarErro(`Telefone é obrigatório pra criar direto em "${primeiraEtapa.nome}".`); return; }
-    if (!emailNovo) { mostrarErro(`E-mail é obrigatório pra criar direto em "${primeiraEtapa.nome}".`); return; }
+    if (!cliente.telefone) { mostrarErro(`Telefone é obrigatório no cadastro do cliente pra criar direto em "${primeiraEtapa.nome}".`); return; }
+    if (!cliente.email) { mostrarErro(`E-mail é obrigatório no cadastro do cliente pra criar direto em "${primeiraEtapa.nome}".`); return; }
     if (!dataNova) { mostrarErro(`Data é obrigatória pra criar direto em "${primeiraEtapa.nome}".`); return; }
   }
   const dados = {
     clienteId: cliente.id, clienteNome: cliente.nome,
-    telefone: telefoneNovo,
-    email: emailNovo,
+    telefone: cliente.telefone || "",
+    email: cliente.email || "",
     nivelInteresse: pickerNivelAgendamento.valor,
     data: dataNova,
     hora: document.getElementById("ma-hora").value || "",
@@ -810,7 +825,6 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
   };
   try {
     const ref = await addDoc(collection(db, "agendamentos"), { ...dados, dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-    await patchClienteSeFaltando(cliente.id, { telefone: telefoneNovo, email: emailNovo });
     fecharModal("modal-agendamento");
     mostrarToast("Lead criado.");
     if (primeiraEtapa.entraFunilVendas) await processarAgendamentoAgendado(ref.id, dados);
@@ -936,12 +950,20 @@ document.getElementById("btn-confirmar-perda").addEventListener("click", async (
   } catch (err) { mostrarErro(err.message); }
 });
 
+// Mesma lógica da versão de Agendamento (ver atualizarContatoAgendamento)
+// — contato do cliente é só leitura aqui, edição sempre pela ficha dele.
+function atualizarContatoOportunidade(cliente) {
+  const el = document.getElementById("mo-contato-cliente");
+  const btn = document.getElementById("mo-btn-editar-cliente");
+  if (!cliente) { el.textContent = "Selecione um cliente."; btn.disabled = true; return; }
+  btn.disabled = false;
+  el.textContent = `Tel: ${cliente.telefone || "não cadastrado"} · E-mail: ${cliente.email || "não cadastrado"}`;
+}
 document.getElementById("btn-nova-oportunidade").addEventListener("click", () => {
   pendingOportunidadeEditId = null;
   document.getElementById("modal-oportunidade-titulo").textContent = "Nova oportunidade";
   comboOportunidade.reset();
-  document.getElementById("mo-telefone").value = "";
-  document.getElementById("mo-email").value = "";
+  atualizarContatoOportunidade(null);
   document.getElementById("mo-valor").value = "";
   document.getElementById("mo-data").value = "";
   document.getElementById("mo-hora").value = "";
@@ -949,14 +971,24 @@ document.getElementById("btn-nova-oportunidade").addEventListener("click", () =>
   pickerNivelOportunidade.set(null);
   abrirModal("modal-oportunidade");
 });
+document.getElementById("mo-btn-editar-cliente").addEventListener("click", () => {
+  const cliente = comboOportunidade.clienteSelecionado;
+  if (!cliente || !cliente.id) { mostrarErro("Selecione (ou crie) um cliente antes de editar o contato."); return; }
+  abrirClienteEmbutido((clienteAtualizado) => {
+    if (!clienteAtualizado) return;
+    comboOportunidade.selecionar(clienteAtualizado);
+    atualizarContatoOportunidade(clienteAtualizado);
+  }, { clienteId: cliente.id });
+});
 function editarOportunidade(id) {
   const o = STATE.oportunidades.find((x) => x.id === id);
   if (!o) return;
   pendingOportunidadeEditId = id;
   document.getElementById("modal-oportunidade-titulo").textContent = `Editar oportunidade — ${o.clienteNome}`;
-  comboOportunidade.selecionar({ id: o.clienteId || null, nome: o.clienteNome, telefone: o.telefone || "" });
-  document.getElementById("mo-telefone").value = o.telefone || "";
-  document.getElementById("mo-email").value = o.email || "";
+  const clienteDaOp = STATE.clientes.find((c) => c.id === o.clienteId)
+    || { id: o.clienteId || null, nome: o.clienteNome, telefone: o.telefone || "", email: o.email || "" };
+  comboOportunidade.selecionar(clienteDaOp);
+  atualizarContatoOportunidade(clienteDaOp);
   document.getElementById("mo-valor").value = o.valorProposto ? String(o.valorProposto).replace(".", ",") : "";
   document.getElementById("mo-data").value = o.data || "";
   document.getElementById("mo-hora").value = o.hora || "";
@@ -967,15 +999,13 @@ function editarOportunidade(id) {
 document.getElementById("btn-salvar-oportunidade").addEventListener("click", async () => {
   const cliente = comboOportunidade.clienteSelecionado;
   if (!cliente) { mostrarErro("Selecione um cliente da lista, ou clique em \"+ Criar cliente\" pra cadastrar um novo."); return; }
-  const telefoneOp = document.getElementById("mo-telefone").value.trim() || cliente.telefone || "";
-  const emailOp = document.getElementById("mo-email").value.trim() || cliente.email || "";
 
   if (pendingOportunidadeEditId) {
     try {
       await updateDoc(doc(db, "oportunidades", pendingOportunidadeEditId), {
         clienteId: cliente.id, clienteNome: cliente.nome,
-        telefone: telefoneOp,
-        email: emailOp,
+        telefone: cliente.telefone || "",
+        email: cliente.email || "",
         nivelInteresse: pickerNivelOportunidade.valor,
         valorProposto: parseMoeda(document.getElementById("mo-valor").value),
         data: document.getElementById("mo-data").value || "",
@@ -983,7 +1013,6 @@ document.getElementById("btn-salvar-oportunidade").addEventListener("click", asy
         observacoes: document.getElementById("mo-obs").value.trim(),
         updatedAt: serverTimestamp()
       });
-      await patchClienteSeFaltando(cliente.id, { telefone: telefoneOp, email: emailOp });
       fecharModal("modal-oportunidade");
       pendingOportunidadeEditId = null;
       mostrarToast("Oportunidade atualizada.");
@@ -996,8 +1025,8 @@ document.getElementById("btn-salvar-oportunidade").addEventListener("click", asy
   try {
     await addDoc(collection(db, "oportunidades"), {
       clienteId: cliente.id, clienteNome: cliente.nome,
-      telefone: telefoneOp,
-      email: emailOp,
+      telefone: cliente.telefone || "",
+      email: cliente.email || "",
       nivelInteresse: pickerNivelOportunidade.valor,
       agendamentoId: null, etapa: primeiraEtapa.id,
       valorProposto: parseMoeda(document.getElementById("mo-valor").value),
@@ -1007,7 +1036,6 @@ document.getElementById("btn-salvar-oportunidade").addEventListener("click", asy
       perdida: false, motivoPerda: "", fechada: false,
       dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp()
     });
-    await patchClienteSeFaltando(cliente.id, { telefone: telefoneOp, email: emailOp });
     fecharModal("modal-oportunidade");
     mostrarToast("Oportunidade criada.");
   } catch (err) { mostrarErro(err.message); }
@@ -1745,6 +1773,34 @@ function editarCliente(id) {
   document.getElementById("mc-obs").value = c.observacoes || "";
   abrirModal("modal-cliente");
 }
+// Abre o cadastro de cliente "por cima" de outro modal já aberto (o
+// combobox de qualquer funil usa isso pra "+ Criar cliente"; o botão
+// "✏️ Editar cliente" dentro do Agendamento/Vendas usa pra corrigir
+// contato de um cliente já existente sem sair do que estava fazendo).
+// Contato (telefone/e-mail) só é preenchido/editado aqui — em nenhum
+// outro modal — por isso não pede nada além do nome pra criar.
+function abrirClienteEmbutido(onSalvar, { clienteId, nomeInicial } = {}) {
+  const modaisAtivos = [...document.querySelectorAll(".modal-overlay.active")].map((m) => m.id);
+  modaisAtivos.forEach((id) => fecharModal(id));
+  pendingClienteRetornoCallback = onSalvar;
+  pendingClienteRetornoModais = modaisAtivos;
+  if (clienteId) {
+    editarCliente(clienteId);
+  } else {
+    pendingClienteId = null;
+    document.getElementById("modal-cliente-titulo").textContent = "Novo cliente";
+    ["mc-nome", "mc-telefone", "mc-email", "mc-cpfcnpj", "mc-endereco-busca", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
+    if (nomeInicial) document.getElementById("mc-nome").value = nomeInicial;
+    abrirModal("modal-cliente");
+  }
+}
+document.getElementById("btn-cancelar-cliente").addEventListener("click", () => {
+  if (!pendingClienteRetornoModais.length && !pendingClienteRetornoCallback) return;
+  const modais = pendingClienteRetornoModais;
+  pendingClienteRetornoCallback = null;
+  pendingClienteRetornoModais = [];
+  modais.forEach((id) => abrirModal(id));
+});
 document.getElementById("btn-salvar-cliente").addEventListener("click", async () => {
   const nome = document.getElementById("mc-nome").value.trim();
   if (!nome) { mostrarErro("Informe o nome."); return; }
@@ -1757,11 +1813,19 @@ document.getElementById("btn-salvar-cliente").addEventListener("click", async ()
     observacoes: document.getElementById("mc-obs").value.trim()
   };
   try {
-    if (pendingClienteId) await updateDoc(doc(db, "clientes", pendingClienteId), dados);
-    else await addDoc(collection(db, "clientes"), { ...dados, createdAt: serverTimestamp() });
+    let clienteId = pendingClienteId;
+    if (clienteId) await updateDoc(doc(db, "clientes", clienteId), dados);
+    else clienteId = (await addDoc(collection(db, "clientes"), { ...dados, createdAt: serverTimestamp() })).id;
     fecharModal("modal-cliente");
     pendingClienteId = null;
     mostrarToast("Cliente salvo.");
+    if (pendingClienteRetornoCallback || pendingClienteRetornoModais.length) {
+      const cb = pendingClienteRetornoCallback, modais = pendingClienteRetornoModais;
+      pendingClienteRetornoCallback = null;
+      pendingClienteRetornoModais = [];
+      modais.forEach((id) => abrirModal(id));
+      if (cb) cb({ id: clienteId, ...dados });
+    }
   } catch (err) { mostrarErro(err.message); }
 });
 
