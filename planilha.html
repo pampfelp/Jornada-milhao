@@ -109,12 +109,12 @@ import {
 
 // ══════════════ CONFIGURAÇÃO DO DOMÍNIO ══════════════
 const COLECOES = [
-  { nome: "clientes", label: "Clientes", campos: ["nome", "telefone", "email", "origem", "observacoes"] },
+  { nome: "clientes", label: "Clientes", campos: ["nome", "telefone", "email", "cpfCnpj", "endereco", "origem", "observacoes"] },
   { nome: "agendamentos", label: "Agendamentos", campos: ["clienteNome", "telefone", "data", "hora", "etapa", "dataEntrouEtapa", "convertido", "enviadoAgenda", "googleEventId", "motivoPerda", "observacoes"] },
   { nome: "etapasAgendamentoConfig", label: "Etapas de Agendamento", campos: ["nome", "ordem", "entraFunilVendas", "perda", "slaUnidade", "slaAmarelo", "slaVermelho"] },
   { nome: "etapasVendaConfig", label: "Etapas de Venda", campos: ["nome", "ordem", "fechamento", "perda", "slaUnidade", "slaAmarelo", "slaVermelho"] },
   { nome: "oportunidades", label: "Oportunidades (Vendas)", campos: ["clienteNome", "telefone", "etapa", "dataEntrouEtapa", "valorProposto", "perdida", "motivoPerda", "fechada", "contratoId", "agendamentoId"] },
-  { nome: "contratos", label: "Contratos", campos: ["clienteNome", "valorTotal", "formaPagamento", "valorEntrada", "numParcelas", "diaVencimento", "pdfUrl", "status", "oportunidadeId"] },
+  { nome: "contratos", label: "Contratos", campos: ["clienteNome", "valorTotal", "formaPagamento", "valorEntrada", "numParcelas", "diaVencimento", "pdfUrl", "pdfFileId", "status", "oportunidadeId"] },
   { nome: "parcelas", label: "Parcelas", campos: ["contratoId", "clienteNome", "numero", "valor", "vencimento", "status", "dataPagamento"] },
   { nome: "despesas", label: "Despesas & Custos", campos: ["descricao", "categoria", "tipo", "valor", "data", "recorrente", "diaVencimento", "ultimoMesLancado", "origemRecorrenteId"] },
   { nome: "etapasAdminConfig", label: "Etapas Administrativas", campos: ["nome", "ordem", "slaUnidade", "slaAmarelo", "slaVermelho"] },

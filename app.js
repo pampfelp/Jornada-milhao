@@ -4,7 +4,7 @@
 
 import { db, APPS_SCRIPT_PROXY_URL } from "./firebase-init.js";
 import {
-  collection, addDoc, updateDoc, deleteDoc, doc, setDoc,
+  collection, addDoc, updateDoc, deleteDoc, doc, setDoc, getDocs,
   onSnapshot, query, orderBy, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 
@@ -38,6 +38,10 @@ let pendingContratoStatusId = null;
 let pendingAgendamentoEditId = null;
 let pendingOportunidadeEditId = null;
 let pendingCardAdminId = null;
+// Quando arrastar pra uma etapa "entraFunilVendas" sem telefone, o modal
+// de edição abre pedindo o telefone; isso guarda pra onde o card deveria
+// ter ido, pra completar o movimento só depois de salvar com telefone.
+let pendingAgendamentoMoveEtapa = null;
 let lancandoRecorrentes = false;
 let etapasAgendamentoSeeded = false;
 let etapasVendaSeeded = false;
@@ -248,6 +252,75 @@ function criarComboCliente(inputId, dropdownId, onSelecionar) {
 const comboAgendamento = criarComboCliente("ma-cliente-busca", "ma-cliente-dropdown");
 const comboOportunidade = criarComboCliente("mo-cliente-busca", "mo-cliente-dropdown");
 const comboContrato = criarComboCliente("mct-cliente-busca", "mct-cliente-dropdown", (cliente) => preencherCamposFaltantesContrato(cliente.id));
+
+// Máscara de CPF/CNPJ — detecta pela quantidade de dígitos digitados (até
+// 11 = CPF, 12+ = CNPJ) e reformata a cada tecla.
+function aplicarMascaraCpfCnpj(valor) {
+  const digitos = String(valor || "").replace(/\D/g, "").slice(0, 14);
+  if (digitos.length <= 11) {
+    return digitos
+      .replace(/(\d{3})(\d)/, "$1.$2")
+      .replace(/(\d{3})(\d)/, "$1.$2")
+      .replace(/(\d{3})(\d{1,2})$/, "$1-$2");
+  }
+  return digitos
+    .replace(/(\d{2})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d)/, "$1/$2")
+    .replace(/(\d{4})(\d{1,2})$/, "$1-$2");
+}
+function wireMascaraCpfCnpj(inputId) {
+  document.getElementById(inputId).addEventListener("input", (e) => {
+    e.target.value = aplicarMascaraCpfCnpj(e.target.value);
+  });
+}
+wireMascaraCpfCnpj("mc-cpfcnpj");
+
+// Busca de endereço com sugestões — usa a API pública do Nominatim
+// (OpenStreetMap), gratuita e sem chave/cartão de crédito. O Google
+// Places faria a mesma coisa, mas exige criar um projeto no Google Cloud
+// com faturamento ativado mesmo pra usar a cota grátis — não é um
+// requisito razoável só pra sugestão de endereço. Nunca bloqueia: o campo
+// continua um texto livre, a sugestão é só um atalho.
+function criarBuscaEndereco(inputId, dropdownId) {
+  const input = document.getElementById(inputId);
+  const dropdown = document.getElementById(dropdownId);
+  let debounceTimer = null;
+
+  async function buscar(termo) {
+    if (!termo || termo.trim().length < 4) { dropdown.classList.remove("active"); return; }
+    dropdown.innerHTML = `<div class="combo-vazio">Buscando...</div>`;
+    dropdown.classList.add("active");
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=0&limit=6&countrycodes=br&q=${encodeURIComponent(termo)}`;
+      const resp = await fetch(url, { headers: { "Accept-Language": "pt-BR" } });
+      const resultados = await resp.json();
+      if (!Array.isArray(resultados) || !resultados.length) {
+        dropdown.innerHTML = `<div class="combo-vazio">Nenhum endereço encontrado — pode digitar manualmente.</div>`;
+        return;
+      }
+      dropdown.innerHTML = resultados.map((r, i) => `<div class="combo-item" data-i="${i}">${esc(r.display_name)}</div>`).join("");
+      dropdown.querySelectorAll(".combo-item").forEach((item) => {
+        item.addEventListener("click", () => {
+          input.value = resultados[Number(item.dataset.i)].display_name;
+          dropdown.classList.remove("active");
+        });
+      });
+    } catch (err) {
+      dropdown.innerHTML = `<div class="combo-vazio">Erro ao buscar — pode digitar manualmente.</div>`;
+    }
+  }
+
+  input.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    const termo = input.value;
+    debounceTimer = setTimeout(() => buscar(termo), 450);
+  });
+  document.addEventListener("click", (e) => {
+    if (e.target !== input && !dropdown.contains(e.target)) dropdown.classList.remove("active");
+  });
+}
+criarBuscaEndereco("mc-endereco-busca", "mc-endereco-dropdown");
 
 /* ══════════════ NAVEGAÇÃO ══════════════ */
 
@@ -502,21 +575,31 @@ async function moverAgendamento(id, novaEtapa) {
     return;
   }
 
+  // Telefone é obrigatório pra chegar numa etapa que dispara a Agenda —
+  // sem ele, abre a edição pedindo antes de completar o movimento.
+  if (etapaCfg && etapaCfg.entraFunilVendas && !ag.telefone) {
+    mostrarErro(`Telefone é obrigatório pra mover pra "${etapaCfg.nome}" — preencha e salve pra continuar.`);
+    editarAgendamento(id);
+    pendingAgendamentoMoveEtapa = novaEtapa;
+    return;
+  }
+
   try {
     await updateDoc(doc(db, "agendamentos", id), { etapa: novaEtapa, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp() });
-    await addDoc(collection(db, "agendamentos", id, "historico"), { tipo: "mudanca_etapa", para: novaEtapa, timestamp: serverTimestamp() });
+    await addDoc(collection(db, "agendamentos", id, "historico"), { tipo: "mudanca_etapa", de: ag.etapa, para: novaEtapa, timestamp: serverTimestamp() });
     if (etapaCfg && etapaCfg.entraFunilVendas) await processarAgendamentoAgendado(id, { ...ag, etapa: novaEtapa });
   } catch (err) { mostrarErro("Não foi possível mover: " + err.message); }
 }
 
-// As etapas marcadas "entra automaticamente no Funil de Vendas" (ex:
-// Agendado, Reagendado) disparam isso — o card já entra como novo lead,
-// sem precisar de botão manual. Chamado tanto na criação (se a 1ª etapa já
-// tiver a flag) quanto ao arrastar um card pra uma dessas etapas. As duas
-// metades (criar oportunidade / lançar na Agenda) são independentes: uma
-// falhar não deve impedir a outra, e os flags "convertido"/"enviadoAgenda"
-// evitam duplicar em re-execuções (ex: passar de Agendado pra Reagendado,
-// as duas com a mesma flag).
+// Só a etapa marcada "entra automaticamente no Funil de Vendas" (por
+// padrão, só "Agendado") dispara isso — o card já entra como novo lead e
+// o evento já vai pra Agenda, sem precisar de botão manual. É a ÚNICA
+// automação do funil de Agendamento; todas as outras etapas são só pra
+// acompanhamento manual (arrastar livremente). Chamado tanto na criação
+// (se a 1ª etapa já tiver a flag) quanto ao arrastar um card pra essa
+// etapa. As duas metades (criar oportunidade / lançar na Agenda) são
+// independentes: uma falhar não deve impedir a outra, e os flags
+// "convertido"/"enviadoAgenda" evitam duplicar em re-execuções.
 async function processarAgendamentoAgendado(agendamentoId, dados) {
   if (!dados.convertido) {
     const primeiraEtapaVenda = [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem)[0];
@@ -558,6 +641,7 @@ async function excluirAgendamento(id) {
 
 document.getElementById("btn-novo-agendamento").addEventListener("click", () => {
   pendingAgendamentoEditId = null;
+  pendingAgendamentoMoveEtapa = null;
   document.getElementById("modal-agendamento-titulo").textContent = "Novo agendamento manual";
   comboAgendamento.reset();
   document.getElementById("ma-telefone").value = "";
@@ -570,6 +654,7 @@ function editarAgendamento(id) {
   const a = STATE.agendamentos.find((x) => x.id === id);
   if (!a) return;
   pendingAgendamentoEditId = id;
+  pendingAgendamentoMoveEtapa = null;
   document.getElementById("modal-agendamento-titulo").textContent = `Editar agendamento — ${a.clienteNome}`;
   comboAgendamento.selecionar({ id: a.clienteId || null, nome: a.clienteNome, telefone: a.telefone || "" });
   document.getElementById("ma-telefone").value = a.telefone || "";
@@ -583,15 +668,40 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
   if (!cliente) { mostrarErro("Selecione um cliente da lista, ou clique em \"+ Criar cliente\" pra cadastrar um novo."); return; }
 
   if (pendingAgendamentoEditId) {
+    const telefoneEditado = document.getElementById("ma-telefone").value.trim() || cliente.telefone || "";
+    if (pendingAgendamentoMoveEtapa && !telefoneEditado) { mostrarErro("Telefone é obrigatório pra continuar."); return; }
     try {
+      const agendamentoOriginal = STATE.agendamentos.find((a) => a.id === pendingAgendamentoEditId);
       await updateDoc(doc(db, "agendamentos", pendingAgendamentoEditId), {
         clienteId: cliente.id, clienteNome: cliente.nome,
-        telefone: document.getElementById("ma-telefone").value.trim() || cliente.telefone || "",
+        telefone: telefoneEditado,
         data: document.getElementById("ma-data").value || hojeStr(),
         hora: document.getElementById("ma-hora").value || "",
         observacoes: document.getElementById("ma-obs").value.trim(),
         updatedAt: serverTimestamp()
       });
+      // Se a edição foi disparada por uma tentativa de arrastar pra uma
+      // etapa que exigia telefone, completa o movimento agora que ele foi
+      // preenchido — sem isso o card ficaria só editado, sem nunca chegar
+      // na etapa que o usuário arrastou.
+      if (pendingAgendamentoMoveEtapa) {
+        const novaEtapa = pendingAgendamentoMoveEtapa;
+        pendingAgendamentoMoveEtapa = null;
+        const etapaCfg = STATE.etapasAgendamento.find((e) => e.id === novaEtapa);
+        await updateDoc(doc(db, "agendamentos", pendingAgendamentoEditId), { etapa: novaEtapa, dataEntrouEtapa: serverTimestamp() });
+        await addDoc(collection(db, "agendamentos", pendingAgendamentoEditId, "historico"), {
+          tipo: "mudanca_etapa", de: agendamentoOriginal ? agendamentoOriginal.etapa : null, para: novaEtapa, timestamp: serverTimestamp()
+        });
+        if (etapaCfg && etapaCfg.entraFunilVendas) {
+          await processarAgendamentoAgendado(pendingAgendamentoEditId, {
+            clienteId: cliente.id, clienteNome: cliente.nome, telefone: telefoneEditado,
+            data: document.getElementById("ma-data").value, hora: document.getElementById("ma-hora").value,
+            observacoes: document.getElementById("ma-obs").value.trim(),
+            convertido: agendamentoOriginal ? agendamentoOriginal.convertido : false,
+            enviadoAgenda: agendamentoOriginal ? agendamentoOriginal.enviadoAgenda : false
+          });
+        }
+      }
       fecharModal("modal-agendamento");
       pendingAgendamentoEditId = null;
       mostrarToast("Agendamento atualizado.");
@@ -601,9 +711,11 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
 
   const primeiraEtapa = [...STATE.etapasAgendamento].sort((a, b) => a.ordem - b.ordem)[0];
   if (!primeiraEtapa) { mostrarErro("Cadastre ao menos uma etapa do Funil de Agendamento em Configurações."); return; }
+  const telefoneNovo = document.getElementById("ma-telefone").value.trim() || cliente.telefone || "";
+  if (primeiraEtapa.entraFunilVendas && !telefoneNovo) { mostrarErro(`Telefone é obrigatório pra criar direto em "${primeiraEtapa.nome}".`); return; }
   const dados = {
     clienteId: cliente.id, clienteNome: cliente.nome,
-    telefone: document.getElementById("ma-telefone").value.trim() || cliente.telefone || "",
+    telefone: telefoneNovo,
     data: document.getElementById("ma-data").value || hojeStr(),
     hora: document.getElementById("ma-hora").value || "",
     etapa: primeiraEtapa.id, googleEventId: null, convertido: false, enviadoAgenda: false, motivoPerda: "",
@@ -697,7 +809,7 @@ async function moverOportunidade(id, novaEtapa) {
 
   try {
     await updateDoc(doc(db, "oportunidades", id), { etapa: novaEtapa, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp() });
-    await addDoc(collection(db, "oportunidades", id, "historico"), { tipo: "mudanca_etapa", para: novaEtapa, timestamp: serverTimestamp() });
+    await addDoc(collection(db, "oportunidades", id, "historico"), { tipo: "mudanca_etapa", de: op.etapa, para: novaEtapa, timestamp: serverTimestamp() });
   } catch (err) { mostrarErro("Não foi possível mover: " + err.message); }
 }
 
@@ -713,6 +825,7 @@ document.getElementById("btn-confirmar-perda").addEventListener("click", async (
   if (!pendingPerda) return;
   const { colecao, id } = pendingPerda;
   const motivo = document.getElementById("mp-motivo").value.trim();
+  const etapaAtual = (colecao === "agendamentos" ? STATE.agendamentos : STATE.oportunidades).find((x) => x.id === id);
   const novaEtapa = colecao === "agendamentos"
     ? STATE.etapasAgendamento.find((e) => e.perda)
     : STATE.etapasVenda.find((e) => e.perda);
@@ -721,6 +834,9 @@ document.getElementById("btn-confirmar-perda").addEventListener("click", async (
     const patch = { etapa: novaEtapa.id, motivoPerda: motivo, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp() };
     if (colecao === "oportunidades") patch.perdida = true;
     await updateDoc(doc(db, colecao, id), patch);
+    await addDoc(collection(db, colecao, id, "historico"), {
+      tipo: "mudanca_etapa", de: etapaAtual ? etapaAtual.etapa : null, para: novaEtapa.id, motivoPerda: motivo, timestamp: serverTimestamp()
+    });
     fecharModal("modal-perda");
     pendingPerda = null;
   } catch (err) { mostrarErro(err.message); }
@@ -854,7 +970,7 @@ document.getElementById("mct-forma").addEventListener("change", (e) => {
 });
 
 function limparFormularioContrato() {
-  ["mct-valor", "mct-entrada", "mct-telefone", "mct-email"].forEach((id) => (document.getElementById(id).value = ""));
+  ["mct-valor", "mct-entrada", "mct-telefone", "mct-email", "mct-cpfcnpj", "mct-endereco-busca"].forEach((id) => (document.getElementById(id).value = ""));
   comboContrato.reset();
   document.getElementById("mct-numparcelas").value = 1;
   document.getElementById("mct-diavencimento").value = 10;
@@ -862,14 +978,19 @@ function limparFormularioContrato() {
   document.getElementById("mct-preview-parcelas").textContent = "";
 }
 
-// "todos os dados de todas as tabelas que faltam" pro contrato — hoje isso
-// é telefone/e-mail do cliente. Só preenche o que já existe; o que faltar
-// fica em branco pra pessoa completar ali mesmo, na hora de gerar.
+// "todos os dados de todas as tabelas que faltam" pro contrato — telefone,
+// CPF/CNPJ e endereço do cliente. Só preenche o que já existe; o que
+// faltar fica em branco pra pessoa completar ali mesmo, na hora de gerar
+// (e é obrigatório — ver gerarContrato()).
 function preencherCamposFaltantesContrato(clienteId) {
   const cliente = STATE.clientes.find((c) => c.id === clienteId);
   document.getElementById("mct-telefone").value = cliente ? (cliente.telefone || "") : "";
   document.getElementById("mct-email").value = cliente ? (cliente.email || "") : "";
+  document.getElementById("mct-cpfcnpj").value = cliente ? (cliente.cpfCnpj || "") : "";
+  document.getElementById("mct-endereco-busca").value = cliente ? (cliente.endereco || "") : "";
 }
+wireMascaraCpfCnpj("mct-cpfcnpj");
+criarBuscaEndereco("mct-endereco-busca", "mct-endereco-dropdown");
 
 document.getElementById("btn-novo-contrato").addEventListener("click", () => {
   pendingContratoOportunidadeId = null;
@@ -886,6 +1007,16 @@ async function gerarContrato() {
   if (!clienteSelecionado) { mostrarErro("Selecione um cliente da lista, ou clique em \"+ Criar cliente\" pra cadastrar um novo."); return; }
   const f = lerFormularioContrato();
   if (!f.valorTotal) { mostrarErro("Informe o valor total."); return; }
+
+  // Telefone, CPF/CNPJ e endereço são obrigatórios pra gerar o contrato —
+  // o card só sai da etapa de origem depois de passar por aqui.
+  const telefoneContrato = document.getElementById("mct-telefone").value.trim();
+  const cpfCnpjContrato = document.getElementById("mct-cpfcnpj").value.trim();
+  const enderecoContrato = document.getElementById("mct-endereco-busca").value.trim();
+  if (!telefoneContrato) { mostrarErro("Telefone é obrigatório pra gerar o contrato."); return; }
+  if (!cpfCnpjContrato) { mostrarErro("CPF ou CNPJ é obrigatório pra gerar o contrato."); return; }
+  if (!enderecoContrato) { mostrarErro("Endereço é obrigatório pra gerar o contrato."); return; }
+
   const parcelasCalc = calcularParcelas(f.valorTotal, f.forma, f.valorEntrada, f.numParcelas, f.diaVencimento, f.dataPrimeira);
 
   try {
@@ -894,15 +1025,16 @@ async function gerarContrato() {
     // caso; senão, a seleção do combobox já é confiável.
     const cliente = clienteSelecionado.id ? clienteSelecionado : await encontrarOuCriarCliente(clienteSelecionado.nome, "");
 
-    // "todos os dados que faltam pro contrato" — completa telefone/e-mail
-    // do cadastro do cliente se estavam em branco (nunca sobrescreve o que
-    // já existia).
-    const telefoneContrato = document.getElementById("mct-telefone").value.trim();
+    // "todos os dados que faltam pro contrato" — completa o cadastro do
+    // cliente com o que estava em branco (nunca sobrescreve o que já
+    // existia).
     const emailContrato = document.getElementById("mct-email").value.trim();
     const clienteAtual = STATE.clientes.find((c) => c.id === cliente.id);
     const patchCliente = {};
     if (telefoneContrato && !(clienteAtual && clienteAtual.telefone)) patchCliente.telefone = telefoneContrato;
     if (emailContrato && !(clienteAtual && clienteAtual.email)) patchCliente.email = emailContrato;
+    if (cpfCnpjContrato && !(clienteAtual && clienteAtual.cpfCnpj)) patchCliente.cpfCnpj = cpfCnpjContrato;
+    if (enderecoContrato && !(clienteAtual && clienteAtual.endereco)) patchCliente.endereco = enderecoContrato;
     if (Object.keys(patchCliente).length) await updateDoc(doc(db, "clientes", cliente.id), patchCliente);
 
     const contratoRef = await addDoc(collection(db, "contratos"), {
@@ -912,7 +1044,7 @@ async function gerarContrato() {
       valorEntrada: f.forma === "entrada_parcelas" ? f.valorEntrada : 0,
       numParcelas: f.forma === "entrada_parcelas" ? f.numParcelas : 1,
       diaVencimento: f.diaVencimento,
-      dataGeracao: serverTimestamp(), pdfUrl: null, status: "ativo"
+      dataGeracao: serverTimestamp(), pdfUrl: null, pdfFileId: null, status: "ativo"
     });
 
     for (const p of parcelasCalc) {
@@ -933,8 +1065,12 @@ async function gerarContrato() {
     }
 
     if (pendingContratoOportunidadeId) {
+      const opOrigem = STATE.oportunidades.find((o) => o.id === pendingContratoOportunidadeId);
       await updateDoc(doc(db, "oportunidades", pendingContratoOportunidadeId), {
-        etapa: pendingContratoEtapaFechamentoId, fechada: true, contratoId: contratoRef.id, updatedAt: serverTimestamp()
+        etapa: pendingContratoEtapaFechamentoId, dataEntrouEtapa: serverTimestamp(), fechada: true, contratoId: contratoRef.id, updatedAt: serverTimestamp()
+      });
+      await addDoc(collection(db, "oportunidades", pendingContratoOportunidadeId, "historico"), {
+        tipo: "mudanca_etapa", de: opOrigem ? opOrigem.etapa : null, para: pendingContratoEtapaFechamentoId, timestamp: serverTimestamp()
       });
     }
 
@@ -947,7 +1083,7 @@ async function gerarContrato() {
           DATA: fmtData(hojeStr())
         }
       });
-      if (resp.ok) await updateDoc(doc(db, "contratos", contratoRef.id), { pdfUrl: resp.url });
+      if (resp.ok) await updateDoc(doc(db, "contratos", contratoRef.id), { pdfUrl: resp.url, pdfFileId: resp.fileId || null });
     } catch (errPdf) {
       mostrarErro("Contrato e parcelas criados, mas o PDF não pôde ser gerado: " + errPdf.message);
     }
@@ -962,17 +1098,31 @@ async function gerarContrato() {
   }
 }
 
+// Drive expõe o mesmo arquivo em URLs diferentes conforme o uso: "/preview"
+// funciona embutido num iframe (não força download, mostra visor nativo do
+// Drive), e "uc?export=download" força o download direto do arquivo. As
+// duas exigem que o arquivo esteja compartilhado "qualquer pessoa com o
+// link" — já é o que o Code.gs configura ao gerar o PDF.
+function linksPdfDrive(fileId) {
+  if (!fileId) return null;
+  return {
+    preview: `https://drive.google.com/file/d/${fileId}/preview`,
+    download: `https://drive.google.com/uc?export=download&id=${fileId}`
+  };
+}
+
 function renderTabelaContratos() {
   document.getElementById("tabela-contratos").innerHTML = STATE.contratos.map((c) => {
     const parcelasDoContrato = STATE.parcelas.filter((p) => p.contratoId === c.id);
     const pagas = parcelasDoContrato.filter((p) => p.status === "realizado").length;
+    const links = linksPdfDrive(c.pdfFileId);
     return `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheContrato('${c.id}')">
       <td>${esc(c.clienteNome)}</td>
       <td class="num">${fmtMoeda(c.valorTotal)}</td>
       <td>${c.formaPagamento === "avista" ? "À vista" : `Entrada + ${c.numParcelas}x`}</td>
       <td>${pagas}/${parcelasDoContrato.length}</td>
       <td>${fmtDataHora(c.dataGeracao)}</td>
-      <td>${c.pdfUrl ? `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Ver PDF</a>` : "—"}</td>
+      <td>${links ? `<a href="${esc(links.download)}" onclick="event.stopPropagation()">Baixar PDF</a>` : c.pdfUrl ? `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Ver PDF</a>` : "—"}</td>
     </tr>`;
   }).join("") || `<tr><td colspan="6"><div class="empty">Nenhum contrato ainda.</div></td></tr>`;
 }
@@ -1010,16 +1160,28 @@ function abrirDetalheContrato(id) {
   if (!c) return;
   const parcelasDoContrato = STATE.parcelas.filter((p) => p.contratoId === id);
   const pagas = parcelasDoContrato.filter((p) => p.status === "realizado").length;
+  const links = linksPdfDrive(c.pdfFileId);
+  const campos = [
+    ["Valor total", esc(fmtMoeda(c.valorTotal))],
+    ["Forma de pagamento", c.formaPagamento === "avista" ? "À vista" : `Entrada de ${esc(fmtMoeda(c.valorEntrada))} + ${c.numParcelas}x`],
+    ["Parcelas pagas", `${pagas}/${parcelasDoContrato.length}`],
+    ["Gerado em", esc(fmtDataHora(c.dataGeracao))],
+    ["Status", esc(c.status === "cancelado" ? "Cancelado" : "Ativo")]
+  ];
+  if (links) {
+    campos.push(["PDF", `<iframe src="${esc(links.preview)}" style="width:100%;height:340px;border:1px solid var(--line);border-radius:8px;background:#fff;"></iframe>
+      <div style="display:flex;gap:14px;margin-top:8px;">
+        <a href="${esc(c.pdfUrl || links.preview)}" target="_blank" rel="noopener">Abrir em nova aba</a>
+        <a href="${esc(links.download)}">Baixar PDF</a>
+      </div>`]);
+  } else if (c.pdfUrl) {
+    campos.push(["PDF", `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener">Ver PDF</a>`]);
+  } else {
+    campos.push(["PDF", "Ainda não gerado — veja Configurações → Integrações se o Apps Script está implantado."]);
+  }
   abrirDetalhe({
     titulo: c.clienteNome,
-    campos: [
-      ["Valor total", esc(fmtMoeda(c.valorTotal))],
-      ["Forma de pagamento", c.formaPagamento === "avista" ? "À vista" : `Entrada de ${esc(fmtMoeda(c.valorEntrada))} + ${c.numParcelas}x`],
-      ["Parcelas pagas", `${pagas}/${parcelasDoContrato.length}`],
-      ["Gerado em", esc(fmtDataHora(c.dataGeracao))],
-      ["Status", esc(c.status === "cancelado" ? "Cancelado" : "Ativo")],
-      ["PDF", c.pdfUrl ? `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener">Ver PDF</a>` : "—"]
-    ],
+    campos,
     onEditar: () => editarContratoStatus(id),
     onExcluir: () => excluirContrato(id)
   });
@@ -1050,7 +1212,7 @@ async function moverCardAdmin(id, novaEtapa) {
     await updateDoc(doc(db, "cardsAdmin", id), {
       etapa: novaEtapa, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp()
     });
-    await addDoc(collection(db, "cardsAdmin", id, "historico"), { tipo: "mudanca_etapa", para: novaEtapa, timestamp: serverTimestamp() });
+    await addDoc(collection(db, "cardsAdmin", id, "historico"), { tipo: "mudanca_etapa", de: card.etapa, para: novaEtapa, timestamp: serverTimestamp() });
   } catch (err) { mostrarErro("Não foi possível mover: " + err.message); }
 }
 
@@ -1092,6 +1254,99 @@ function abrirDetalheCardAdmin(id) {
     onExcluir: () => excluirCardAdmin(id)
   });
 }
+
+/* ══════════════ RELATÓRIO DE FUNIL (conversão + tempo em cada etapa) ══════════════
+   Sob demanda (só ao clicar em "📊 Relatório", não fica recalculando o
+   tempo todo): busca o histórico de cada card do funil (poucas dezenas de
+   documentos, tranquilo em paralelo) e reconstrói o conjunto de etapas que
+   cada card já visitou (posição atual + todo "para" já registrado). A
+   conversão entre etapas consecutivas é (quantos já chegaram na etapa N+1)
+   / (quantos já chegaram na etapa N) — como o funil é de trânsito livre,
+   isso é uma aproximação padrão de mercado (a mesma lógica que o funil do
+   SolarGreen usa), não uma contagem estritamente sequencial. */
+
+function fmtDuracao(ms) {
+  if (ms == null) return "—";
+  const horas = ms / 3600000;
+  if (horas < 24) return `${horas.toFixed(1)}h`;
+  return `${(horas / 24).toFixed(1)}d`;
+}
+
+async function calcularAnaliseFunil(cards, etapasSorted, colecaoNome) {
+  const historicos = await Promise.all(cards.map(async (c) => {
+    try {
+      const snap = await getDocs(collection(db, colecaoNome, c.id, "historico"));
+      return snap.docs.map((d) => d.data());
+    } catch (err) { return []; }
+  }));
+
+  const alcancaram = {};
+  etapasSorted.forEach((e) => (alcancaram[e.id] = new Set()));
+  cards.forEach((c, i) => {
+    if (alcancaram[c.etapa]) alcancaram[c.etapa].add(c.id);
+    historicos[i].forEach((h) => { if (h.para && alcancaram[h.para]) alcancaram[h.para].add(c.id); });
+  });
+
+  const agora = Date.now();
+  const temposAtuais = {};
+  etapasSorted.forEach((e) => (temposAtuais[e.id] = []));
+  cards.forEach((c) => {
+    if (!c.dataEntrouEtapa || !temposAtuais[c.etapa]) return;
+    const d = c.dataEntrouEtapa.toDate ? c.dataEntrouEtapa.toDate() : new Date(c.dataEntrouEtapa);
+    if (!isNaN(d.getTime())) temposAtuais[c.etapa].push(agora - d.getTime());
+  });
+
+  return etapasSorted.map((e, i) => {
+    const jaPassaram = alcancaram[e.id].size;
+    const anterior = i > 0 ? alcancaram[etapasSorted[i - 1].id].size : jaPassaram;
+    const conversao = i === 0 ? (jaPassaram > 0 ? 100 : 0) : (anterior > 0 ? (jaPassaram / anterior) * 100 : 0);
+    const tempos = temposAtuais[e.id];
+    const tempoMedioMs = tempos.length ? tempos.reduce((s, v) => s + v, 0) / tempos.length : null;
+    return { etapa: e, cardsAgora: cards.filter((c) => c.etapa === e.id).length, jaPassaram, conversao, tempoMedioMs };
+  });
+}
+
+function renderRelatorioFunil(containerId, linhas) {
+  document.getElementById(containerId).innerHTML = `
+    <h2>Relatório do <span>funil</span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Etapa</th><th>Agora</th><th>Já passaram</th><th>Conversão</th><th>Tempo médio atual</th></tr></thead>
+        <tbody>
+          ${linhas.map((l) => `<tr>
+            <td>${esc(l.etapa.nome)}</td>
+            <td class="num">${l.cardsAgora}</td>
+            <td class="num">${l.jaPassaram}</td>
+            <td class="num">${l.conversao.toFixed(0)}%</td>
+            <td class="num">${fmtDuracao(l.tempoMedioMs)}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+    <p class="hint" style="margin-top:10px;">"Já passaram" conta cada card que já esteve nessa etapa em algum momento (posição atual ou pelo histórico). Como o funil é de trânsito livre (arrastar pra qualquer etapa), a conversão é aproximada — não assume ordem estritamente sequencial.</p>
+  `;
+}
+
+function configurarBotaoRelatorio(btnId, blocoId, getCards, getEtapas, colecaoNome) {
+  document.getElementById(btnId).addEventListener("click", async () => {
+    const bloco = document.getElementById(blocoId);
+    if (bloco.style.display !== "none") { bloco.style.display = "none"; return; }
+    bloco.style.display = "block";
+    bloco.innerHTML = `<p class="hint">Calculando...</p>`;
+    try {
+      const linhas = await calcularAnaliseFunil(getCards(), getEtapas(), colecaoNome);
+      renderRelatorioFunil(blocoId, linhas);
+    } catch (err) {
+      bloco.innerHTML = `<p class="hint">Não foi possível calcular: ${esc(err.message)}</p>`;
+    }
+  });
+}
+configurarBotaoRelatorio("btn-relatorio-agendamento", "relatorio-agendamento",
+  () => STATE.agendamentos, () => [...STATE.etapasAgendamento].sort((a, b) => a.ordem - b.ordem), "agendamentos");
+configurarBotaoRelatorio("btn-relatorio-vendas", "relatorio-vendas",
+  () => STATE.oportunidades, () => [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem), "oportunidades");
+configurarBotaoRelatorio("btn-relatorio-administrativo", "relatorio-administrativo",
+  () => STATE.cardsAdmin, () => [...STATE.etapasAdmin].sort((a, b) => a.ordem - b.ordem), "cardsAdmin");
 
 /* ══════════════ PAINEL FINANCEIRO ══════════════ */
 
@@ -1198,6 +1453,15 @@ function renderFinanceiro() {
       <td><span class="stamp ${p.status}">${p.status === "realizado" ? "Pago" : "Esperado"}</span></td>
       <td>${p.status === "esperado" ? `<button class="btn-small" onclick="event.stopPropagation();window.__jm.marcarParcelaPaga('${p.id}')">Marcar paga</button>` : "—"}</td>
     </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma parcela neste período.</div></td></tr>`;
+
+  const despesasDoPeriodo = STATE.despesas
+    .filter((d) => (d.data || "").slice(0, 7) === periodo)
+    .sort((a, b) => (a.data || "").localeCompare(b.data || ""));
+  document.getElementById("tabela-despesas-periodo").innerHTML = despesasDoPeriodo.map((d) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheDespesa('${d.id}')">
+    <td>${esc(d.descricao)}</td><td>${esc(d.categoria || "—")}</td>
+    <td>${d.tipo === "despesa" ? "Despesa" : "Outro custo"}</td>
+    <td class="num">${fmtMoeda(d.valor)}</td><td>${fmtData(d.data)}</td>
+  </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma despesa lançada neste período.</div></td></tr>`;
 }
 
 /* ══════════════ DESPESAS & CUSTOS ══════════════ */
@@ -1322,7 +1586,7 @@ function renderTabelaDespesas() {
 document.getElementById("btn-novo-cliente").addEventListener("click", () => {
   pendingClienteId = null;
   document.getElementById("modal-cliente-titulo").textContent = "Novo cliente";
-  ["mc-nome", "mc-telefone", "mc-email", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
+  ["mc-nome", "mc-telefone", "mc-email", "mc-cpfcnpj", "mc-endereco-busca", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
   abrirModal("modal-cliente");
 });
 function editarCliente(id) {
@@ -1333,6 +1597,8 @@ function editarCliente(id) {
   document.getElementById("mc-nome").value = c.nome || "";
   document.getElementById("mc-telefone").value = c.telefone || "";
   document.getElementById("mc-email").value = c.email || "";
+  document.getElementById("mc-cpfcnpj").value = c.cpfCnpj || "";
+  document.getElementById("mc-endereco-busca").value = c.endereco || "";
   document.getElementById("mc-origem").value = c.origem || "";
   document.getElementById("mc-obs").value = c.observacoes || "";
   abrirModal("modal-cliente");
@@ -1343,6 +1609,8 @@ document.getElementById("btn-salvar-cliente").addEventListener("click", async ()
   const dados = {
     nome, telefone: document.getElementById("mc-telefone").value.trim(),
     email: document.getElementById("mc-email").value.trim(),
+    cpfCnpj: document.getElementById("mc-cpfcnpj").value.trim(),
+    endereco: document.getElementById("mc-endereco-busca").value.trim(),
     origem: document.getElementById("mc-origem").value.trim(),
     observacoes: document.getElementById("mc-obs").value.trim()
   };
@@ -1368,6 +1636,8 @@ function abrirDetalheCliente(id) {
     campos: [
       ["Telefone", esc(c.telefone || "—")],
       ["E-mail", esc(c.email || "—")],
+      ["CPF/CNPJ", esc(c.cpfCnpj || "—")],
+      ["Endereço", esc(c.endereco || "—")],
       ["Origem", esc(c.origem || "—")],
       ["Observações", esc(c.observacoes || "—")]
     ],
@@ -1635,13 +1905,18 @@ function renderConfigCalendario() {
 // Defaults ajustáveis em Configurações a qualquer momento — servem só de
 // ponto de partida. SLA padrão de 1 dia (amarelo) / 3 dias (vermelho) pra
 // todas, exceto onde comentado.
+// Funil comum: transita livremente entre todas as etapas (arrastar), sem
+// nenhuma trava. A ÚNICA automação é "entraFunilVendas" — só a etapa
+// "Agendado" tem essa flag, então só ela dispara o evento na Google
+// Agenda (e a conversão em oportunidade). "Reagendar" e as demais são só
+// etapas normais de acompanhamento, sem nenhum efeito automático.
 const DEFAULT_ETAPAS_AGENDAMENTO = [
   { nome: "Novo Lead", ordem: 1, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 2 },
   { nome: "Tentativa de Contato", ordem: 2, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
   { nome: "Retomar Contato", ordem: 3, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
   { nome: "Qualificação", ordem: 4, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
   { nome: "Agendado", ordem: 5, entraFunilVendas: true, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
-  { nome: "Reagendado", ordem: 6, entraFunilVendas: true, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
+  { nome: "Reagendar", ordem: 6, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
   { nome: "Perdido", ordem: 7, entraFunilVendas: false, perda: true, slaUnidade: "dias", slaAmarelo: 0, slaVermelho: 0 }
 ];
 const DEFAULT_ETAPAS_VENDA = [

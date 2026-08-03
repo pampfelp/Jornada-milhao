@@ -133,12 +133,12 @@ guardam `dataEntrouEtapa` (Timestamp) — é a partir dela que o badge de SLA
 é calculado, ao vivo, no navegador (não é um valor gravado, recalcula toda
 vez que a tela renderiza).
 
-- **clientes/{id}**: `nome`, `telefone`, `email`, `origem`, `observacoes`, `createdAt` — tabela auxiliar de consulta.
+- **clientes/{id}**: `nome`, `telefone`, `email`, `cpfCnpj`, `endereco`, `origem`, `observacoes`, `createdAt` — tabela auxiliar de consulta.
 - **etapasAgendamentoConfig/{id}**: `nome`, `ordem`, `entraFunilVendas` (bool — dispara a criação automática da oportunidade + evento na Agenda), `perda` (bool — pede motivo ao arrastar um card pra cá), `slaUnidade` (`dias`/`horas`), `slaAmarelo`, `slaVermelho`.
 - **agendamentos/{id}**: `clienteId`, `clienteNome`, `telefone`, `data` (yyyy-MM-dd), `hora`, `etapa` (id de `etapasAgendamentoConfig`), `dataEntrouEtapa`, `convertido` (bool — já virou oportunidade?), `enviadoAgenda` (bool — já criou o evento no Google?), `googleEventId`, `motivoPerda`, `observacoes`, `createdAt`, `updatedAt` — Funil de Agendamento. Subcoleção `historico/` (create-only).
 - **etapasVendaConfig/{id}**: `nome`, `ordem`, `fechamento` (bool — abre o gerador de contrato), `perda` (bool), `slaUnidade`, `slaAmarelo`, `slaVermelho`.
 - **oportunidades/{id}**: `clienteId`, `clienteNome`, `telefone`, `agendamentoId`, `etapa` (id de `etapasVendaConfig`), `dataEntrouEtapa`, `valorProposto`, `observacoes`, `perdida` (bool), `motivoPerda`, `fechada` (bool), `contratoId`, `createdAt`, `updatedAt` — Funil de Vendas. Subcoleção `historico/`.
-- **contratos/{id}**: `oportunidadeId`, `clienteId`, `clienteNome`, `valorTotal`, `formaPagamento` (`avista`/`entrada_parcelas`), `valorEntrada`, `numParcelas`, `diaVencimento`, `dataGeracao`, `pdfUrl`, `status`.
+- **contratos/{id}**: `oportunidadeId`, `clienteId`, `clienteNome`, `valorTotal`, `formaPagamento` (`avista`/`entrada_parcelas`), `valorEntrada`, `numParcelas`, `diaVencimento`, `dataGeracao`, `pdfUrl`, `pdfFileId`, `status`.
 - **parcelas/{id}**: `contratoId`, `clienteId`, `clienteNome`, `numero` (0 = entrada), `valor`, `vencimento` (yyyy-MM-dd), `status` (`esperado`/`realizado`), `dataPagamento` — geradas automaticamente ao gerar um contrato.
 - **despesas/{id}**: `descricao`, `categoria`, `tipo` (`despesa`/`outro_custo`), `valor`, `data`, `recorrente` (bool), `diaVencimento`, `ultimoMesLancado`, `origemRecorrenteId`.
 - **etapasAdminConfig/{id}**: `nome`, `ordem`, `slaUnidade`, `slaAmarelo`, `slaVermelho`.
@@ -217,6 +217,38 @@ app (Configurações) ou na `planilha.html`:
   gerar de novo é o caminho pra corrigir esses dados). Cards do Funil
   Administrativo só permitem editar o valor total (cliente e contrato
   vinculado vêm de quando o contrato foi gerado).
+- **CPF/CNPJ**: campo único no cadastro do cliente, com máscara automática
+  aplicada a cada tecla — até 11 dígitos vira `000.000.000-00` (CPF), 12+
+  vira `00.000.000/0000-00` (CNPJ). É só formatação, não valida dígito
+  verificador.
+- **Endereço com busca de sugestões**: usa a API pública do **Nominatim**
+  (OpenStreetMap) em vez do Google Places — o Places exigiria criar um
+  projeto no Google Cloud com faturamento ativado só pra usar a cota
+  grátis, o que não parece um requisito razoável pra uma sugestão de
+  endereço. O campo nunca bloqueia: digitar o endereço na mão sem clicar
+  em nenhuma sugestão funciona normalmente.
+- **Campos obrigatórios**: telefone é obrigatório pra um agendamento
+  chegar numa etapa marcada `entraFunilVendas` (por padrão, "Agendado") —
+  tentar mover sem telefone abre a edição pedindo antes de completar o
+  movimento. Telefone, CPF/CNPJ e endereço são obrigatórios pra gerar um
+  contrato (e por consequência, pro card de Vendas chegar na etapa de
+  fechamento) — o gerador de contrato é a própria "tela de completar os
+  dados que faltam" antes de liberar.
+- **PDF do contrato**: o modal de detalhe do contrato mostra o PDF
+  embutido (iframe, via `drive.google.com/file/d/{id}/preview`) e um link
+  de download direto — não é preciso sair do sistema pra ver ou baixar.
+- **Despesas do mês no Painel Financeiro**: além dos KPIs agregados, uma
+  tabela lista cada despesa/custo lançado no período selecionado.
+- **Log de movimentação do funil**: toda mudança de etapa (arrastar,
+  perda, fechamento) grava um registro em `historico/` com `de` (etapa
+  anterior) e `para` (etapa nova). O botão "📊 Relatório" em cada funil usa
+  esse histórico pra calcular quantos cards já passaram por cada etapa, a
+  conversão entre etapas consecutivas, e o tempo médio (a partir de
+  `dataEntrouEtapa`) dos cards que estão em cada etapa agora. Como o funil
+  é de trânsito livre (sem ordem obrigatória), a conversão é uma
+  aproximação — mesmo princípio usado no funil do SolarGreen, só que
+  calculada automaticamente a partir do histórico real em vez de depender
+  de lançamento manual.
 
 ## Observações
 

@@ -81,6 +81,16 @@
         </table>
       </div>
     </div>
+
+    <div class="card">
+      <h2>Despesas &amp; custos do período</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Data</th></tr></thead>
+          <tbody id="tabela-despesas-periodo"></tbody>
+        </table>
+      </div>
+    </div>
   </section>
 
   <!-- ═══ FUNIS (Agendamento / Vendas / Administrativo, uma tela só) ═══ -->
@@ -102,10 +112,12 @@
       <div class="section-head">
         <h2>Funil de <span>Agendamento</span></h2>
         <div class="top-actions">
+          <button class="btn" id="btn-relatorio-agendamento">📊 Relatório</button>
           <button class="btn btn-primary" id="btn-novo-agendamento">+ Agendamento manual</button>
         </div>
       </div>
-      <p class="hint" style="margin-bottom:14px;">Agendamentos criados aqui viram evento na Google Agenda automaticamente e já entram como novo lead no Funil de Vendas. Um no-show fica marcado com a tag 🔁 nos dois funis — reagendar é criar um agendamento novo.</p>
+      <p class="hint" style="margin-bottom:14px;">Funil comum — arraste o card livremente entre as etapas. A única automação é a etapa "Agendado": ao chegar nela, o sistema cria o evento na Google Agenda e o card já entra como novo lead no Funil de Vendas.</p>
+      <div class="card" id="relatorio-agendamento" style="display:none;"></div>
       <div class="kanban-wrap" id="kanban-agendamento"></div>
     </div>
 
@@ -113,17 +125,23 @@
       <div class="section-head">
         <h2>Funil de <span>Vendas</span></h2>
         <div class="top-actions">
+          <button class="btn" id="btn-relatorio-vendas">📊 Relatório</button>
           <button class="btn btn-primary" id="btn-nova-oportunidade">+ Nova oportunidade</button>
         </div>
       </div>
       <p class="hint" style="margin-bottom:14px;">O topo vem do fim do Funil de Agendamento. Ao mover um card para uma etapa de fechamento, gere o contrato — o card sai daqui e entra no Funil Administrativo.</p>
       <div class="funil-kpis" id="vendas-kpis"></div>
+      <div class="card" id="relatorio-vendas" style="display:none;"></div>
       <div class="kanban-wrap" id="kanban-vendas"></div>
     </div>
 
     <div class="funil-pane" id="pane-administrativo">
-      <div class="section-head"><h2>Funil <span>Administrativo</span></h2></div>
+      <div class="section-head">
+        <h2>Funil <span>Administrativo</span></h2>
+        <div class="top-actions"><button class="btn" id="btn-relatorio-administrativo">📊 Relatório</button></div>
+      </div>
       <p class="hint" style="margin-bottom:14px;">Pós-venda: prazos, grupo, recebimento, execução. O topo é alimentado automaticamente pela geração do contrato.</p>
+      <div class="card" id="relatorio-administrativo" style="display:none;"></div>
       <div class="kanban-wrap" id="kanban-administrativo"></div>
     </div>
   </section>
@@ -267,6 +285,14 @@
     <div class="field"><label>Nome</label><input type="text" id="mc-nome"></div>
     <div class="field"><label>Telefone</label><input type="text" id="mc-telefone"></div>
     <div class="field"><label>E-mail</label><input type="text" id="mc-email"></div>
+    <div class="field"><label>CPF ou CNPJ</label><input type="text" inputmode="numeric" id="mc-cpfcnpj" placeholder="000.000.000-00 ou 00.000.000/0000-00"></div>
+    <div class="field">
+      <label>Endereço</label>
+      <div class="combo-wrap">
+        <input type="text" id="mc-endereco-busca" placeholder="Digite pra buscar, ou digite o endereço completo direto" autocomplete="off">
+        <div class="combo-dropdown" id="mc-endereco-dropdown"></div>
+      </div>
+    </div>
     <div class="field"><label>Origem</label><input type="text" id="mc-origem" placeholder="ex: Instagram, indicação..."></div>
     <div class="field"><label>Observações</label><textarea id="mc-obs"></textarea></div>
     <div class="modal-actions">
@@ -344,10 +370,20 @@
         <div class="combo-dropdown" id="mct-cliente-dropdown"></div>
       </div>
     </div>
-    <p class="hint" id="mct-dados-faltando" style="margin:2px 0 10px;">Complete os dados do cliente que estiverem faltando — ficam salvos no cadastro dele.</p>
+    <p class="hint" id="mct-dados-faltando" style="margin:2px 0 10px;">Telefone, CPF/CNPJ e endereço são obrigatórios pra gerar o contrato — completam o cadastro do cliente.</p>
     <div class="row">
-      <div class="field"><label>Telefone</label><input type="text" id="mct-telefone"></div>
+      <div class="field"><label>Telefone <span style="color:var(--dourado);">*</span></label><input type="text" id="mct-telefone"></div>
       <div class="field"><label>E-mail</label><input type="text" id="mct-email"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>CPF ou CNPJ <span style="color:var(--dourado);">*</span></label><input type="text" inputmode="numeric" id="mct-cpfcnpj" placeholder="000.000.000-00 ou 00.000.000/0000-00"></div>
+    </div>
+    <div class="field">
+      <label>Endereço <span style="color:var(--dourado);">*</span></label>
+      <div class="combo-wrap">
+        <input type="text" id="mct-endereco-busca" placeholder="Digite pra buscar, ou digite o endereço completo direto" autocomplete="off">
+        <div class="combo-dropdown" id="mct-endereco-dropdown"></div>
+      </div>
     </div>
     <div class="row">
       <div class="field"><label>Valor total</label><input type="text" inputmode="decimal" id="mct-valor" placeholder="0,00"></div>
@@ -406,7 +442,7 @@
     <h2 id="modal-etapa-agendamento-titulo">Etapa do Funil de Agendamento</h2>
     <div class="field"><label>Nome</label><input type="text" id="mea2-nome"></div>
     <div class="field"><label>Ordem</label><input type="number" id="mea2-ordem" min="1"></div>
-    <label class="checkbox-field"><input type="checkbox" id="mea2-entra-vendas"> Entra automaticamente no Funil de Vendas (ex: Agendado, Reagendado)</label>
+    <label class="checkbox-field"><input type="checkbox" id="mea2-entra-vendas"> Entra automaticamente no Funil de Vendas e cria o evento na Google Agenda (normalmente só "Agendado")</label>
     <label class="checkbox-field"><input type="checkbox" id="mea2-perda"> É a etapa de perda (pede motivo ao arrastar um card pra cá)</label>
     <p class="hint" style="margin:14px 0 6px;">SLA — quanto tempo até o card virar amarelo/vermelho nesta etapa</p>
     <div class="row">
