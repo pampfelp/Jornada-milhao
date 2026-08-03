@@ -265,6 +265,18 @@ app (Configurações) ou na `planilha.html`:
   obrigatórios pra gerar um contrato (e por consequência, pro card de
   Vendas chegar na etapa de fechamento) — o gerador de contrato é a própria
   "tela de completar os dados que faltam" antes de liberar.
+- **Contato do cliente só se edita na ficha do cliente**: os modais de
+  Agendamento e Oportunidade não têm mais campos de telefone/e-mail
+  digitáveis — eles mostram o contato do cliente selecionado só leitura,
+  com um botão "✏️ Editar cliente" que abre o cadastro completo por cima
+  (o modal atual fica escondido e reabre sozinho depois de salvar ou
+  cancelar). Telefone/e-mail salvos no agendamento/oportunidade são sempre
+  uma cópia do que está no cadastro do cliente naquele momento, nunca um
+  valor digitado à parte — evita duas versões divergentes do mesmo dado.
+  O "+ Criar cliente" dentro de qualquer combobox de cliente segue o mesmo
+  princípio: abre o cadastro completo (nome já preenchido) em vez de criar
+  na hora só com o nome — só o nome é obrigatório pra salvar, o resto
+  (inclusive contato) pode ficar em branco por enquanto.
 - **PDF do contrato**: o modal de detalhe do contrato mostra o PDF
   embutido (iframe, via `drive.google.com/file/d/{id}/preview`) e um link
   de download direto — não é preciso sair do sistema pra ver ou baixar.
