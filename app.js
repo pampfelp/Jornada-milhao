@@ -548,7 +548,7 @@ function renderCardAgendamento(a) {
     <div class="kcard-nome">${esc(a.clienteNome)}</div>
     <div class="kcard-sub">${esc(a.telefone || "")}</div>
     <div class="kcard-foot">
-      <span class="kcard-prazo">${fmtData(a.data)} ${esc(a.hora || "")}</span>
+      <span class="kcard-prazo">${a.data ? `${fmtData(a.data)} ${esc(a.hora || "")}` : ""}</span>
       ${renderBadgeSla(a.dataEntrouEtapa, etapaCfg)}
     </div>
     ${a.motivoPerda ? `<div class="sublabel" style="margin-top:6px;">Motivo: ${esc(a.motivoPerda)}</div>` : ""}
@@ -575,12 +575,14 @@ async function moverAgendamento(id, novaEtapa) {
     return;
   }
 
-  // Telefone é obrigatório pra chegar numa etapa que dispara a Agenda —
-  // sem ele, abre a edição pedindo antes de completar o movimento.
-  if (etapaCfg && etapaCfg.entraFunilVendas && !ag.telefone) {
-    mostrarErro(`Telefone é obrigatório pra mover pra "${etapaCfg.nome}" — preencha e salve pra continuar.`);
-    editarAgendamento(id);
+  // Telefone e data são obrigatórios só quando o lead chega numa etapa que
+  // dispara a Agenda ("Agendado") — sem isso, abre o modal pedindo as
+  // informações do agendamento antes de completar o movimento. Em
+  // qualquer outra etapa o card transita livre, sem pedir nada.
+  if (etapaCfg && etapaCfg.entraFunilVendas && (!ag.telefone || !ag.data)) {
+    mostrarErro(`Telefone e data/hora são obrigatórios pra mover pra "${etapaCfg.nome}" — preencha e salve pra continuar.`);
     pendingAgendamentoMoveEtapa = novaEtapa;
+    editarAgendamento(id, { confirmarAgendamento: true });
     return;
   }
 
@@ -642,25 +644,33 @@ async function excluirAgendamento(id) {
 document.getElementById("btn-novo-agendamento").addEventListener("click", () => {
   pendingAgendamentoEditId = null;
   pendingAgendamentoMoveEtapa = null;
-  document.getElementById("modal-agendamento-titulo").textContent = "Novo agendamento manual";
+  document.getElementById("modal-agendamento-titulo").textContent = "Novo lead";
   comboAgendamento.reset();
   document.getElementById("ma-telefone").value = "";
-  document.getElementById("ma-data").value = hojeStr();
+  document.getElementById("ma-data").value = "";
   document.getElementById("ma-hora").value = "";
   document.getElementById("ma-obs").value = "";
+  document.getElementById("ma-campos-agendamento").style.display = "none";
   abrirModal("modal-agendamento");
 });
-function editarAgendamento(id) {
+// opts.confirmarAgendamento: chamado pelo gate de mover pra "Agendado" —
+// nesse caso o bloco de data/hora aparece e fica implícito que é pra
+// preencher agora. Fora disso (editar um lead comum, ou o ✏️ do modal de
+// detalhe) o bloco só aparece se o lead já tiver data salva.
+function editarAgendamento(id, opts = {}) {
   const a = STATE.agendamentos.find((x) => x.id === id);
   if (!a) return;
   pendingAgendamentoEditId = id;
-  pendingAgendamentoMoveEtapa = null;
-  document.getElementById("modal-agendamento-titulo").textContent = `Editar agendamento — ${a.clienteNome}`;
+  if (!opts.confirmarAgendamento) pendingAgendamentoMoveEtapa = null;
+  document.getElementById("modal-agendamento-titulo").textContent = opts.confirmarAgendamento
+    ? `Confirmar agendamento — ${a.clienteNome}`
+    : `Editar lead — ${a.clienteNome}`;
   comboAgendamento.selecionar({ id: a.clienteId || null, nome: a.clienteNome, telefone: a.telefone || "" });
   document.getElementById("ma-telefone").value = a.telefone || "";
-  document.getElementById("ma-data").value = a.data || "";
+  document.getElementById("ma-data").value = a.data || (opts.confirmarAgendamento ? hojeStr() : "");
   document.getElementById("ma-hora").value = a.hora || "";
   document.getElementById("ma-obs").value = a.observacoes || "";
+  document.getElementById("ma-campos-agendamento").style.display = (opts.confirmarAgendamento || a.data) ? "" : "none";
   abrirModal("modal-agendamento");
 }
 document.getElementById("btn-salvar-agendamento").addEventListener("click", async () => {
@@ -669,13 +679,17 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
 
   if (pendingAgendamentoEditId) {
     const telefoneEditado = document.getElementById("ma-telefone").value.trim() || cliente.telefone || "";
-    if (pendingAgendamentoMoveEtapa && !telefoneEditado) { mostrarErro("Telefone é obrigatório pra continuar."); return; }
+    const dataEditada = document.getElementById("ma-data").value || "";
+    if (pendingAgendamentoMoveEtapa) {
+      if (!telefoneEditado) { mostrarErro("Telefone é obrigatório pra continuar."); return; }
+      if (!dataEditada) { mostrarErro("Data é obrigatória pra continuar."); return; }
+    }
     try {
       const agendamentoOriginal = STATE.agendamentos.find((a) => a.id === pendingAgendamentoEditId);
       await updateDoc(doc(db, "agendamentos", pendingAgendamentoEditId), {
         clienteId: cliente.id, clienteNome: cliente.nome,
         telefone: telefoneEditado,
-        data: document.getElementById("ma-data").value || hojeStr(),
+        data: dataEditada,
         hora: document.getElementById("ma-hora").value || "",
         observacoes: document.getElementById("ma-obs").value.trim(),
         updatedAt: serverTimestamp()
@@ -684,6 +698,7 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
       // etapa que exigia telefone, completa o movimento agora que ele foi
       // preenchido — sem isso o card ficaria só editado, sem nunca chegar
       // na etapa que o usuário arrastou.
+      const confirmandoAgendamento = !!pendingAgendamentoMoveEtapa;
       if (pendingAgendamentoMoveEtapa) {
         const novaEtapa = pendingAgendamentoMoveEtapa;
         pendingAgendamentoMoveEtapa = null;
@@ -704,7 +719,7 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
       }
       fecharModal("modal-agendamento");
       pendingAgendamentoEditId = null;
-      mostrarToast("Agendamento atualizado.");
+      mostrarToast(confirmandoAgendamento ? "Agendamento confirmado." : "Lead atualizado.");
     } catch (err) { mostrarErro(err.message); }
     return;
   }
@@ -712,11 +727,18 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
   const primeiraEtapa = [...STATE.etapasAgendamento].sort((a, b) => a.ordem - b.ordem)[0];
   if (!primeiraEtapa) { mostrarErro("Cadastre ao menos uma etapa do Funil de Agendamento em Configurações."); return; }
   const telefoneNovo = document.getElementById("ma-telefone").value.trim() || cliente.telefone || "";
-  if (primeiraEtapa.entraFunilVendas && !telefoneNovo) { mostrarErro(`Telefone é obrigatório pra criar direto em "${primeiraEtapa.nome}".`); return; }
+  const dataNova = document.getElementById("ma-data").value || "";
+  // Normalmente a 1ª etapa é "Novo Lead" (sem entraFunilVendas), então um
+  // lead novo não pede telefone/data — só se alguém configurar o funil
+  // pra já nascer direto em "Agendado".
+  if (primeiraEtapa.entraFunilVendas) {
+    if (!telefoneNovo) { mostrarErro(`Telefone é obrigatório pra criar direto em "${primeiraEtapa.nome}".`); return; }
+    if (!dataNova) { mostrarErro(`Data é obrigatória pra criar direto em "${primeiraEtapa.nome}".`); return; }
+  }
   const dados = {
     clienteId: cliente.id, clienteNome: cliente.nome,
     telefone: telefoneNovo,
-    data: document.getElementById("ma-data").value || hojeStr(),
+    data: dataNova,
     hora: document.getElementById("ma-hora").value || "",
     etapa: primeiraEtapa.id, googleEventId: null, convertido: false, enviadoAgenda: false, motivoPerda: "",
     observacoes: document.getElementById("ma-obs").value.trim()
@@ -724,7 +746,7 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
   try {
     const ref = await addDoc(collection(db, "agendamentos"), { ...dados, dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
     fecharModal("modal-agendamento");
-    mostrarToast("Agendamento criado.");
+    mostrarToast("Lead criado.");
     if (primeiraEtapa.entraFunilVendas) await processarAgendamentoAgendado(ref.id, dados);
   } catch (err) { mostrarErro(err.message); }
 });
