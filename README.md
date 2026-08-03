@@ -170,8 +170,10 @@ app (Configurações) ou na `planilha.html`:
   que o card entrou na etapa. Os defaults que vêm no pacote (editáveis a
   qualquer momento em **Configurações**):
   - **Agendamento**: Novo Lead → Tentativa de Contato → Retomar Contato →
-    Qualificação → Agendado → Reagendado → Perdido. "Agendado" e
-    "Reagendado" são as únicas marcadas `entraFunilVendas`; "Perdido" é a
+    Qualificação → Agendado → Reagendar → Perdido. Só "Agendado" é marcada
+    `entraFunilVendas` — é a única etapa com qualquer automação; todas as
+    outras (inclusive "Reagendar") são só pra acompanhamento manual, sem
+    nenhum efeito colateral ao arrastar o card pra elas. "Perdido" é a
     etapa de perda.
   - **Vendas**: Reunião Agendada → Follow Up → Negociação → Fechado →
     Perdido. "Fechado" é a etapa de fechamento; "Perdido" é a etapa de
@@ -179,12 +181,41 @@ app (Configurações) ou na `planilha.html`:
   - **Administrativo**: Recebimento da Entrada → Criação do Grupo → Envio
     do Contrato → Enviado para Mentoria.
 - **Gatilho de conversão em oportunidade**: quando um agendamento chega
-  numa etapa marcada `entraFunilVendas` (Agendado ou Reagendado, por
-  padrão), o sistema cria a oportunidade automaticamente (como novo lead,
-  na 1ª etapa do Funil de Vendas) e o evento na Google Agenda — sem
-  precisar de nenhum botão manual. Os flags `convertido`/`enviadoAgenda`
-  evitam duplicar caso o card passe por mais de uma etapa com essa flag
-  (ex: Agendado → depois Reagendado).
+  numa etapa marcada `entraFunilVendas` (só "Agendado", por padrão), o
+  sistema cria a oportunidade automaticamente (como novo lead, na 1ª etapa
+  do Funil de Vendas) e o evento na Google Agenda — sem precisar de nenhum
+  botão manual. Os flags `convertido`/`enviadoAgenda` evitam duplicar caso
+  o card volte a passar por essa etapa depois.
+- **"+ Novo Lead" cria um lead, não um agendamento**: o modal de criação só
+  pede cliente (combobox com "+ Criar cliente" embutido), telefone,
+  e-mail, nível de interesse e observações — sem pedir data/hora, porque
+  nesse ponto ainda não existe reunião marcada. Os campos de data/hora só
+  aparecem quando o card é arrastado pra "Agendado": o sistema abre um
+  modal "Confirmar agendamento" pedindo telefone + e-mail + data/hora (os
+  três obrigatórios só a partir daí) antes de completar o movimento — o
+  mesmo padrão do gerador de contrato no Vendas.
+- **Nível de interesse**: escala fixa de 5 pontos com emoji (😠🙁😐🙂🤩),
+  editável no lead (Agendamento) e na oportunidade (Vendas), mostrada como
+  uma "tag" ao lado do nome do cliente nos dois kanbans. Como é uma escala
+  fixa (não uma lista que cresce), o seletor é uma linha de 5 botões
+  clicáveis — não um combobox filtrável (essa regra é só pra listas que
+  crescem, tipo cliente/etapa).
+- **Convite de reunião pro cliente**: quando o agendamento tem e-mail
+  preenchido, ele é adicionado como convidado do evento (`guests` +
+  `sendInvites: true` no `CalendarApp.createEvent`) — o cliente recebe o
+  convite nativo do Google Agenda (aceitar/recusar, lembrete, etc.), não é
+  um e-mail à parte enviado pelo sistema.
+- **Título e descrição do evento na Agenda são fixos**: o Google Calendar
+  mostra o MESMO título e a MESMA descrição pra todo mundo que vê o evento
+  (organizador e convidados) — não existe personalização por destinatário,
+  então não dá pra ter um texto só pro cliente e outro só pro Benedito no
+  mesmo evento. O título usa a frase do ponto de vista do Benedito
+  ("Reunião Consultoria Jornada do Milhão com {Cliente}", já que é ele quem
+  organiza e vê primeiro na própria Agenda) e a descrição usa a frase do
+  ponto de vista do cliente ("Reunião Consultoria {Cliente} com Benedito
+  Viegas - Jornada do Milhão") — os dois textos ficam visíveis pras duas
+  pessoas, só em campos diferentes do mesmo evento. Isso é definido dentro
+  do `Code.gs` (`acaoCriarEventoAgenda_`), não vem do formulário.
 - **Perda (Agendamento e Vendas)**: arrastar um card pra qualquer etapa
   marcada `perda` abre um modal pedindo o motivo antes de mover de
   verdade — o card só sai da etapa atual depois de confirmar.
@@ -227,13 +258,13 @@ app (Configurações) ou na `planilha.html`:
   grátis, o que não parece um requisito razoável pra uma sugestão de
   endereço. O campo nunca bloqueia: digitar o endereço na mão sem clicar
   em nenhuma sugestão funciona normalmente.
-- **Campos obrigatórios**: telefone é obrigatório pra um agendamento
-  chegar numa etapa marcada `entraFunilVendas` (por padrão, "Agendado") —
-  tentar mover sem telefone abre a edição pedindo antes de completar o
-  movimento. Telefone, CPF/CNPJ e endereço são obrigatórios pra gerar um
-  contrato (e por consequência, pro card de Vendas chegar na etapa de
-  fechamento) — o gerador de contrato é a própria "tela de completar os
-  dados que faltam" antes de liberar.
+- **Campos obrigatórios**: telefone + e-mail + data/hora são obrigatórios
+  pra um agendamento chegar numa etapa marcada `entraFunilVendas` (por
+  padrão, "Agendado") — tentar mover sem eles abre o modal de confirmação
+  pedindo antes de completar o movimento. Telefone, CPF/CNPJ e endereço são
+  obrigatórios pra gerar um contrato (e por consequência, pro card de
+  Vendas chegar na etapa de fechamento) — o gerador de contrato é a própria
+  "tela de completar os dados que faltam" antes de liberar.
 - **PDF do contrato**: o modal de detalhe do contrato mostra o PDF
   embutido (iframe, via `drive.google.com/file/d/{id}/preview`) e um link
   de download direto — não é preciso sair do sistema pra ver ou baixar.

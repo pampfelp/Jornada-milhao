@@ -103,6 +103,12 @@ header.top .view-desc{font-size:13px;color:var(--ink-soft);margin-top:6px;max-wi
 .combo-item.combo-item-criar{color:var(--dourado);font-weight:700;border-top:1px solid var(--line);}
 .combo-vazio{padding:9px 12px;font-size:13px;color:var(--ink-faint);}
 
+.nivel-picker{display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;}
+.nivel-btn{font-size:21px;line-height:1;background:var(--panel-2);border:2px solid var(--line);border-radius:10px;padding:7px 11px;cursor:pointer;transition:transform .1s,border-color .1s;}
+.nivel-btn:hover{transform:scale(1.12);}
+.nivel-btn.selected{border-color:var(--dourado);background:var(--dourado-soft);}
+.kcard-nivel{font-size:13px;}
+
 table{width:100%;border-collapse:collapse;background:var(--panel);border-radius:var(--radius);overflow:hidden;margin-top:4px;}
 thead th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);padding:10px 12px;border-bottom:2px solid var(--dourado);background:var(--panel-2);}
 tbody td{padding:11px 12px;border-bottom:1px solid var(--line);font-size:13.5px;}

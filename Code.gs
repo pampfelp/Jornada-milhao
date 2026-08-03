@@ -62,7 +62,7 @@ function rotear_(body) {
   try {
     switch (body.action) {
       case "listarCalendarios": return acaoListarCalendarios_();
-      case "criarEventoAgenda": return acaoCriarEventoAgenda_(body.calendarId, body.titulo, body.descricao, body.inicio, body.duracaoMinutos);
+      case "criarEventoAgenda": return acaoCriarEventoAgenda_(body.calendarId, body.clienteNome, body.clienteEmail, body.observacoes, body.inicio, body.duracaoMinutos);
       case "gerarContratoPDF": return acaoGerarContratoPDF_(body.dados);
       default: return { ok: false, erro: "Ação desconhecida: " + body.action };
     }
@@ -90,8 +90,19 @@ function acaoListarCalendarios_() {
 // escolhido em Configurações (guardado no Firestore); se não vier, cai
 // pra Script Property AGENDA_CALENDAR_ID e, por último, pro calendário
 // principal. "inicio" é uma string ISO (ex: "2026-08-10T14:00:00").
-function acaoCriarEventoAgenda_(calendarId, titulo, descricao, inicio, duracaoMinutos) {
-  if (!titulo || !inicio) return { ok: false, erro: "Parâmetros titulo/inicio são obrigatórios." };
+//
+// Título e descrição são fixos por padrão de negócio (não vêm do
+// chamador) — o Google Calendar mostra o MESMO título/descrição pra todo
+// mundo que vê o evento (organizador e convidados), não existe
+// personalização por destinatário. Por isso: o título usa a frase do
+// ponto de vista do Benedito (é ele quem organiza / vê na própria Agenda
+// primeiro) e a descrição usa a frase do ponto de vista do cliente — as
+// duas ficam visíveis pra ambos, só em campos diferentes.
+// Se "clienteEmail" vier preenchido, ele é adicionado como convidado e o
+// Calendar dispara o convite por e-mail nativo dele (mesmo convite que
+// aparece pra qualquer evento com convidado).
+function acaoCriarEventoAgenda_(calendarId, clienteNome, clienteEmail, observacoes, inicio, duracaoMinutos) {
+  if (!clienteNome || !inicio) return { ok: false, erro: "Parâmetros clienteNome/inicio são obrigatórios." };
   var calendario = CalendarApp.getCalendarById(calendarId || obterCalendarId_());
   if (!calendario) return { ok: false, erro: "Calendário não encontrado: " + calendarId };
 
@@ -99,7 +110,14 @@ function acaoCriarEventoAgenda_(calendarId, titulo, descricao, inicio, duracaoMi
   var duracao = duracaoMinutos || 60;
   var dataFim = new Date(dataInicio.getTime() + duracao * 60000);
 
-  var evento = calendario.createEvent(titulo, dataInicio, dataFim, { description: descricao || "" });
+  var titulo = "Reunião Consultoria Jornada do Milhão com " + clienteNome;
+  var descricao = "Reunião Consultoria " + clienteNome + " com Benedito Viegas - Jornada do Milhão";
+  if (observacoes) descricao += "\n\n" + observacoes;
+
+  var opcoes = { description: descricao };
+  if (clienteEmail) { opcoes.guests = clienteEmail; opcoes.sendInvites = true; }
+
+  var evento = calendario.createEvent(titulo, dataInicio, dataFim, opcoes);
   return { ok: true, googleEventId: evento.getId(), url: evento.getHtmlLink ? evento.getHtmlLink() : "" };
 }
 

@@ -253,6 +253,42 @@ const comboAgendamento = criarComboCliente("ma-cliente-busca", "ma-cliente-dropd
 const comboOportunidade = criarComboCliente("mo-cliente-busca", "mo-cliente-dropdown");
 const comboContrato = criarComboCliente("mct-cliente-busca", "mct-cliente-dropdown", (cliente) => preencherCamposFaltantesContrato(cliente.id));
 
+// Nível de interesse do lead/oportunidade — escala fixa de 5 pontos com
+// emoji, tratada como "tag" visual nos cards e tabelas (não é uma lista
+// que cresce, então não entra na regra de combobox filtrável — é um
+// seletor de 5 botões fixos, tipo avaliação por estrelas).
+const NIVEL_INTERESSE = {
+  1: { emoji: "😠", label: "Muito desinteressado" },
+  2: { emoji: "🙁", label: "Interesse moderadamente baixo" },
+  3: { emoji: "😐", label: "Interesse médio" },
+  4: { emoji: "🙂", label: "Interesse moderadamente alto" },
+  5: { emoji: "🤩", label: "Muito interessado" }
+};
+function emojiNivelInteresse(n) { return n && NIVEL_INTERESSE[n] ? NIVEL_INTERESSE[n].emoji : ""; }
+function labelNivelInteresse(n) { return n && NIVEL_INTERESSE[n] ? `${NIVEL_INTERESSE[n].emoji} ${NIVEL_INTERESSE[n].label}` : "—"; }
+
+function criarPickerNivelInteresse(containerId) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = Object.keys(NIVEL_INTERESSE).map((n) => (
+    `<button type="button" class="nivel-btn" data-nivel="${n}" title="${esc(NIVEL_INTERESSE[n].label)}">${NIVEL_INTERESSE[n].emoji}</button>`
+  )).join("");
+  const api = { valor: null };
+  function marcar() {
+    el.querySelectorAll(".nivel-btn").forEach((b) => b.classList.toggle("selected", Number(b.dataset.nivel) === api.valor));
+  }
+  el.querySelectorAll(".nivel-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const n = Number(btn.dataset.nivel);
+      api.valor = api.valor === n ? null : n; // clicar de novo no mesmo desmarca
+      marcar();
+    });
+  });
+  api.set = (n) => { api.valor = n || null; marcar(); };
+  return api;
+}
+const pickerNivelAgendamento = criarPickerNivelInteresse("ma-nivel-interesse");
+const pickerNivelOportunidade = criarPickerNivelInteresse("mo-nivel-interesse");
+
 // Máscara de CPF/CNPJ — detecta pela quantidade de dígitos digitados (até
 // 11 = CPF, 12+ = CNPJ) e reformata a cada tecla.
 function aplicarMascaraCpfCnpj(valor) {
@@ -545,10 +581,10 @@ function onCardClick(funil, cardId) {
 function renderCardAgendamento(a) {
   const etapaCfg = STATE.etapasAgendamento.find((e) => e.id === a.etapa);
   return `
-    <div class="kcard-nome">${esc(a.clienteNome)}</div>
+    <div class="kcard-nome">${esc(a.clienteNome)}${a.nivelInteresse ? ` <span class="kcard-nivel" title="${esc(labelNivelInteresse(a.nivelInteresse))}">${emojiNivelInteresse(a.nivelInteresse)}</span>` : ""}</div>
     <div class="kcard-sub">${esc(a.telefone || "")}</div>
     <div class="kcard-foot">
-      <span class="kcard-prazo">${fmtData(a.data)} ${esc(a.hora || "")}</span>
+      <span class="kcard-prazo">${a.data ? `${fmtData(a.data)} ${esc(a.hora || "")}` : ""}</span>
       ${renderBadgeSla(a.dataEntrouEtapa, etapaCfg)}
     </div>
     ${a.motivoPerda ? `<div class="sublabel" style="margin-top:6px;">Motivo: ${esc(a.motivoPerda)}</div>` : ""}
@@ -575,12 +611,16 @@ async function moverAgendamento(id, novaEtapa) {
     return;
   }
 
-  // Telefone é obrigatório pra chegar numa etapa que dispara a Agenda —
-  // sem ele, abre a edição pedindo antes de completar o movimento.
-  if (etapaCfg && etapaCfg.entraFunilVendas && !ag.telefone) {
-    mostrarErro(`Telefone é obrigatório pra mover pra "${etapaCfg.nome}" — preencha e salve pra continuar.`);
-    editarAgendamento(id);
+  // Telefone, e-mail e data são obrigatórios só quando o lead chega numa
+  // etapa que dispara a Agenda ("Agendado") — sem isso, abre o modal
+  // pedindo as informações do agendamento antes de completar o
+  // movimento. Em qualquer outra etapa o card transita livre, sem pedir
+  // nada. O e-mail entrou aqui porque o convite da reunião é enviado
+  // direto pra ele via Google Agenda.
+  if (etapaCfg && etapaCfg.entraFunilVendas && (!ag.telefone || !ag.email || !ag.data)) {
+    mostrarErro(`Telefone, e-mail e data/hora são obrigatórios pra mover pra "${etapaCfg.nome}" — preencha e salve pra continuar.`);
     pendingAgendamentoMoveEtapa = novaEtapa;
+    editarAgendamento(id, { confirmarAgendamento: true });
     return;
   }
 
@@ -589,6 +629,17 @@ async function moverAgendamento(id, novaEtapa) {
     await addDoc(collection(db, "agendamentos", id, "historico"), { tipo: "mudanca_etapa", de: ag.etapa, para: novaEtapa, timestamp: serverTimestamp() });
     if (etapaCfg && etapaCfg.entraFunilVendas) await processarAgendamentoAgendado(id, { ...ag, etapa: novaEtapa });
   } catch (err) { mostrarErro("Não foi possível mover: " + err.message); }
+}
+
+// Completa o cadastro do cliente com campos que vieram preenchidos em
+// algum outro formulário (agendamento, contrato...) mas ainda estavam em
+// branco no cadastro — nunca sobrescreve o que já existia.
+async function patchClienteSeFaltando(clienteId, campos) {
+  if (!clienteId) return;
+  const clienteAtual = STATE.clientes.find((c) => c.id === clienteId);
+  const patch = {};
+  Object.entries(campos).forEach(([k, v]) => { if (v && !(clienteAtual && clienteAtual[k])) patch[k] = v; });
+  if (Object.keys(patch).length) await updateDoc(doc(db, "clientes", clienteId), patch);
 }
 
 // Só a etapa marcada "entra automaticamente no Funil de Vendas" (por
@@ -609,6 +660,8 @@ async function processarAgendamentoAgendado(agendamentoId, dados) {
       try {
         await addDoc(collection(db, "oportunidades"), {
           clienteId: dados.clienteId || null, clienteNome: dados.clienteNome, telefone: dados.telefone || "",
+          email: dados.email || "", nivelInteresse: dados.nivelInteresse || null,
+          data: dados.data || "", hora: dados.hora || "",
           agendamentoId, etapa: primeiraEtapaVenda.id, valorProposto: 0, observacoes: dados.observacoes || "",
           perdida: false, motivoPerda: "", fechada: false,
           dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp()
@@ -625,7 +678,7 @@ async function processarAgendamentoAgendado(agendamentoId, dados) {
       // na Agenda. Ver README se algum dia isso passar a ser um problema.
       const inicioISO = `${dados.data}T${dados.hora || "09:00"}:00`;
       const resp = await chamarAppsScript("criarEventoAgenda", {
-        calendarId, titulo: dados.clienteNome, descricao: dados.observacoes || "", inicio: inicioISO
+        calendarId, clienteNome: dados.clienteNome, clienteEmail: dados.email || "", observacoes: dados.observacoes || "", inicio: inicioISO
       });
       await updateDoc(doc(db, "agendamentos", agendamentoId), { enviadoAgenda: true, googleEventId: resp.googleEventId || null });
     } catch (err) {
@@ -642,25 +695,37 @@ async function excluirAgendamento(id) {
 document.getElementById("btn-novo-agendamento").addEventListener("click", () => {
   pendingAgendamentoEditId = null;
   pendingAgendamentoMoveEtapa = null;
-  document.getElementById("modal-agendamento-titulo").textContent = "Novo agendamento manual";
+  document.getElementById("modal-agendamento-titulo").textContent = "Novo lead";
   comboAgendamento.reset();
   document.getElementById("ma-telefone").value = "";
-  document.getElementById("ma-data").value = hojeStr();
+  document.getElementById("ma-email").value = "";
+  document.getElementById("ma-data").value = "";
   document.getElementById("ma-hora").value = "";
   document.getElementById("ma-obs").value = "";
+  pickerNivelAgendamento.set(null);
+  document.getElementById("ma-campos-agendamento").style.display = "none";
   abrirModal("modal-agendamento");
 });
-function editarAgendamento(id) {
+// opts.confirmarAgendamento: chamado pelo gate de mover pra "Agendado" —
+// nesse caso o bloco de data/hora aparece e fica implícito que é pra
+// preencher agora. Fora disso (editar um lead comum, ou o ✏️ do modal de
+// detalhe) o bloco só aparece se o lead já tiver data salva.
+function editarAgendamento(id, opts = {}) {
   const a = STATE.agendamentos.find((x) => x.id === id);
   if (!a) return;
   pendingAgendamentoEditId = id;
-  pendingAgendamentoMoveEtapa = null;
-  document.getElementById("modal-agendamento-titulo").textContent = `Editar agendamento — ${a.clienteNome}`;
+  if (!opts.confirmarAgendamento) pendingAgendamentoMoveEtapa = null;
+  document.getElementById("modal-agendamento-titulo").textContent = opts.confirmarAgendamento
+    ? `Confirmar agendamento — ${a.clienteNome}`
+    : `Editar lead — ${a.clienteNome}`;
   comboAgendamento.selecionar({ id: a.clienteId || null, nome: a.clienteNome, telefone: a.telefone || "" });
   document.getElementById("ma-telefone").value = a.telefone || "";
-  document.getElementById("ma-data").value = a.data || "";
+  document.getElementById("ma-email").value = a.email || "";
+  document.getElementById("ma-data").value = a.data || (opts.confirmarAgendamento ? hojeStr() : "");
   document.getElementById("ma-hora").value = a.hora || "";
   document.getElementById("ma-obs").value = a.observacoes || "";
+  pickerNivelAgendamento.set(a.nivelInteresse || null);
+  document.getElementById("ma-campos-agendamento").style.display = (opts.confirmarAgendamento || a.data) ? "" : "none";
   abrirModal("modal-agendamento");
 }
 document.getElementById("btn-salvar-agendamento").addEventListener("click", async () => {
@@ -669,21 +734,32 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
 
   if (pendingAgendamentoEditId) {
     const telefoneEditado = document.getElementById("ma-telefone").value.trim() || cliente.telefone || "";
-    if (pendingAgendamentoMoveEtapa && !telefoneEditado) { mostrarErro("Telefone é obrigatório pra continuar."); return; }
+    const emailEditado = document.getElementById("ma-email").value.trim() || cliente.email || "";
+    const dataEditada = document.getElementById("ma-data").value || "";
+    const nivelEditado = pickerNivelAgendamento.valor;
+    if (pendingAgendamentoMoveEtapa) {
+      if (!telefoneEditado) { mostrarErro("Telefone é obrigatório pra continuar."); return; }
+      if (!emailEditado) { mostrarErro("E-mail é obrigatório pra continuar."); return; }
+      if (!dataEditada) { mostrarErro("Data é obrigatória pra continuar."); return; }
+    }
     try {
       const agendamentoOriginal = STATE.agendamentos.find((a) => a.id === pendingAgendamentoEditId);
       await updateDoc(doc(db, "agendamentos", pendingAgendamentoEditId), {
         clienteId: cliente.id, clienteNome: cliente.nome,
         telefone: telefoneEditado,
-        data: document.getElementById("ma-data").value || hojeStr(),
+        email: emailEditado,
+        nivelInteresse: nivelEditado,
+        data: dataEditada,
         hora: document.getElementById("ma-hora").value || "",
         observacoes: document.getElementById("ma-obs").value.trim(),
         updatedAt: serverTimestamp()
       });
+      await patchClienteSeFaltando(cliente.id, { telefone: telefoneEditado, email: emailEditado });
       // Se a edição foi disparada por uma tentativa de arrastar pra uma
       // etapa que exigia telefone, completa o movimento agora que ele foi
       // preenchido — sem isso o card ficaria só editado, sem nunca chegar
       // na etapa que o usuário arrastou.
+      const confirmandoAgendamento = !!pendingAgendamentoMoveEtapa;
       if (pendingAgendamentoMoveEtapa) {
         const novaEtapa = pendingAgendamentoMoveEtapa;
         pendingAgendamentoMoveEtapa = null;
@@ -694,7 +770,7 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
         });
         if (etapaCfg && etapaCfg.entraFunilVendas) {
           await processarAgendamentoAgendado(pendingAgendamentoEditId, {
-            clienteId: cliente.id, clienteNome: cliente.nome, telefone: telefoneEditado,
+            clienteId: cliente.id, clienteNome: cliente.nome, telefone: telefoneEditado, email: emailEditado, nivelInteresse: nivelEditado,
             data: document.getElementById("ma-data").value, hora: document.getElementById("ma-hora").value,
             observacoes: document.getElementById("ma-obs").value.trim(),
             convertido: agendamentoOriginal ? agendamentoOriginal.convertido : false,
@@ -704,7 +780,7 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
       }
       fecharModal("modal-agendamento");
       pendingAgendamentoEditId = null;
-      mostrarToast("Agendamento atualizado.");
+      mostrarToast(confirmandoAgendamento ? "Agendamento confirmado." : "Lead atualizado.");
     } catch (err) { mostrarErro(err.message); }
     return;
   }
@@ -712,19 +788,31 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
   const primeiraEtapa = [...STATE.etapasAgendamento].sort((a, b) => a.ordem - b.ordem)[0];
   if (!primeiraEtapa) { mostrarErro("Cadastre ao menos uma etapa do Funil de Agendamento em Configurações."); return; }
   const telefoneNovo = document.getElementById("ma-telefone").value.trim() || cliente.telefone || "";
-  if (primeiraEtapa.entraFunilVendas && !telefoneNovo) { mostrarErro(`Telefone é obrigatório pra criar direto em "${primeiraEtapa.nome}".`); return; }
+  const emailNovo = document.getElementById("ma-email").value.trim() || cliente.email || "";
+  const dataNova = document.getElementById("ma-data").value || "";
+  // Normalmente a 1ª etapa é "Novo Lead" (sem entraFunilVendas), então um
+  // lead novo não pede telefone/e-mail/data — só se alguém configurar o
+  // funil pra já nascer direto em "Agendado".
+  if (primeiraEtapa.entraFunilVendas) {
+    if (!telefoneNovo) { mostrarErro(`Telefone é obrigatório pra criar direto em "${primeiraEtapa.nome}".`); return; }
+    if (!emailNovo) { mostrarErro(`E-mail é obrigatório pra criar direto em "${primeiraEtapa.nome}".`); return; }
+    if (!dataNova) { mostrarErro(`Data é obrigatória pra criar direto em "${primeiraEtapa.nome}".`); return; }
+  }
   const dados = {
     clienteId: cliente.id, clienteNome: cliente.nome,
     telefone: telefoneNovo,
-    data: document.getElementById("ma-data").value || hojeStr(),
+    email: emailNovo,
+    nivelInteresse: pickerNivelAgendamento.valor,
+    data: dataNova,
     hora: document.getElementById("ma-hora").value || "",
     etapa: primeiraEtapa.id, googleEventId: null, convertido: false, enviadoAgenda: false, motivoPerda: "",
     observacoes: document.getElementById("ma-obs").value.trim()
   };
   try {
     const ref = await addDoc(collection(db, "agendamentos"), { ...dados, dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    await patchClienteSeFaltando(cliente.id, { telefone: telefoneNovo, email: emailNovo });
     fecharModal("modal-agendamento");
-    mostrarToast("Agendamento criado.");
+    mostrarToast("Lead criado.");
     if (primeiraEtapa.entraFunilVendas) await processarAgendamentoAgendado(ref.id, dados);
   } catch (err) { mostrarErro(err.message); }
 });
@@ -737,6 +825,8 @@ function abrirDetalheAgendamento(id) {
     titulo: a.clienteNome,
     campos: [
       ["Telefone", esc(a.telefone || "—")],
+      ["E-mail", esc(a.email || "—")],
+      ["Nível de interesse", esc(labelNivelInteresse(a.nivelInteresse))],
       ["Data", esc(fmtData(a.data))],
       ["Hora", esc(a.hora || "—")],
       ["Etapa", esc(etapaCfg ? etapaCfg.nome : "—")],
@@ -759,8 +849,8 @@ function colunasVendas() {
 function renderCardOportunidade(o) {
   const etapaCfg = STATE.etapasVenda.find((e) => e.id === o.etapa);
   return `
-    <div class="kcard-nome">${esc(o.clienteNome)}</div>
-    <div class="kcard-sub">${esc(o.telefone || "")}</div>
+    <div class="kcard-nome">${esc(o.clienteNome)}${o.nivelInteresse ? ` <span class="kcard-nivel" title="${esc(labelNivelInteresse(o.nivelInteresse))}">${emojiNivelInteresse(o.nivelInteresse)}</span>` : ""}</div>
+    <div class="kcard-sub">${esc(o.telefone || "")}${o.data ? ` · ${fmtData(o.data)} ${esc(o.hora || "")}` : ""}</div>
     <div class="kcard-foot">
       <span class="kcard-valor">${fmtMoeda(o.valorProposto)}</span>
       ${renderBadgeSla(o.dataEntrouEtapa, etapaCfg)}
@@ -795,14 +885,18 @@ async function moverOportunidade(id, novaEtapa) {
     pendingContratoOportunidadeId = id;
     pendingContratoEtapaFechamentoId = novaEtapa;
     comboContrato.selecionar({ id: op.clienteId || null, nome: op.clienteNome, telefone: op.telefone || "" });
-    document.getElementById("mct-telefone").value = op.telefone || "";
-    document.getElementById("mct-email").value = "";
+    // Preenche primeiro pelo cadastro do cliente, depois sobrepõe com o
+    // que já estava na oportunidade (mais recente/específico) — sem essa
+    // ordem, o telefone/e-mail que vieram do agendamento seriam apagados
+    // se o cadastro do cliente ainda estivesse em branco.
+    preencherCamposFaltantesContrato(op.clienteId);
+    document.getElementById("mct-telefone").value = op.telefone || document.getElementById("mct-telefone").value;
+    document.getElementById("mct-email").value = op.email || document.getElementById("mct-email").value;
     document.getElementById("mct-valor").value = op.valorProposto ? String(op.valorProposto).replace(".", ",") : "";
     document.getElementById("mct-forma").value = "avista";
     document.getElementById("mct-primeiraparcela").value = hojeStr();
     document.getElementById("mct-linha-parcelamento").style.display = "none";
     atualizarPreviewParcelas();
-    preencherCamposFaltantesContrato(op.clienteId);
     abrirModal("modal-contrato");
     return;
   }
@@ -847,8 +941,12 @@ document.getElementById("btn-nova-oportunidade").addEventListener("click", () =>
   document.getElementById("modal-oportunidade-titulo").textContent = "Nova oportunidade";
   comboOportunidade.reset();
   document.getElementById("mo-telefone").value = "";
+  document.getElementById("mo-email").value = "";
   document.getElementById("mo-valor").value = "";
+  document.getElementById("mo-data").value = "";
+  document.getElementById("mo-hora").value = "";
   document.getElementById("mo-obs").value = "";
+  pickerNivelOportunidade.set(null);
   abrirModal("modal-oportunidade");
 });
 function editarOportunidade(id) {
@@ -858,23 +956,34 @@ function editarOportunidade(id) {
   document.getElementById("modal-oportunidade-titulo").textContent = `Editar oportunidade — ${o.clienteNome}`;
   comboOportunidade.selecionar({ id: o.clienteId || null, nome: o.clienteNome, telefone: o.telefone || "" });
   document.getElementById("mo-telefone").value = o.telefone || "";
+  document.getElementById("mo-email").value = o.email || "";
   document.getElementById("mo-valor").value = o.valorProposto ? String(o.valorProposto).replace(".", ",") : "";
+  document.getElementById("mo-data").value = o.data || "";
+  document.getElementById("mo-hora").value = o.hora || "";
   document.getElementById("mo-obs").value = o.observacoes || "";
+  pickerNivelOportunidade.set(o.nivelInteresse || null);
   abrirModal("modal-oportunidade");
 }
 document.getElementById("btn-salvar-oportunidade").addEventListener("click", async () => {
   const cliente = comboOportunidade.clienteSelecionado;
   if (!cliente) { mostrarErro("Selecione um cliente da lista, ou clique em \"+ Criar cliente\" pra cadastrar um novo."); return; }
+  const telefoneOp = document.getElementById("mo-telefone").value.trim() || cliente.telefone || "";
+  const emailOp = document.getElementById("mo-email").value.trim() || cliente.email || "";
 
   if (pendingOportunidadeEditId) {
     try {
       await updateDoc(doc(db, "oportunidades", pendingOportunidadeEditId), {
         clienteId: cliente.id, clienteNome: cliente.nome,
-        telefone: document.getElementById("mo-telefone").value.trim() || cliente.telefone || "",
+        telefone: telefoneOp,
+        email: emailOp,
+        nivelInteresse: pickerNivelOportunidade.valor,
         valorProposto: parseMoeda(document.getElementById("mo-valor").value),
+        data: document.getElementById("mo-data").value || "",
+        hora: document.getElementById("mo-hora").value || "",
         observacoes: document.getElementById("mo-obs").value.trim(),
         updatedAt: serverTimestamp()
       });
+      await patchClienteSeFaltando(cliente.id, { telefone: telefoneOp, email: emailOp });
       fecharModal("modal-oportunidade");
       pendingOportunidadeEditId = null;
       mostrarToast("Oportunidade atualizada.");
@@ -887,13 +996,18 @@ document.getElementById("btn-salvar-oportunidade").addEventListener("click", asy
   try {
     await addDoc(collection(db, "oportunidades"), {
       clienteId: cliente.id, clienteNome: cliente.nome,
-      telefone: document.getElementById("mo-telefone").value.trim() || cliente.telefone || "",
+      telefone: telefoneOp,
+      email: emailOp,
+      nivelInteresse: pickerNivelOportunidade.valor,
       agendamentoId: null, etapa: primeiraEtapa.id,
       valorProposto: parseMoeda(document.getElementById("mo-valor").value),
+      data: document.getElementById("mo-data").value || "",
+      hora: document.getElementById("mo-hora").value || "",
       observacoes: document.getElementById("mo-obs").value.trim(),
       perdida: false, motivoPerda: "", fechada: false,
       dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp()
     });
+    await patchClienteSeFaltando(cliente.id, { telefone: telefoneOp, email: emailOp });
     fecharModal("modal-oportunidade");
     mostrarToast("Oportunidade criada.");
   } catch (err) { mostrarErro(err.message); }
@@ -907,6 +1021,10 @@ function abrirDetalheOportunidade(id) {
     titulo: o.clienteNome,
     campos: [
       ["Telefone", esc(o.telefone || "—")],
+      ["E-mail", esc(o.email || "—")],
+      ["Nível de interesse", esc(labelNivelInteresse(o.nivelInteresse))],
+      ["Data do agendamento", esc(fmtData(o.data))],
+      ["Hora do agendamento", esc(o.hora || "—")],
       ["Valor proposto", esc(fmtMoeda(o.valorProposto))],
       ["Etapa", esc(etapaCfg ? etapaCfg.nome : "—")],
       ["Observações", esc(o.observacoes || "—")],
@@ -1122,7 +1240,7 @@ function renderTabelaContratos() {
       <td>${c.formaPagamento === "avista" ? "À vista" : `Entrada + ${c.numParcelas}x`}</td>
       <td>${pagas}/${parcelasDoContrato.length}</td>
       <td>${fmtDataHora(c.dataGeracao)}</td>
-      <td>${links ? `<a href="${esc(links.download)}" onclick="event.stopPropagation()">Baixar PDF</a>` : c.pdfUrl ? `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Ver PDF</a>` : "—"}</td>
+      <td>${links ? `<a href="${esc(links.download)}" onclick="event.stopPropagation()">Baixar PDF</a>` : c.pdfUrl ? `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Ver PDF</a>` : `<a href="#" onclick="event.stopPropagation();event.preventDefault();window.__jm.gerarPdfContratoExistente('${c.id}')">Gerar PDF</a>`}</td>
     </tr>`;
   }).join("") || `<tr><td colspan="6"><div class="empty">Nenhum contrato ainda.</div></td></tr>`;
 }
@@ -1177,7 +1295,10 @@ function abrirDetalheContrato(id) {
   } else if (c.pdfUrl) {
     campos.push(["PDF", `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener">Ver PDF</a>`]);
   } else {
-    campos.push(["PDF", "Ainda não gerado — veja Configurações → Integrações se o Apps Script está implantado."]);
+    campos.push(["PDF", `
+      <p class="hint" style="margin-bottom:8px;">Ainda não gerado (pode ter sido criado antes do Apps Script estar configurado).</p>
+      <button class="btn btn-primary" onclick="window.__jm.gerarPdfContratoExistente('${id}')">🔄 Gerar PDF agora</button>
+    `]);
   }
   abrirDetalhe({
     titulo: c.clienteNome,
@@ -1185,6 +1306,27 @@ function abrirDetalheContrato(id) {
     onEditar: () => editarContratoStatus(id),
     onExcluir: () => excluirContrato(id)
   });
+}
+
+// Cobre contratos que ficaram sem PDF (ex: criados antes do Code.gs estar
+// configurado com CONTRATO_TEMPLATE_DOC_ID) — gera com os mesmos dados
+// já salvos no contrato, sem precisar recriar nada.
+async function gerarPdfContratoExistente(id) {
+  const c = STATE.contratos.find((x) => x.id === id);
+  if (!c) return;
+  try {
+    const resp = await chamarAppsScript("gerarContratoPDF", {
+      dados: {
+        CLIENTE: c.clienteNome,
+        VALOR_TOTAL: fmtMoeda(c.valorTotal),
+        FORMA_PAGAMENTO: c.formaPagamento === "avista" ? "À vista" : `Entrada de ${fmtMoeda(c.valorEntrada)} + ${c.numParcelas}x`,
+        DATA: fmtData(hojeStr())
+      }
+    });
+    await updateDoc(doc(db, "contratos", id), { pdfUrl: resp.url, pdfFileId: resp.fileId || null });
+    mostrarToast("PDF gerado com sucesso.");
+    abrirDetalheContrato(id);
+  } catch (err) { mostrarErro("Não foi possível gerar o PDF: " + err.message); }
 }
 
 /* ══════════════ FUNIL ADMINISTRATIVO ══════════════ */
@@ -2017,7 +2159,8 @@ function iniciarListeners() {
 window.__jm = {
   marcarParcelaPaga,
   abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela,
-  abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin
+  abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin,
+  gerarPdfContratoExistente
 };
 
 iniciarListeners();
