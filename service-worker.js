@@ -1,4 +1,4 @@
-const CACHE_NAME = "jm-v2";
+const CACHE_NAME = "jm-v3";
 const CORE_ASSETS = [
   "./",
   "./index.html",
