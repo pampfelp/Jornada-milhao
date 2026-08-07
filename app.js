@@ -25,7 +25,8 @@ const STATE = {
   periodoDespesasDe: primeiroDiaMes(),
   periodoDespesasAte: ultimoDiaMes(),
   periodoEntradasDe: primeiroDiaMes(),
-  periodoEntradasAte: ultimoDiaMes()
+  periodoEntradasAte: ultimoDiaMes(),
+  buscaDespesas: ""
 };
 
 let pendingContratoOportunidadeId = null;
@@ -1858,6 +1859,10 @@ document.getElementById("btn-desp-limpar-periodo").addEventListener("click", () 
   document.getElementById("desp-periodo-ate").value = "";
   renderTabelaDespesas();
 });
+document.getElementById("desp-busca").addEventListener("input", (e) => {
+  STATE.buscaDespesas = e.target.value || "";
+  renderTabelaDespesas();
+});
 
 // "Status" de uma despesa: ausente = "esperado" (pendente) — despesas
 // lançadas antes desse campo existir contam como pendentes por padrão,
@@ -1882,7 +1887,21 @@ function renderTabelaDespesas() {
     <div class="kpi-card positive"><div class="label">Total pago</div><div class="value">${fmtMoeda(somar(pagas))}</div><div class="sub">todas as pagas do período</div></div>
   `;
 
-  document.getElementById("tabela-despesas").innerHTML = despesasFiltradas
+  // A busca só filtra as linhas mostradas na tabela — os KPIs em cima
+  // continuam refletindo o período inteiro, não o texto buscado.
+  const termoBusca = STATE.buscaDespesas.trim().toLowerCase();
+  const linhasVisiveis = !termoBusca ? despesasFiltradas : despesasFiltradas.filter((d) => {
+    const status = statusDespesa(d);
+    const vencida = status === "esperado" && (d.data || "") <= hoje;
+    const statusLabel = status === "realizado" ? "pago" : vencida ? "a pagar" : "pendente";
+    const alvo = [
+      d.descricao, d.categoria, d.tipo === "despesa" ? "despesa" : "outro custo",
+      String(d.valor || ""), fmtMoeda(d.valor), fmtData(d.data), statusLabel, d.chavePix
+    ].join(" ").toLowerCase();
+    return alvo.includes(termoBusca);
+  });
+
+  document.getElementById("tabela-despesas").innerHTML = linhasVisiveis
     .slice().sort((a, b) => (b.data || "").localeCompare(a.data || ""))
     .map((d) => {
       const status = statusDespesa(d);
@@ -1896,7 +1915,7 @@ function renderTabelaDespesas() {
       <td><span class="stamp ${status === "realizado" ? "realizado" : vencida ? "vencido" : "esperado"}">${status === "realizado" ? "Pago" : vencida ? "A pagar" : "Pendente"}</span></td>
       <td>${status === "realizado" ? "—" : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('despesa','${d.id}')">Marcar pago</button>`}</td>
     </tr>`;
-    }).join("") || `<tr><td colspan="9"><div class="empty">Nenhuma despesa no período.</div></td></tr>`;
+    }).join("") || `<tr><td colspan="9"><div class="empty">${termoBusca ? "Nenhuma despesa encontrada pra essa busca." : "Nenhuma despesa no período."}</div></td></tr>`;
 }
 
 /* ══════════════ ENTRADAS (recebimentos avulsos, fora de contrato) ══════════════

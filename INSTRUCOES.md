@@ -62,8 +62,7 @@ tipo de dado, você edita a célula e ela salva sozinha, seleciona várias
 linhas e apaga de uma vez, e tem botões pra exportar em CSV/Excel ou
 importar um arquivo CSV/Excel de uma vez.
 
-A senha que já vem configurada neste pacote é **`jornada2026`**. Troque
-assim que puder — veja abaixo.
+A senha atual é **`jornada123`**. Troque quando quiser — veja abaixo.
 
 **Guarde o link e a senha dessa página em um lugar seguro** — quem tiver
 os dois consegue editar ou apagar qualquer dado do sistema, incluindo o

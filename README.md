@@ -103,8 +103,8 @@ apagar registros sem precisar entrar no console do Firebase. **Não há link
 pra ela em nenhum menu do app** — o acesso é direto pela URL
 `.../planilha.html` da hospedagem.
 
-A senha padrão gerada neste pacote é `jornada2026` — troque assim que
-puder (veja "Trocar a senha da planilha administrativa" abaixo). Ela é só
+A senha atual da planilha é `jornada123` (veja "Trocar a senha da
+planilha administrativa" abaixo pra trocar de novo). Ela é só
 um cadeado contra acesso acidental, **não é segurança de verdade** —
 qualquer pessoa com conhecimento técnico consegue escrever direto no
 Firestore ignorando essa senha.
