@@ -291,7 +291,10 @@ app (Configurações) ou na `planilha.html`:
   tudo" limpa) e 3 KPIs calculados sobre o período filtrado: **A pagar até
   hoje** (pendentes com data ≤ hoje — o que já venceu ou vence hoje sem
   estar pago), **Total pendente** (todas as não pagas do período, incluindo
-  as com vencimento futuro) e **Total pago**.
+  as com vencimento futuro) e **Total pago**. Cada lançamento também tem um
+  campo opcional de **Chave PIX** (pra quem vai receber aquele pagamento),
+  visível na tabela (fonte monoespaçada, seleciona tudo num clique pra
+  copiar) e no modal de detalhe.
 - **Log de movimentação do funil**: toda mudança de etapa (arrastar,
   perda, fechamento) grava um registro em `historico/` com `de` (etapa
   anterior) e `para` (etapa nova). O botão "📊 Relatório" em cada funil usa

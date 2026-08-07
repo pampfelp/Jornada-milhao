@@ -109,6 +109,7 @@ header.top .view-desc{font-size:13px;color:var(--ink-soft);margin-top:6px;max-wi
 .nivel-btn.selected{border-color:var(--dourado);background:var(--dourado-soft);}
 .kcard-nivel{font-size:13px;}
 .contato-cliente-linha{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+.mono-select{font-family:var(--mono);font-size:12px;user-select:all;}
 
 table{width:100%;border-collapse:collapse;background:var(--panel);border-radius:var(--radius);overflow:hidden;margin-top:4px;}
 thead th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);padding:10px 12px;border-bottom:2px solid var(--dourado);background:var(--panel-2);}

@@ -1655,6 +1655,7 @@ function abrirModalDespesa() {
   document.getElementById("md-categoria").value = "";
   document.getElementById("md-valor").value = "";
   document.getElementById("md-data").value = hojeStr();
+  document.getElementById("md-chavepix").value = "";
   document.getElementById("md-tipo").value = "despesa";
   document.getElementById("md-recorrente").checked = false;
   abrirModal("modal-despesa");
@@ -1671,6 +1672,7 @@ function editarDespesa(id) {
   document.getElementById("md-categoria").value = d.categoria || "";
   document.getElementById("md-valor").value = String(d.valor || "").replace(".", ",");
   document.getElementById("md-data").value = d.data || hojeStr();
+  document.getElementById("md-chavepix").value = d.chavePix || "";
   document.getElementById("md-tipo").value = d.tipo || "despesa";
   document.getElementById("md-recorrente").checked = !!d.recorrente;
   abrirModal("modal-despesa");
@@ -1685,6 +1687,7 @@ document.getElementById("btn-salvar-despesa").addEventListener("click", async ()
   const dados = {
     descricao, categoria: document.getElementById("md-categoria").value.trim(),
     tipo: document.getElementById("md-tipo").value, valor, data,
+    chavePix: document.getElementById("md-chavepix").value.trim(),
     recorrente, diaVencimento: recorrente ? parseInt(data.split("-")[2], 10) : null
   };
   try {
@@ -1717,6 +1720,7 @@ function abrirDetalheDespesa(id) {
       ["Tipo", d.tipo === "despesa" ? "Despesa" : "Outro custo"],
       ["Valor", esc(fmtMoeda(d.valor))],
       ["Data", esc(fmtData(d.data))],
+      ["Chave PIX", esc(d.chavePix || "—")],
       ["Recorrente", d.recorrente ? `Sim (dia ${d.diaVencimento})` : "—"],
       d.status === "realizado"
         ? ["Status", `Pago em ${esc(fmtData(d.dataPagamento))}`]
@@ -1742,6 +1746,7 @@ async function lancarRecorrentesPendentes() {
       const dia = String(d.diaVencimento || 1).padStart(2, "0");
       await addDoc(collection(db, "despesas"), {
         descricao: d.descricao, categoria: d.categoria, tipo: d.tipo, valor: d.valor,
+        chavePix: d.chavePix || "",
         data: `${mesAtual}-${dia}`, recorrente: false, diaVencimento: null,
         ultimoMesLancado: null, origemRecorrenteId: d.id,
         status: "esperado", dataPagamento: null, createdAt: serverTimestamp()
@@ -1813,11 +1818,12 @@ function renderTabelaDespesas() {
       <td>${esc(d.descricao)}</td><td>${esc(d.categoria || "—")}</td>
       <td>${d.tipo === "despesa" ? "Despesa" : "Outro custo"}</td>
       <td class="num">${fmtMoeda(d.valor)}</td><td>${fmtData(d.data)}</td>
+      <td class="mono-select">${esc(d.chavePix || "—")}</td>
       <td>${d.recorrente ? "Sim (dia " + d.diaVencimento + ")" : "—"}</td>
       <td><span class="stamp ${status === "realizado" ? "realizado" : vencida ? "vencido" : "esperado"}">${status === "realizado" ? "Pago" : vencida ? "A pagar" : "Pendente"}</span></td>
       <td>${status === "realizado" ? "—" : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.marcarDespesaPaga('${d.id}')">Marcar pago</button>`}</td>
     </tr>`;
-    }).join("") || `<tr><td colspan="8"><div class="empty">Nenhuma despesa no período.</div></td></tr>`;
+    }).join("") || `<tr><td colspan="9"><div class="empty">Nenhuma despesa no período.</div></td></tr>`;
 }
 
 /* ══════════════ CLIENTES ══════════════ */

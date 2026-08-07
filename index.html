@@ -181,7 +181,7 @@
     <div class="kpi-grid" id="despesas-kpis" style="margin-bottom:18px;"></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Data</th><th>Recorrente</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Data</th><th>Chave PIX</th><th>Recorrente</th><th>Status</th><th></th></tr></thead>
         <tbody id="tabela-despesas"></tbody>
       </table>
     </div>
@@ -461,6 +461,7 @@
       <div class="field"><label>Valor</label><input type="text" inputmode="decimal" id="md-valor" placeholder="0,00"></div>
       <div class="field"><label>Data</label><input type="date" id="md-data"></div>
     </div>
+    <div class="field"><label>Chave PIX</label><input type="text" id="md-chavepix" placeholder="CPF/CNPJ, e-mail, telefone ou chave aleatória"></div>
     <label class="checkbox-field"><input type="checkbox" id="md-recorrente"> Despesa recorrente (relança sozinha todo mês)</label>
     <div class="modal-actions">
       <button class="btn" data-fechar-modal="modal-despesa">Cancelar</button>
