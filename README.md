@@ -282,6 +282,16 @@ app (Configurações) ou na `planilha.html`:
   de download direto — não é preciso sair do sistema pra ver ou baixar.
 - **Despesas do mês no Painel Financeiro**: além dos KPIs agregados, uma
   tabela lista cada despesa/custo lançado no período selecionado.
+- **Status de pagamento nas Despesas & Custos**: cada lançamento tem
+  `status` ("esperado"/"realizado", mesmo vocabulário das parcelas) +
+  `dataPagamento` — um botão "Marcar pago" (na tabela e no modal de
+  detalhe) grava a data de hoje. Lançamentos antigos, de antes desse campo
+  existir, contam como pendentes por padrão (nunca foi registrado que
+  foram pagos). A tela tem um filtro de período (data início/fim, "Ver
+  tudo" limpa) e 3 KPIs calculados sobre o período filtrado: **A pagar até
+  hoje** (pendentes com data ≤ hoje — o que já venceu ou vence hoje sem
+  estar pago), **Total pendente** (todas as não pagas do período, incluindo
+  as com vencimento futuro) e **Total pago**.
 - **Log de movimentação do funil**: toda mudança de etapa (arrastar,
   perda, fechamento) grava um registro em `historico/` com `de` (etapa
   anterior) e `para` (etapa nova). O botão "📊 Relatório" em cada funil usa

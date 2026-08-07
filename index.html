@@ -173,9 +173,15 @@
         <button class="btn btn-primary" id="btn-nova-despesa-2">+ Nova despesa/custo</button>
       </div>
     </header>
+    <div class="row" style="margin-bottom:14px;align-items:flex-end;">
+      <div class="field"><label>De</label><input type="date" id="desp-periodo-de"></div>
+      <div class="field"><label>Até</label><input type="date" id="desp-periodo-ate"></div>
+      <button class="btn" id="btn-desp-limpar-periodo">Ver tudo</button>
+    </div>
+    <div class="kpi-grid" id="despesas-kpis" style="margin-bottom:18px;"></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Data</th><th>Recorrente</th></tr></thead>
+        <thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Data</th><th>Recorrente</th><th>Status</th><th></th></tr></thead>
         <tbody id="tabela-despesas"></tbody>
       </table>
     </div>

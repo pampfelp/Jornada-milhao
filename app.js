@@ -20,7 +20,9 @@ const STATE = {
   etapasAdmin: [],
   cardsAdmin: [],
   config: {},
-  periodoFinanceiro: new Date().toISOString().slice(0, 7)
+  periodoFinanceiro: new Date().toISOString().slice(0, 7),
+  periodoDespesasDe: primeiroDiaMes(),
+  periodoDespesasAte: ultimoDiaMes()
 };
 
 let pendingContratoOportunidadeId = null;
@@ -95,6 +97,16 @@ function fmtDataHora(timestamp) {
 
 function hojeStr() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function primeiroDiaMes() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+function ultimoDiaMes() {
+  const d = new Date();
+  const fim = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return fim.toISOString().slice(0, 10);
 }
 
 function addDias(dataStr, dias) {
@@ -1681,7 +1693,7 @@ document.getElementById("btn-salvar-despesa").addEventListener("click", async ()
     } else {
       await addDoc(collection(db, "despesas"), {
         ...dados, ultimoMesLancado: recorrente ? data.slice(0, 7) : null,
-        origemRecorrenteId: null, createdAt: serverTimestamp()
+        origemRecorrenteId: null, status: "esperado", dataPagamento: null, createdAt: serverTimestamp()
       });
     }
     fecharModal("modal-despesa");
@@ -1705,7 +1717,10 @@ function abrirDetalheDespesa(id) {
       ["Tipo", d.tipo === "despesa" ? "Despesa" : "Outro custo"],
       ["Valor", esc(fmtMoeda(d.valor))],
       ["Data", esc(fmtData(d.data))],
-      ["Recorrente", d.recorrente ? `Sim (dia ${d.diaVencimento})` : "—"]
+      ["Recorrente", d.recorrente ? `Sim (dia ${d.diaVencimento})` : "—"],
+      d.status === "realizado"
+        ? ["Status", `Pago em ${esc(fmtData(d.dataPagamento))}`]
+        : ["Status", `Pendente <button class="btn-small" style="margin-left:8px;" onclick="window.__jm.marcarDespesaPaga('${id}')">Marcar pago</button>`]
     ],
     onEditar: () => editarDespesa(id),
     onExcluir: () => excluirDespesa(id)
@@ -1728,7 +1743,8 @@ async function lancarRecorrentesPendentes() {
       await addDoc(collection(db, "despesas"), {
         descricao: d.descricao, categoria: d.categoria, tipo: d.tipo, valor: d.valor,
         data: `${mesAtual}-${dia}`, recorrente: false, diaVencimento: null,
-        ultimoMesLancado: null, origemRecorrenteId: d.id, createdAt: serverTimestamp()
+        ultimoMesLancado: null, origemRecorrenteId: d.id,
+        status: "esperado", dataPagamento: null, createdAt: serverTimestamp()
       });
       await updateDoc(doc(db, "despesas", d.id), { ultimoMesLancado: mesAtual });
     }
@@ -1740,15 +1756,68 @@ async function lancarRecorrentesPendentes() {
   }
 }
 
+async function marcarDespesaPaga(id) {
+  try {
+    await updateDoc(doc(db, "despesas", id), { status: "realizado", dataPagamento: hojeStr() });
+    mostrarToast("Despesa marcada como paga.");
+  } catch (err) { mostrarErro(err.message); }
+}
+
+document.getElementById("desp-periodo-de").value = STATE.periodoDespesasDe;
+document.getElementById("desp-periodo-ate").value = STATE.periodoDespesasAte;
+document.getElementById("desp-periodo-de").addEventListener("change", (e) => {
+  STATE.periodoDespesasDe = e.target.value || "";
+  renderTabelaDespesas();
+});
+document.getElementById("desp-periodo-ate").addEventListener("change", (e) => {
+  STATE.periodoDespesasAte = e.target.value || "";
+  renderTabelaDespesas();
+});
+document.getElementById("btn-desp-limpar-periodo").addEventListener("click", () => {
+  STATE.periodoDespesasDe = "";
+  STATE.periodoDespesasAte = "";
+  document.getElementById("desp-periodo-de").value = "";
+  document.getElementById("desp-periodo-ate").value = "";
+  renderTabelaDespesas();
+});
+
+// "Status" de uma despesa: ausente = "esperado" (pendente) — despesas
+// lançadas antes desse campo existir contam como pendentes por padrão,
+// já que nunca foi registrado se foram pagas.
+function statusDespesa(d) { return d.status === "realizado" ? "realizado" : "esperado"; }
+
 function renderTabelaDespesas() {
-  document.getElementById("tabela-despesas").innerHTML = STATE.despesas
+  const de = STATE.periodoDespesasDe, ate = STATE.periodoDespesasAte;
+  const despesasFiltradas = STATE.despesas.filter((d) => {
+    const data = d.data || "";
+    return (!de || data >= de) && (!ate || data <= ate);
+  });
+  const hoje = hojeStr();
+  const pendentes = despesasFiltradas.filter((d) => statusDespesa(d) === "esperado");
+  const pagas = despesasFiltradas.filter((d) => statusDespesa(d) === "realizado");
+  const aPagarAteHoje = pendentes.filter((d) => (d.data || "") <= hoje);
+  const somar = (lista) => lista.reduce((s, d) => s + (Number(d.valor) || 0), 0);
+
+  document.getElementById("despesas-kpis").innerHTML = `
+    <div class="kpi-card negative"><div class="label">A pagar até hoje</div><div class="value">${fmtMoeda(somar(aPagarAteHoje))}</div><div class="sub">pendentes com data de hoje ou anterior</div></div>
+    <div class="kpi-card"><div class="label">Total pendente</div><div class="value">${fmtMoeda(somar(pendentes))}</div><div class="sub">todas as não pagas do período (inclusive futuras)</div></div>
+    <div class="kpi-card positive"><div class="label">Total pago</div><div class="value">${fmtMoeda(somar(pagas))}</div><div class="sub">todas as pagas do período</div></div>
+  `;
+
+  document.getElementById("tabela-despesas").innerHTML = despesasFiltradas
     .slice().sort((a, b) => (b.data || "").localeCompare(a.data || ""))
-    .map((d) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheDespesa('${d.id}')">
+    .map((d) => {
+      const status = statusDespesa(d);
+      const vencida = status === "esperado" && (d.data || "") <= hoje;
+      return `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheDespesa('${d.id}')">
       <td>${esc(d.descricao)}</td><td>${esc(d.categoria || "—")}</td>
       <td>${d.tipo === "despesa" ? "Despesa" : "Outro custo"}</td>
       <td class="num">${fmtMoeda(d.valor)}</td><td>${fmtData(d.data)}</td>
       <td>${d.recorrente ? "Sim (dia " + d.diaVencimento + ")" : "—"}</td>
-    </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma despesa lançada.</div></td></tr>`;
+      <td><span class="stamp ${status === "realizado" ? "realizado" : vencida ? "vencido" : "esperado"}">${status === "realizado" ? "Pago" : vencida ? "A pagar" : "Pendente"}</span></td>
+      <td>${status === "realizado" ? "—" : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.marcarDespesaPaga('${d.id}')">Marcar pago</button>`}</td>
+    </tr>`;
+    }).join("") || `<tr><td colspan="8"><div class="empty">Nenhuma despesa no período.</div></td></tr>`;
 }
 
 /* ══════════════ CLIENTES ══════════════ */
@@ -2221,7 +2290,7 @@ function iniciarListeners() {
 // Funções chamadas a partir de HTML gerado por string (onclick inline) —
 // só assim dá pra referenciá-las de dentro de innerHTML num ES module.
 window.__jm = {
-  marcarParcelaPaga,
+  marcarParcelaPaga, marcarDespesaPaga,
   abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela,
   abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin,
   gerarPdfContratoExistente
