@@ -1232,27 +1232,39 @@ async function gerarContrato() {
       });
     }
 
-    try {
-      const resp = await chamarAppsScript("gerarContratoPDF", {
-        dados: {
-          CLIENTE: cliente.nome,
-          VALOR_TOTAL: fmtMoeda(f.valorTotal),
-          FORMA_PAGAMENTO: f.forma === "avista" ? "À vista" : `Entrada de ${fmtMoeda(f.valorEntrada)} + ${f.numParcelas}x`,
-          DATA: fmtData(hojeStr())
-        }
-      });
-      if (resp.ok) await updateDoc(doc(db, "contratos", contratoRef.id), { pdfUrl: resp.url, pdfFileId: resp.fileId || null });
-    } catch (errPdf) {
-      mostrarErro("Contrato e parcelas criados, mas o PDF não pôde ser gerado: " + errPdf.message);
-    }
-
+    // Contrato, parcelas e card administrativo já estão salvos — o resto
+    // (gerar o PDF) fica pra depois, em segundo plano, porque a chamada ao
+    // Apps Script (Docs → PDF → Drive) pode levar vários segundos e não
+    // deveria travar o modal esperando isso.
     fecharModal("modal-contrato");
     limparFormularioContrato();
     pendingContratoOportunidadeId = null;
     pendingContratoEtapaFechamentoId = null;
-    mostrarToast("Contrato gerado com sucesso.");
+    mostrarToast("Contrato criado.");
+
+    gerarPdfContratoEmSegundoPlano(contratoRef.id, cliente.nome, {
+      CLIENTE: cliente.nome,
+      VALOR_TOTAL: fmtMoeda(f.valorTotal),
+      FORMA_PAGAMENTO: f.forma === "avista" ? "À vista" : `Entrada de ${fmtMoeda(f.valorEntrada)} + ${f.numParcelas}x`,
+      DATA: fmtData(hojeStr())
+    });
   } catch (err) {
     mostrarErro("Não foi possível gerar o contrato: " + err.message);
+  }
+}
+
+// Roda depois que o modal já fechou — por isso não é "await"ado por
+// gerarContrato(). O pequeno atraso antes do "Gerando PDF..." é só pra dar
+// tempo do toast "Contrato criado." aparecer antes de ser substituído.
+async function gerarPdfContratoEmSegundoPlano(contratoId, clienteNome, dadosPdf) {
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  mostrarToast(`Gerando PDF do contrato de ${clienteNome}...`);
+  try {
+    const resp = await chamarAppsScript("gerarContratoPDF", { dados: dadosPdf });
+    await updateDoc(doc(db, "contratos", contratoId), { pdfUrl: resp.url, pdfFileId: resp.fileId || null });
+    mostrarToast(`PDF do contrato de ${clienteNome} criado.`);
+  } catch (err) {
+    mostrarErro(`Contrato de ${clienteNome} criado, mas o PDF não pôde ser gerado: ` + err.message);
   }
 }
 
