@@ -165,6 +165,16 @@ app (Configurações) ou na `planilha.html`:
   `CONTRATO_TEMPLATE_DOC_ID` para um mapa de modelos. O modal de contrato
   também coleta telefone/e-mail do cliente se estiverem faltando no
   cadastro (só preenche o que estava em branco, nunca sobrescreve).
+- **Data do contrato ≠ data de lançamento no sistema**: cada contrato tem
+  `dataContrato` (a data da assinatura, editável — é ela que conta pro
+  "Faturamento do período" no Painel Financeiro) separado de `dataGeracao`
+  (timestamp automático de quando o registro foi criado, só pra
+  auditoria). Lançar hoje um contrato assinado há meses não deveria contar
+  como faturamento deste mês — por isso o campo é editável tanto na
+  criação quanto depois (✏️ no modal de detalhe). Contratos de antes desse
+  campo existir caem no fallback de `dataGeracao` até alguém corrigir; dá
+  pra corrigir vários de uma vez pela `planilha.html` (coluna
+  `dataContrato`) em vez de um por um.
 - **Etapas dos 3 funis são 100% configuráveis** — nome, ordem, e um SLA
   (verde/amarelo/vermelho) contado em horas ou dias a partir do momento em
   que o card entrou na etapa. Os defaults que vêm no pacote (editáveis a

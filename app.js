@@ -88,6 +88,16 @@ function fmtData(dataStr) {
   return `${partes[2]}/${partes[1]}/${partes[0]}`;
 }
 
+// Contratos gerados antes do campo "dataContrato" existir não têm esse
+// campo — cai pra data de "dataGeracao" (o timestamp de quando foi
+// lançado) só como fallback de exibição/ordenação, nunca escrito de volta
+// sozinho (só quando alguém salva pelo modal de edição).
+function dataContratoDe(c) {
+  if (c.dataContrato) return c.dataContrato;
+  if (c.dataGeracao && c.dataGeracao.toDate) return c.dataGeracao.toDate().toISOString().slice(0, 10);
+  return "";
+}
+
 function fmtDataHora(timestamp) {
   if (!timestamp) return "—";
   const d = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
@@ -920,6 +930,7 @@ async function moverOportunidade(id, novaEtapa) {
     document.getElementById("mct-email").value = op.email || document.getElementById("mct-email").value;
     document.getElementById("mct-valor").value = op.valorProposto ? String(op.valorProposto).replace(".", ",") : "";
     document.getElementById("mct-forma").value = "avista";
+    document.getElementById("mct-data-contrato").value = hojeStr();
     document.getElementById("mct-primeiraparcela").value = hojeStr();
     document.getElementById("mct-linha-parcelamento").style.display = "none";
     atualizarPreviewParcelas();
@@ -1154,6 +1165,7 @@ document.getElementById("btn-novo-contrato").addEventListener("click", () => {
   pendingContratoOportunidadeId = null;
   pendingContratoEtapaFechamentoId = null;
   limparFormularioContrato();
+  document.getElementById("mct-data-contrato").value = hojeStr();
   document.getElementById("mct-primeiraparcela").value = hojeStr();
   document.getElementById("mct-linha-parcelamento").style.display = "none";
   abrirModal("modal-contrato");
@@ -1195,13 +1207,19 @@ async function gerarContrato() {
     if (enderecoContrato && !(clienteAtual && clienteAtual.endereco)) patchCliente.endereco = enderecoContrato;
     if (Object.keys(patchCliente).length) await updateDoc(doc(db, "clientes", cliente.id), patchCliente);
 
+    // "dataContrato" (data da assinatura, editável) é o que conta pro
+    // faturamento do período — "dataGeracao" continua sendo o timestamp
+    // real de quando o registro foi lançado no sistema, só pra auditoria.
+    // Lançar um contrato antigo hoje não deveria contar como faturamento
+    // deste mês.
+    const dataContrato = document.getElementById("mct-data-contrato").value || hojeStr();
     const contratoRef = await addDoc(collection(db, "contratos"), {
       oportunidadeId: pendingContratoOportunidadeId || null,
       clienteId: cliente.id, clienteNome: cliente.nome,
       valorTotal: f.valorTotal, formaPagamento: f.forma,
       valorEntrada: f.forma === "entrada_parcelas" ? f.valorEntrada : 0,
       numParcelas: f.forma === "entrada_parcelas" ? f.numParcelas : 1,
-      diaVencimento: f.diaVencimento,
+      diaVencimento: f.diaVencimento, dataContrato,
       dataGeracao: serverTimestamp(), pdfUrl: null, pdfFileId: null, status: "ativo"
     });
 
@@ -1291,7 +1309,7 @@ function renderTabelaContratos() {
       <td class="num">${fmtMoeda(c.valorTotal)}</td>
       <td>${c.formaPagamento === "avista" ? "À vista" : `Entrada + ${c.numParcelas}x`}</td>
       <td>${pagas}/${parcelasDoContrato.length}</td>
-      <td>${fmtDataHora(c.dataGeracao)}</td>
+      <td>${fmtData(dataContratoDe(c))}</td>
       <td>${links ? `<a href="${esc(links.download)}" onclick="event.stopPropagation()">Baixar PDF</a>` : c.pdfUrl ? `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Ver PDF</a>` : `<a href="#" onclick="event.stopPropagation();event.preventDefault();window.__jm.gerarPdfContratoExistente('${c.id}')">Gerar PDF</a>`}</td>
     </tr>`;
   }).join("") || `<tr><td colspan="6"><div class="empty">Nenhum contrato ainda.</div></td></tr>`;
@@ -1312,13 +1330,18 @@ function editarContratoStatus(id) {
   if (!c) return;
   pendingContratoStatusId = id;
   document.getElementById("modal-contrato-status-titulo").textContent = `Editar contrato — ${c.clienteNome}`;
+  document.getElementById("mcs-data-contrato").value = dataContratoDe(c);
   document.getElementById("mcs-status").value = c.status || "ativo";
   abrirModal("modal-contrato-status");
 }
 document.getElementById("btn-salvar-contrato-status").addEventListener("click", async () => {
   if (!pendingContratoStatusId) return;
+  const dataContrato = document.getElementById("mcs-data-contrato").value;
+  if (!dataContrato) { mostrarErro("Informe a data do contrato."); return; }
   try {
-    await updateDoc(doc(db, "contratos", pendingContratoStatusId), { status: document.getElementById("mcs-status").value });
+    await updateDoc(doc(db, "contratos", pendingContratoStatusId), {
+      dataContrato, status: document.getElementById("mcs-status").value
+    });
     fecharModal("modal-contrato-status");
     pendingContratoStatusId = null;
     mostrarToast("Contrato atualizado.");
@@ -1335,7 +1358,8 @@ function abrirDetalheContrato(id) {
     ["Valor total", esc(fmtMoeda(c.valorTotal))],
     ["Forma de pagamento", c.formaPagamento === "avista" ? "À vista" : `Entrada de ${esc(fmtMoeda(c.valorEntrada))} + ${c.numParcelas}x`],
     ["Parcelas pagas", `${pagas}/${parcelasDoContrato.length}`],
-    ["Gerado em", esc(fmtDataHora(c.dataGeracao))],
+    ["Data do contrato", esc(fmtData(dataContratoDe(c)))],
+    ["Lançado no sistema em", esc(fmtDataHora(c.dataGeracao))],
     ["Status", esc(c.status === "cancelado" ? "Cancelado" : "Ativo")]
   ];
   if (links) {
@@ -1608,7 +1632,7 @@ function renderFinanceiro() {
   const periodo = STATE.periodoFinanceiro;
 
   const faturamentoPeriodo = STATE.contratos
-    .filter((c) => c.dataGeracao && c.dataGeracao.toDate && c.dataGeracao.toDate().toISOString().slice(0, 7) === periodo)
+    .filter((c) => dataContratoDe(c).slice(0, 7) === periodo)
     .reduce((s, c) => s + (Number(c.valorTotal) || 0), 0);
 
   const parcelasDoPeriodo = STATE.parcelas.filter((p) => (p.vencimento || "").slice(0, 7) === periodo);

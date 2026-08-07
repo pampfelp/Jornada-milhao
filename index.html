@@ -156,7 +156,7 @@
     </header>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Cliente</th><th>Valor total</th><th>Forma de pagamento</th><th>Parcelas pagas</th><th>Gerado em</th><th>PDF</th><th></th></tr></thead>
+        <thead><tr><th>Cliente</th><th>Valor total</th><th>Forma de pagamento</th><th>Parcelas pagas</th><th>Data do contrato</th><th>PDF</th><th></th></tr></thead>
         <tbody id="tabela-contratos"></tbody>
       </table>
     </div>
@@ -428,6 +428,11 @@
         </select>
       </div>
     </div>
+    <div class="field">
+      <label>Data do contrato (assinatura)</label>
+      <input type="date" id="mct-data-contrato">
+      <p class="hint" style="margin-top:4px;">É essa data que conta pro faturamento do período no Painel Financeiro — pra lançar um contrato antigo, ajuste aqui pra data real da assinatura, não a de hoje.</p>
+    </div>
     <div class="row" id="mct-linha-parcelamento">
       <div class="field"><label>Valor da entrada</label><input type="text" inputmode="decimal" id="mct-entrada" placeholder="0,00"></div>
       <div class="field"><label>Nº de parcelas</label><input type="number" id="mct-numparcelas" min="1" value="1"></div>
@@ -544,6 +549,10 @@
 <div class="modal-overlay" id="modal-contrato-status">
   <div class="modal-box">
     <h2 id="modal-contrato-status-titulo">Editar contrato</h2>
+    <div class="field">
+      <label>Data do contrato (assinatura)</label>
+      <input type="date" id="mcs-data-contrato">
+    </div>
     <div class="field">
       <label>Status</label>
       <select id="mcs-status">
