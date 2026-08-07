@@ -17,12 +17,15 @@ const STATE = {
   contratos: [],
   parcelas: [],
   despesas: [],
+  entradas: [],
   etapasAdmin: [],
   cardsAdmin: [],
   config: {},
   periodoFinanceiro: new Date().toISOString().slice(0, 7),
   periodoDespesasDe: primeiroDiaMes(),
-  periodoDespesasAte: ultimoDiaMes()
+  periodoDespesasAte: ultimoDiaMes(),
+  periodoEntradasDe: primeiroDiaMes(),
+  periodoEntradasAte: ultimoDiaMes()
 };
 
 let pendingContratoOportunidadeId = null;
@@ -47,6 +50,8 @@ let pendingContratoStatusId = null;
 let pendingAgendamentoEditId = null;
 let pendingOportunidadeEditId = null;
 let pendingCardAdminId = null;
+let pendingEntradaId = null;
+let pendingMarcarPago = null; // { tipo: "parcela"|"despesa"|"entrada", id }
 // Quando arrastar pra uma etapa "entraFunilVendas" sem telefone, o modal
 // de edição abre pedindo o telefone; isso guarda pra onde o card deveria
 // ter ido, pra completar o movimento só depois de salvar com telefone.
@@ -1574,12 +1579,42 @@ document.getElementById("fin-periodo").addEventListener("change", (e) => {
   renderFinanceiro();
 });
 
-async function marcarParcelaPaga(id) {
-  try {
-    await updateDoc(doc(db, "parcelas", id), { status: "realizado", dataPagamento: hojeStr() });
-    mostrarToast("Parcela marcada como paga.");
-  } catch (err) { mostrarErro(err.message); }
+// Modal compartilhado por parcelas, despesas e entradas pra marcar como
+// pago/recebido — sempre pede a data real, nunca assume "hoje". Marcar uma
+// parcela antiga como paga sem poder escolher a data fazia ela contar
+// como caixa do mês errado (o dia em que alguém clicou, não o dia em que o
+// dinheiro de fato entrou).
+const COLECAO_POR_TIPO_PAGO = { parcela: "parcelas", despesa: "despesas", entrada: "entradas" };
+// Busca o título pelo id (em vez de receber por parâmetro) pra não
+// precisar embutir nome/descrição dentro de um atributo onclick — um
+// apóstrofo no nome do cliente quebraria a string do onclick.
+function tituloParaMarcarPago(tipo, id) {
+  if (tipo === "parcela") { const p = STATE.parcelas.find((x) => x.id === id); return p ? p.clienteNome : ""; }
+  if (tipo === "despesa") { const d = STATE.despesas.find((x) => x.id === id); return d ? d.descricao : ""; }
+  if (tipo === "entrada") { const e = STATE.entradas.find((x) => x.id === id); return e ? e.descricao : ""; }
+  return "";
 }
+function abrirModalMarcarPago(tipo, id) {
+  pendingMarcarPago = { tipo, id };
+  const titulo = tituloParaMarcarPago(tipo, id);
+  document.getElementById("modal-marcar-pago-titulo").textContent = titulo
+    ? `Marcar como ${tipo === "despesa" ? "pago" : "recebido"} — ${titulo}`
+    : `Marcar como ${tipo === "despesa" ? "pago" : "recebido"}`;
+  document.getElementById("mmp-data").value = hojeStr();
+  abrirModal("modal-marcar-pago");
+}
+document.getElementById("btn-confirmar-marcar-pago").addEventListener("click", async () => {
+  if (!pendingMarcarPago) return;
+  const data = document.getElementById("mmp-data").value;
+  if (!data) { mostrarErro("Informe a data."); return; }
+  const { tipo, id } = pendingMarcarPago;
+  try {
+    await updateDoc(doc(db, COLECAO_POR_TIPO_PAGO[tipo], id), { status: "realizado", dataPagamento: data });
+    fecharModal("modal-marcar-pago");
+    pendingMarcarPago = null;
+    mostrarToast(tipo === "despesa" ? "Marcado como pago." : "Marcado como recebido.");
+  } catch (err) { mostrarErro(err.message); }
+});
 
 function editarParcela(id) {
   const p = STATE.parcelas.find((x) => x.id === id);
@@ -1636,10 +1671,18 @@ function renderFinanceiro() {
     .reduce((s, c) => s + (Number(c.valorTotal) || 0), 0);
 
   const parcelasDoPeriodo = STATE.parcelas.filter((p) => (p.vencimento || "").slice(0, 7) === periodo);
-  const fluxoEsperado = parcelasDoPeriodo.filter((p) => p.status === "esperado").reduce((s, p) => s + (Number(p.valor) || 0), 0);
+  const entradasDoPeriodo = STATE.entradas.filter((e) => (e.data || "").slice(0, 7) === periodo);
+  // Caixa esperado/realizado soma parcelas de contrato + entradas avulsas
+  // (lançadas manualmente, sem vir de nenhum contrato) — as duas são
+  // dinheiro entrando, só a origem é diferente.
+  const fluxoEsperado = parcelasDoPeriodo.filter((p) => p.status === "esperado").reduce((s, p) => s + (Number(p.valor) || 0), 0)
+    + entradasDoPeriodo.filter((e) => e.status === "esperado").reduce((s, e) => s + (Number(e.valor) || 0), 0);
   const fluxoRealizado = STATE.parcelas
     .filter((p) => p.status === "realizado" && (p.dataPagamento || "").slice(0, 7) === periodo)
-    .reduce((s, p) => s + (Number(p.valor) || 0), 0);
+    .reduce((s, p) => s + (Number(p.valor) || 0), 0)
+    + STATE.entradas
+      .filter((e) => e.status === "realizado" && (e.dataPagamento || "").slice(0, 7) === periodo)
+      .reduce((s, e) => s + (Number(e.valor) || 0), 0);
 
   const despesasMes = STATE.despesas.filter((d) => d.tipo === "despesa" && (d.data || "").slice(0, 7) === periodo).reduce((s, d) => s + (Number(d.valor) || 0), 0);
   const outrosCustos = STATE.despesas.filter((d) => d.tipo === "outro_custo" && (d.data || "").slice(0, 7) === periodo).reduce((s, d) => s + (Number(d.valor) || 0), 0);
@@ -1648,8 +1691,8 @@ function renderFinanceiro() {
 
   document.getElementById("fin-kpis").innerHTML = `
     <div class="kpi-card"><div class="label">Faturamento do período</div><div class="value">${fmtMoeda(faturamentoPeriodo)}</div><div class="sub">venda fechada no mês</div></div>
-    <div class="kpi-card"><div class="label">Caixa esperado</div><div class="value">${fmtMoeda(fluxoEsperado)}</div><div class="sub">parcelas a vencer no mês</div></div>
-    <div class="kpi-card positive"><div class="label">Caixa realizado</div><div class="value">${fmtMoeda(fluxoRealizado)}</div><div class="sub">parcelas pagas no mês</div></div>
+    <div class="kpi-card"><div class="label">Caixa esperado</div><div class="value">${fmtMoeda(fluxoEsperado)}</div><div class="sub">parcelas + entradas a vencer no mês</div></div>
+    <div class="kpi-card positive"><div class="label">Caixa realizado</div><div class="value">${fmtMoeda(fluxoRealizado)}</div><div class="sub">parcelas + entradas pagas no mês</div></div>
     <div class="kpi-card negative"><div class="label">Despesas do mês</div><div class="value">${fmtMoeda(despesasMes)}</div></div>
     <div class="kpi-card ${lucroOperacional >= 0 ? "positive" : "negative"}"><div class="label">Lucro operacional</div><div class="value">${fmtMoeda(lucroOperacional)}</div><div class="sub">caixa realizado − despesas</div></div>
     <div class="kpi-card negative"><div class="label">Outros custos</div><div class="value">${fmtMoeda(outrosCustos)}</div><div class="sub">impostos e taxas</div></div>
@@ -1660,7 +1703,7 @@ function renderFinanceiro() {
   document.getElementById("tabela-parcelas-vencidas").innerHTML = vencidas.map((p) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheParcela('${p.id}')">
     <td>${esc(p.clienteNome)}</td><td>${p.numero === 0 ? "Entrada" : "Parcela " + p.numero}</td>
     <td>${fmtData(p.vencimento)}</td><td class="num">${fmtMoeda(p.valor)}</td>
-    <td><button class="btn-small" onclick="event.stopPropagation();window.__jm.marcarParcelaPaga('${p.id}')">Marcar paga</button></td>
+    <td><button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('parcela','${p.id}')">Marcar paga</button></td>
   </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma parcela vencida. 🎉</div></td></tr>`;
 
   document.getElementById("tabela-parcelas-periodo").innerHTML = parcelasDoPeriodo
@@ -1669,7 +1712,7 @@ function renderFinanceiro() {
       <td>${esc(p.clienteNome)}</td><td>${p.numero === 0 ? "Entrada" : "Parcela " + p.numero}</td>
       <td>${fmtData(p.vencimento)}</td><td class="num">${fmtMoeda(p.valor)}</td>
       <td><span class="stamp ${p.status}">${p.status === "realizado" ? "Pago" : "Esperado"}</span></td>
-      <td>${p.status === "esperado" ? `<button class="btn-small" onclick="event.stopPropagation();window.__jm.marcarParcelaPaga('${p.id}')">Marcar paga</button>` : "—"}</td>
+      <td>${p.status === "esperado" ? `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('parcela','${p.id}')">Marcar paga</button>` : "—"}</td>
     </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma parcela neste período.</div></td></tr>`;
 
   const despesasDoPeriodo = STATE.despesas
@@ -1760,7 +1803,7 @@ function abrirDetalheDespesa(id) {
       ["Recorrente", d.recorrente ? `Sim (dia ${d.diaVencimento})` : "—"],
       d.status === "realizado"
         ? ["Status", `Pago em ${esc(fmtData(d.dataPagamento))}`]
-        : ["Status", `Pendente <button class="btn-small" style="margin-left:8px;" onclick="window.__jm.marcarDespesaPaga('${id}')">Marcar pago</button>`]
+        : ["Status", `Pendente <button class="btn-small" style="margin-left:8px;" onclick="window.__jm.abrirModalMarcarPago('despesa','${id}')">Marcar pago</button>`]
     ],
     onEditar: () => editarDespesa(id),
     onExcluir: () => excluirDespesa(id)
@@ -1797,12 +1840,6 @@ async function lancarRecorrentesPendentes() {
   }
 }
 
-async function marcarDespesaPaga(id) {
-  try {
-    await updateDoc(doc(db, "despesas", id), { status: "realizado", dataPagamento: hojeStr() });
-    mostrarToast("Despesa marcada como paga.");
-  } catch (err) { mostrarErro(err.message); }
-}
 
 document.getElementById("desp-periodo-de").value = STATE.periodoDespesasDe;
 document.getElementById("desp-periodo-ate").value = STATE.periodoDespesasAte;
@@ -1857,9 +1894,131 @@ function renderTabelaDespesas() {
       <td class="mono-select">${esc(d.chavePix || "—")}</td>
       <td>${d.recorrente ? "Sim (dia " + d.diaVencimento + ")" : "—"}</td>
       <td><span class="stamp ${status === "realizado" ? "realizado" : vencida ? "vencido" : "esperado"}">${status === "realizado" ? "Pago" : vencida ? "A pagar" : "Pendente"}</span></td>
-      <td>${status === "realizado" ? "—" : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.marcarDespesaPaga('${d.id}')">Marcar pago</button>`}</td>
+      <td>${status === "realizado" ? "—" : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('despesa','${d.id}')">Marcar pago</button>`}</td>
     </tr>`;
     }).join("") || `<tr><td colspan="9"><div class="empty">Nenhuma despesa no período.</div></td></tr>`;
+}
+
+/* ══════════════ ENTRADAS (recebimentos avulsos, fora de contrato) ══════════════
+   Mesmo padrão de Despesas & Custos (status esperado/realizado, filtro de
+   período, KPIs), só que do lado da receita — pra dinheiro que entra sem
+   vir de uma parcela de contrato (venda avulsa, reembolso, etc). Entra
+   junto com as parcelas no Caixa esperado/realizado do Painel Financeiro. */
+
+function abrirModalEntrada() {
+  pendingEntradaId = null;
+  document.getElementById("modal-entrada-titulo").textContent = "Nova entrada";
+  document.getElementById("me-descricao").value = "";
+  document.getElementById("me-categoria").value = "";
+  document.getElementById("me-valor").value = "";
+  document.getElementById("me-data").value = hojeStr();
+  abrirModal("modal-entrada");
+}
+document.getElementById("btn-nova-entrada").addEventListener("click", abrirModalEntrada);
+
+function editarEntrada(id) {
+  const e = STATE.entradas.find((x) => x.id === id);
+  if (!e) return;
+  pendingEntradaId = id;
+  document.getElementById("modal-entrada-titulo").textContent = `Editar — ${e.descricao}`;
+  document.getElementById("me-descricao").value = e.descricao || "";
+  document.getElementById("me-categoria").value = e.categoria || "";
+  document.getElementById("me-valor").value = String(e.valor || "").replace(".", ",");
+  document.getElementById("me-data").value = e.data || hojeStr();
+  abrirModal("modal-entrada");
+}
+document.getElementById("btn-salvar-entrada").addEventListener("click", async () => {
+  const descricao = document.getElementById("me-descricao").value.trim();
+  const valor = parseMoeda(document.getElementById("me-valor").value);
+  const data = document.getElementById("me-data").value || hojeStr();
+  if (!descricao) { mostrarErro("Informe a descrição."); return; }
+  if (!valor) { mostrarErro("Informe o valor."); return; }
+  const dados = { descricao, categoria: document.getElementById("me-categoria").value.trim(), valor, data };
+  try {
+    if (pendingEntradaId) {
+      await updateDoc(doc(db, "entradas", pendingEntradaId), dados);
+    } else {
+      await addDoc(collection(db, "entradas"), { ...dados, status: "esperado", dataPagamento: null, createdAt: serverTimestamp() });
+    }
+    fecharModal("modal-entrada");
+    pendingEntradaId = null;
+    mostrarToast("Lançamento salvo.");
+  } catch (err) { mostrarErro(err.message); }
+});
+
+async function excluirEntrada(id) {
+  if (!confirm("Excluir este lançamento?")) return;
+  try { await deleteDoc(doc(db, "entradas", id)); } catch (err) { mostrarErro(err.message); }
+}
+
+function abrirDetalheEntrada(id) {
+  const e = STATE.entradas.find((x) => x.id === id);
+  if (!e) return;
+  abrirDetalhe({
+    titulo: e.descricao,
+    campos: [
+      ["Categoria", esc(e.categoria || "—")],
+      ["Valor", esc(fmtMoeda(e.valor))],
+      ["Data prevista", esc(fmtData(e.data))],
+      e.status === "realizado"
+        ? ["Status", `Recebido em ${esc(fmtData(e.dataPagamento))}`]
+        : ["Status", `Pendente <button class="btn-small" style="margin-left:8px;" onclick="window.__jm.abrirModalMarcarPago('entrada','${id}')">Marcar recebido</button>`]
+    ],
+    onEditar: () => editarEntrada(id),
+    onExcluir: () => excluirEntrada(id)
+  });
+}
+
+document.getElementById("entr-periodo-de").value = STATE.periodoEntradasDe;
+document.getElementById("entr-periodo-ate").value = STATE.periodoEntradasAte;
+document.getElementById("entr-periodo-de").addEventListener("change", (e) => {
+  STATE.periodoEntradasDe = e.target.value || "";
+  renderTabelaEntradas();
+});
+document.getElementById("entr-periodo-ate").addEventListener("change", (e) => {
+  STATE.periodoEntradasAte = e.target.value || "";
+  renderTabelaEntradas();
+});
+document.getElementById("btn-entr-limpar-periodo").addEventListener("click", () => {
+  STATE.periodoEntradasDe = "";
+  STATE.periodoEntradasAte = "";
+  document.getElementById("entr-periodo-de").value = "";
+  document.getElementById("entr-periodo-ate").value = "";
+  renderTabelaEntradas();
+});
+
+function statusEntrada(e) { return e.status === "realizado" ? "realizado" : "esperado"; }
+
+function renderTabelaEntradas() {
+  const de = STATE.periodoEntradasDe, ate = STATE.periodoEntradasAte;
+  const entradasFiltradas = STATE.entradas.filter((e) => {
+    const data = e.data || "";
+    return (!de || data >= de) && (!ate || data <= ate);
+  });
+  const hoje = hojeStr();
+  const pendentes = entradasFiltradas.filter((e) => statusEntrada(e) === "esperado");
+  const recebidas = entradasFiltradas.filter((e) => statusEntrada(e) === "realizado");
+  const aReceberAteHoje = pendentes.filter((e) => (e.data || "") <= hoje);
+  const somar = (lista) => lista.reduce((s, e) => s + (Number(e.valor) || 0), 0);
+
+  document.getElementById("entradas-kpis").innerHTML = `
+    <div class="kpi-card negative"><div class="label">A receber até hoje</div><div class="value">${fmtMoeda(somar(aReceberAteHoje))}</div><div class="sub">pendentes com data de hoje ou anterior</div></div>
+    <div class="kpi-card"><div class="label">Total pendente</div><div class="value">${fmtMoeda(somar(pendentes))}</div><div class="sub">todas as não recebidas do período (inclusive futuras)</div></div>
+    <div class="kpi-card positive"><div class="label">Total recebido</div><div class="value">${fmtMoeda(somar(recebidas))}</div><div class="sub">todas as recebidas do período</div></div>
+  `;
+
+  document.getElementById("tabela-entradas").innerHTML = entradasFiltradas
+    .slice().sort((a, b) => (b.data || "").localeCompare(a.data || ""))
+    .map((e) => {
+      const status = statusEntrada(e);
+      const vencida = status === "esperado" && (e.data || "") <= hoje;
+      return `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheEntrada('${e.id}')">
+      <td>${esc(e.descricao)}</td><td>${esc(e.categoria || "—")}</td>
+      <td class="num">${fmtMoeda(e.valor)}</td><td>${fmtData(e.data)}</td>
+      <td><span class="stamp ${status === "realizado" ? "realizado" : vencida ? "vencido" : "esperado"}">${status === "realizado" ? "Recebido" : vencida ? "A receber" : "Pendente"}</span></td>
+      <td>${status === "realizado" ? "—" : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('entrada','${e.id}')">Marcar recebido</button>`}</td>
+    </tr>`;
+    }).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma entrada no período.</div></td></tr>`;
 }
 
 /* ══════════════ CLIENTES ══════════════ */
@@ -2312,6 +2471,12 @@ function iniciarListeners() {
     lancarRecorrentesPendentes();
   }, (err) => mostrarErro("Erro de conexão (despesas): " + err.message));
 
+  onSnapshot(query(collection(db, "entradas"), orderBy("createdAt", "desc")), (snap) => {
+    STATE.entradas = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    renderTabelaEntradas();
+    renderFinanceiro();
+  }, (err) => mostrarErro("Erro de conexão (entradas): " + err.message));
+
   onSnapshot(query(collection(db, "etapasAdminConfig"), orderBy("ordem")), async (snap) => {
     STATE.etapasAdmin = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     if (!etapasAdminSeeded && STATE.etapasAdmin.length === 0) {
@@ -2332,8 +2497,8 @@ function iniciarListeners() {
 // Funções chamadas a partir de HTML gerado por string (onclick inline) —
 // só assim dá pra referenciá-las de dentro de innerHTML num ES module.
 window.__jm = {
-  marcarParcelaPaga, marcarDespesaPaga,
-  abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela,
+  abrirModalMarcarPago,
+  abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela, abrirDetalheEntrada,
   abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin,
   gerarPdfContratoExistente
 };

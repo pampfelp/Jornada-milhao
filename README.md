@@ -294,17 +294,34 @@ app (Configurações) ou na `planilha.html`:
   tabela lista cada despesa/custo lançado no período selecionado.
 - **Status de pagamento nas Despesas & Custos**: cada lançamento tem
   `status` ("esperado"/"realizado", mesmo vocabulário das parcelas) +
-  `dataPagamento` — um botão "Marcar pago" (na tabela e no modal de
-  detalhe) grava a data de hoje. Lançamentos antigos, de antes desse campo
-  existir, contam como pendentes por padrão (nunca foi registrado que
-  foram pagos). A tela tem um filtro de período (data início/fim, "Ver
-  tudo" limpa) e 3 KPIs calculados sobre o período filtrado: **A pagar até
-  hoje** (pendentes com data ≤ hoje — o que já venceu ou vence hoje sem
-  estar pago), **Total pendente** (todas as não pagas do período, incluindo
-  as com vencimento futuro) e **Total pago**. Cada lançamento também tem um
-  campo opcional de **Chave PIX** (pra quem vai receber aquele pagamento),
-  visível na tabela (fonte monoespaçada, seleciona tudo num clique pra
-  copiar) e no modal de detalhe.
+  `dataPagamento`. Lançamentos antigos, de antes desse campo existir,
+  contam como pendentes por padrão (nunca foi registrado que foram pagos).
+  A tela tem um filtro de período (data início/fim, "Ver tudo" limpa) e 3
+  KPIs calculados sobre o período filtrado: **A pagar até hoje** (pendentes
+  com data ≤ hoje — o que já venceu ou vence hoje sem estar pago), **Total
+  pendente** (todas as não pagas do período, incluindo as com vencimento
+  futuro) e **Total pago**. Cada lançamento também tem um campo opcional de
+  **Chave PIX** (pra quem vai receber aquele pagamento), visível na tabela
+  (fonte monoespaçada, seleciona tudo num clique pra copiar) e no modal de
+  detalhe.
+- **Marcar como pago/recebido sempre pede a data** (parcelas, despesas e
+  entradas) — um modalzinho ("Marcar como pago") pede a data real do
+  pagamento antes de gravar, em vez de assumir "hoje" na hora do clique.
+  Isso importa porque a data de pagamento é o que decide em qual mês o
+  Caixa realizado do Painel Financeiro conta aquele valor — marcar hoje uma
+  parcela antiga sem poder escolher a data fazia ela contar como
+  faturamento/caixa do mês errado (o dia do clique, não o dia real do
+  pagamento).
+- **Entradas** (nova aba, coleção `entradas`): recebimentos que não vêm de
+  parcela de contrato — venda avulsa, reembolso, qualquer entrada de caixa
+  lançada manualmente. Mesmo padrão de Despesas & Custos (status
+  esperado/realizado, filtro de período, 3 KPIs — **A receber até hoje**,
+  **Total pendente**, **Total recebido**), só que do lado da receita. Entra
+  somada com as parcelas no **Caixa esperado**/**Caixa realizado** do
+  Painel Financeiro (mas não no **Faturamento do período**, que continua
+  sendo só o valor de contratos fechados). Como é uma coleção nova, exige
+  republicar `firestore.rules` antes de funcionar (mesmo passo de sempre —
+  Firestore Database → Regras → colar → Publicar).
 - **Log de movimentação do funil**: toda mudança de etapa (arrastar,
   perda, fechamento) grava um registro em `historico/` com `de` (etapa
   anterior) e `para` (etapa nova). O botão "📊 Relatório" em cada funil usa

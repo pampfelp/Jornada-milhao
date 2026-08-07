@@ -39,6 +39,7 @@
     <a data-view="financeiro" class="active"><span class="ico">💰</span>Painel Financeiro</a>
     <a data-view="funis"><span class="ico">🔀</span>Funis</a>
     <a data-view="contratos"><span class="ico">📄</span>Contratos</a>
+    <a data-view="entradas"><span class="ico">📥</span>Entradas</a>
     <a data-view="despesas"><span class="ico">🧾</span>Despesas &amp; Custos</a>
     <a data-view="clientes"><span class="ico">👤</span>Clientes</a>
     <a data-view="config"><span class="ico">⚙️</span>Configurações</a>
@@ -158,6 +159,31 @@
       <table>
         <thead><tr><th>Cliente</th><th>Valor total</th><th>Forma de pagamento</th><th>Parcelas pagas</th><th>Data do contrato</th><th>PDF</th><th></th></tr></thead>
         <tbody id="tabela-contratos"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══ ENTRADAS ═══ -->
+  <section id="view-entradas" class="view">
+    <header class="top">
+      <div>
+        <h1>Entradas</h1>
+        <div class="view-desc">Recebimentos que não vêm de parcela de contrato — venda avulsa, reembolso, qualquer entrada de caixa lançada manualmente. Entram no Caixa esperado/realizado do Painel Financeiro junto com as parcelas.</div>
+      </div>
+      <div class="top-actions">
+        <button class="btn btn-primary" id="btn-nova-entrada">+ Nova entrada</button>
+      </div>
+    </header>
+    <div class="row" style="margin-bottom:14px;align-items:flex-end;">
+      <div class="field"><label>De</label><input type="date" id="entr-periodo-de"></div>
+      <div class="field"><label>Até</label><input type="date" id="entr-periodo-ate"></div>
+      <button class="btn" id="btn-entr-limpar-periodo">Ver tudo</button>
+    </div>
+    <div class="kpi-grid" id="entradas-kpis" style="margin-bottom:18px;"></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Data prevista</th><th>Status</th><th></th></tr></thead>
+        <tbody id="tabela-entradas"></tbody>
       </table>
     </div>
   </section>
@@ -443,6 +469,36 @@
     <div class="modal-actions">
       <button class="btn" data-fechar-modal="modal-contrato">Cancelar</button>
       <button class="btn btn-primary" id="btn-gerar-contrato">Gerar contrato e parcelas</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: ENTRADA (recebimento avulso, fora de contrato) ═══ -->
+<div class="modal-overlay" id="modal-entrada">
+  <div class="modal-box">
+    <h2 id="modal-entrada-titulo">Nova entrada</h2>
+    <div class="field"><label>Descrição</label><input type="text" id="me-descricao"></div>
+    <div class="row">
+      <div class="field"><label>Categoria</label><input type="text" id="me-categoria" placeholder="ex: venda avulsa, reembolso..."></div>
+      <div class="field"><label>Valor</label><input type="text" inputmode="decimal" id="me-valor" placeholder="0,00"></div>
+    </div>
+    <div class="field"><label>Data prevista</label><input type="date" id="me-data"></div>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-entrada">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-entrada">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: MARCAR COMO PAGO/RECEBIDO (parcela, despesa ou entrada) — pede a
+     data real do pagamento em vez de assumir "hoje" ═══ -->
+<div class="modal-overlay" id="modal-marcar-pago">
+  <div class="modal-box">
+    <h2 id="modal-marcar-pago-titulo">Marcar como pago</h2>
+    <div class="field"><label>Data em que foi pago/recebido</label><input type="date" id="mmp-data"></div>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-marcar-pago">Cancelar</button>
+      <button class="btn btn-primary" id="btn-confirmar-marcar-pago">Confirmar</button>
     </div>
   </div>
 </div>

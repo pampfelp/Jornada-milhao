@@ -89,6 +89,15 @@ service cloud.firestore {
       allow delete: if true;
     }
 
+    match /entradas/{id} {
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasAll(['descricao', 'valor', 'status'])
+                    && request.resource.data.descricao is string
+                    && request.resource.data.valor is number
+                    && request.resource.data.status is string;
+      allow delete: if true;
+    }
+
     match /etapasAdminConfig/{id} {
       allow read: if true;
       allow create, update: if request.resource.data.keys().hasAll(['nome', 'ordem'])
