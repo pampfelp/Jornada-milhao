@@ -327,6 +327,69 @@ function criarPickerNivelInteresse(containerId) {
 const pickerNivelAgendamento = criarPickerNivelInteresse("ma-nivel-interesse");
 const pickerNivelOportunidade = criarPickerNivelInteresse("mo-nivel-interesse");
 
+// Pickers genéricos pros campos de qualificação do cliente — mesmo
+// princípio do nível de interesse acima (conjunto fixo e pequeno de
+// opções, não uma lista que cresce, então botões em vez de combobox).
+function criarPickerOpcaoUnica(containerId, opcoes) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = opcoes.map((o) => (
+    `<button type="button" class="nivel-btn nivel-btn-texto" data-valor="${esc(o.valor)}" title="${esc(o.titulo || o.rotulo)}">${esc(o.rotulo)}</button>`
+  )).join("");
+  const api = { valor: null };
+  function marcar() {
+    el.querySelectorAll(".nivel-btn").forEach((b) => b.classList.toggle("selected", b.dataset.valor === api.valor));
+  }
+  el.querySelectorAll(".nivel-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const v = btn.dataset.valor;
+      api.valor = api.valor === v ? null : v; // clicar de novo no mesmo desmarca
+      marcar();
+    });
+  });
+  api.set = (v) => { api.valor = (v == null || v === "") ? null : String(v); marcar(); };
+  return api;
+}
+function criarCheckboxGroup(containerId, opcoes) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = opcoes.map((o, i) => (
+    `<label class="checkbox-field"><input type="checkbox" id="${containerId}-${i}" data-valor="${esc(o)}"> ${esc(o)}</label>`
+  )).join("");
+  return {
+    getSelecionados: () => [...el.querySelectorAll("input[type=checkbox]:checked")].map((c) => c.dataset.valor),
+    setSelecionados: (lista) => {
+      const set = new Set(lista || []);
+      el.querySelectorAll("input[type=checkbox]").forEach((c) => { c.checked = set.has(c.dataset.valor); });
+    }
+  };
+}
+
+const OPCOES_ESTABELECIMENTO = [
+  { valor: "ponto_fixo", rotulo: "Ponto fixo" },
+  { valor: "remoto_online", rotulo: "Remoto/Online" }
+];
+const OPCOES_COMPROMETIMENTO = Array.from({ length: 11 }, (_, n) => ({ valor: String(n), rotulo: String(n) }));
+const OPCOES_ONDE_TRAVA = [
+  "Margem caindo, mesmo vendendo",
+  "Não consigo escalar as vendas mesmo tendo equipe",
+  "Minha operação não comporta crescer mais",
+  "Falta de previsibilidade - mês bom, mês ruim",
+  "Gestão de time comercial",
+  "Dificuldade em contratar e remunerar time comercial"
+];
+const LABEL_TIME_COMERCIAL = { "0_1": "0 a 1 vendedores", ate_2: "Até 2 vendedores", ate_3: "Até 3 vendedores", equipe: "Equipe comercial" };
+const LABEL_FATURAMENTO = {
+  menos_500k: "Menos de R$ 500.000,00",
+  "500k_800k": "Entre R$ 500.000,00 e R$ 800.000,00",
+  "800k_1_2mi": "Entre R$ 800.000,00 e R$ 1,2 milhão",
+  "1_2mi_2mi": "Entre R$ 1,2 milhão e R$ 2 milhões",
+  acima_2mi: "Acima de R$ 2 milhões"
+};
+const LABEL_ESTABELECIMENTO = { ponto_fixo: "Ponto fixo", remoto_online: "Remoto/Online" };
+
+const pickerEstabelecimento = criarPickerOpcaoUnica("mc-estabelecimento", OPCOES_ESTABELECIMENTO);
+const pickerComprometimento = criarPickerOpcaoUnica("mc-comprometimento", OPCOES_COMPROMETIMENTO);
+const checkboxOndeTrava = criarCheckboxGroup("mc-onde-trava", OPCOES_ONDE_TRAVA);
+
 // Máscara de CPF/CNPJ — detecta pela quantidade de dígitos digitados (até
 // 11 = CPF, 12+ = CNPJ) e reformata a cada tecla.
 function aplicarMascaraCpfCnpj(valor) {
@@ -637,6 +700,39 @@ function renderKanbanAgendamento() {
   renderKanban("kanban-agendamento", "agendamento", colunasAgendamento(), STATE.agendamentos, (a) => a.etapa, renderCardAgendamento);
 }
 
+// Duas travas independentes por etapa (configuráveis em Configurações →
+// Funil de Agendamento), porque "Reagendar" precisa da mesma exigência de
+// contato que "Agendado" sem disparar a automação de Vendas/Agenda
+// (só "entraFunilVendas" dispara isso, e só "Agendado" tem essa flag por
+// padrão):
+//   exigeContato        → telefone, e-mail, origem (cadastro do cliente) e
+//                         data/hora (do agendamento) precisam existir.
+//   exigeQualificacao   → dados de qualificação do cliente (Instagram,
+//                         estabelecimento, time comercial, faturamento,
+//                         onde trava, comprometimento) + nível de
+//                         interesse do lead precisam existir.
+// Nenhuma das duas trava a etapa de perda (checada antes, abaixo).
+function requisitosFaltantesEtapa(etapaCfg, cliente, ag) {
+  const faltando = [];
+  if (!etapaCfg) return faltando;
+  if (etapaCfg.exigeContato) {
+    if (!cliente?.telefone) faltando.push("telefone");
+    if (!cliente?.email) faltando.push("e-mail");
+    if (!cliente?.origem) faltando.push("origem do lead");
+    if (!ag?.data) faltando.push("data/hora do agendamento");
+  }
+  if (etapaCfg.exigeQualificacao) {
+    if (!cliente?.instagram) faltando.push("Instagram da empresa");
+    if (!cliente?.estabelecimento) faltando.push("estabelecimento (ponto fixo/remoto)");
+    if (!cliente?.timeComercial) faltando.push("time comercial");
+    if (!cliente?.faturamento6meses) faltando.push("faturamento dos últimos 6 meses");
+    if (!(cliente?.ondeTrava && cliente.ondeTrava.length)) faltando.push("onde a empresa trava");
+    if (cliente?.comprometimento == null) faltando.push("nível de comprometimento (0 a 10)");
+    if (ag?.nivelInteresse == null) faltando.push("nível de interesse");
+  }
+  return faltando;
+}
+
 async function moverAgendamento(id, novaEtapa) {
   const ag = STATE.agendamentos.find((a) => a.id === id);
   if (!ag || ag.etapa === novaEtapa) return;
@@ -649,17 +745,17 @@ async function moverAgendamento(id, novaEtapa) {
     return;
   }
 
-  // Telefone e e-mail são obrigatórios só quando o lead chega numa etapa
-  // que dispara a Agenda ("Agendado") — e vêm do CADASTRO DO CLIENTE, não
-  // de um campo digitado aqui (contato só se edita na ficha do cliente).
-  // Data/hora continuam sendo específicas do agendamento. Sem isso tudo
-  // preenchido, abre o modal pedindo antes de completar o movimento; em
-  // qualquer outra etapa o card transita livre, sem pedir nada.
+  // Contato e data vêm do CADASTRO DO CLIENTE / do próprio agendamento, não
+  // de um campo digitado aqui — contato só se edita na ficha do cliente,
+  // via "✏️ Editar cliente" dentro do modal do lead. Sem tudo preenchido,
+  // abre o modal pedindo antes de completar o movimento; em qualquer
+  // etapa sem essas exigências o card transita livre, sem pedir nada.
   const clienteDoLead = STATE.clientes.find((c) => c.id === ag.clienteId);
-  if (etapaCfg && etapaCfg.entraFunilVendas && (!clienteDoLead?.telefone || !clienteDoLead?.email || !ag.data)) {
-    mostrarErro(`Telefone e e-mail (no cadastro do cliente) e data/hora são obrigatórios pra mover pra "${etapaCfg.nome}" — preencha e salve pra continuar.`);
+  const faltando = requisitosFaltantesEtapa(etapaCfg, clienteDoLead, ag);
+  if (faltando.length) {
+    mostrarErro(`Pra mover pra "${etapaCfg.nome}", ainda falta: ${faltando.join(", ")}.`);
     pendingAgendamentoMoveEtapa = novaEtapa;
-    editarAgendamento(id, { confirmarAgendamento: true });
+    editarAgendamento(id, { confirmarAgendamento: !!etapaCfg.exigeContato, viaGateMovimento: true });
     return;
   }
 
@@ -678,7 +774,7 @@ function atualizarContatoAgendamento(cliente) {
   const btn = document.getElementById("ma-btn-editar-cliente");
   if (!cliente) { el.textContent = "Selecione um cliente."; btn.disabled = true; return; }
   btn.disabled = false;
-  el.textContent = `Tel: ${cliente.telefone || "não cadastrado"} · E-mail: ${cliente.email || "não cadastrado"}`;
+  el.textContent = `Tel: ${cliente.telefone || "não cadastrado"} · E-mail: ${cliente.email || "não cadastrado"} · Origem: ${cliente.origem || "não cadastrada"}`;
 }
 
 // Só a etapa marcada "entra automaticamente no Funil de Vendas" (por
@@ -761,7 +857,13 @@ function editarAgendamento(id, opts = {}) {
   const a = STATE.agendamentos.find((x) => x.id === id);
   if (!a) return;
   pendingAgendamentoEditId = id;
-  if (!opts.confirmarAgendamento) pendingAgendamentoMoveEtapa = null;
+  // "viaGateMovimento" (setado só pelo gate de mover etapa, não pelo ✏️ de
+  // edição normal) é quem decide se um pendingAgendamentoMoveEtapa já
+  // setado deve ser preservado — não dá pra usar "confirmarAgendamento"
+  // pra isso, porque uma etapa pode exigir qualificação sem exigir
+  // contato (confirmarAgendamento fica false, mas o movimento continua
+  // pendente).
+  if (!opts.viaGateMovimento) pendingAgendamentoMoveEtapa = null;
   document.getElementById("modal-agendamento-titulo").textContent = opts.confirmarAgendamento
     ? `Confirmar agendamento — ${a.clienteNome}`
     : `Editar lead — ${a.clienteNome}`;
@@ -784,9 +886,9 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
     const dataEditada = document.getElementById("ma-data").value || "";
     const nivelEditado = pickerNivelAgendamento.valor;
     if (pendingAgendamentoMoveEtapa) {
-      if (!cliente.telefone) { mostrarErro("Telefone é obrigatório no cadastro do cliente — clique em \"✏️ Editar cliente\" pra preencher."); return; }
-      if (!cliente.email) { mostrarErro("E-mail é obrigatório no cadastro do cliente — clique em \"✏️ Editar cliente\" pra preencher."); return; }
-      if (!dataEditada) { mostrarErro("Data é obrigatória pra continuar."); return; }
+      const etapaAlvo = STATE.etapasAgendamento.find((e) => e.id === pendingAgendamentoMoveEtapa);
+      const faltando = requisitosFaltantesEtapa(etapaAlvo, cliente, { data: dataEditada, nivelInteresse: nivelEditado });
+      if (faltando.length) { mostrarErro(`Ainda falta: ${faltando.join(", ")} — clique em "✏️ Editar cliente" se for algo do cadastro.`); return; }
     }
     try {
       const agendamentoOriginal = STATE.agendamentos.find((a) => a.id === pendingAgendamentoEditId);
@@ -833,14 +935,11 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
   const primeiraEtapa = [...STATE.etapasAgendamento].sort((a, b) => a.ordem - b.ordem)[0];
   if (!primeiraEtapa) { mostrarErro("Cadastre ao menos uma etapa do Funil de Agendamento em Configurações."); return; }
   const dataNova = document.getElementById("ma-data").value || "";
-  // Normalmente a 1ª etapa é "Novo Lead" (sem entraFunilVendas), então um
-  // lead novo não pede telefone/e-mail/data — só se alguém configurar o
-  // funil pra já nascer direto em "Agendado".
-  if (primeiraEtapa.entraFunilVendas) {
-    if (!cliente.telefone) { mostrarErro(`Telefone é obrigatório no cadastro do cliente pra criar direto em "${primeiraEtapa.nome}".`); return; }
-    if (!cliente.email) { mostrarErro(`E-mail é obrigatório no cadastro do cliente pra criar direto em "${primeiraEtapa.nome}".`); return; }
-    if (!dataNova) { mostrarErro(`Data é obrigatória pra criar direto em "${primeiraEtapa.nome}".`); return; }
-  }
+  // Normalmente a 1ª etapa é "Novo Lead" (sem exigências), então um lead
+  // novo não pede nada — só se alguém configurar o funil pra já nascer
+  // direto numa etapa com exigeContato/exigeQualificacao.
+  const faltandoCriacao = requisitosFaltantesEtapa(primeiraEtapa, cliente, { data: dataNova, nivelInteresse: pickerNivelAgendamento.valor });
+  if (faltandoCriacao.length) { mostrarErro(`Pra criar direto em "${primeiraEtapa.nome}", falta: ${faltandoCriacao.join(", ")}.`); return; }
   const dados = {
     clienteId: cliente.id, clienteNome: cliente.nome,
     telefone: cliente.telefone || "",
@@ -2042,10 +2141,31 @@ function renderTabelaEntradas() {
 
 /* ══════════════ CLIENTES ══════════════ */
 
+// Campos de qualificação repetem em 3 lugares (novo cliente, editar
+// cliente, "+ Criar cliente" embutido) — centralizados aqui pra não
+// duplicar a lista de ids nos três.
+function resetCamposClienteExtras() {
+  document.getElementById("mc-instagram").value = "";
+  pickerEstabelecimento.set(null);
+  document.getElementById("mc-time-comercial").value = "";
+  document.getElementById("mc-faturamento").value = "";
+  checkboxOndeTrava.setSelecionados([]);
+  pickerComprometimento.set(null);
+}
+function preencherCamposClienteExtras(c) {
+  document.getElementById("mc-instagram").value = c.instagram || "";
+  pickerEstabelecimento.set(c.estabelecimento || null);
+  document.getElementById("mc-time-comercial").value = c.timeComercial || "";
+  document.getElementById("mc-faturamento").value = c.faturamento6meses || "";
+  checkboxOndeTrava.setSelecionados(c.ondeTrava || []);
+  pickerComprometimento.set(c.comprometimento != null ? String(c.comprometimento) : null);
+}
+
 document.getElementById("btn-novo-cliente").addEventListener("click", () => {
   pendingClienteId = null;
   document.getElementById("modal-cliente-titulo").textContent = "Novo cliente";
   ["mc-nome", "mc-telefone", "mc-email", "mc-cpfcnpj", "mc-endereco-busca", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
+  resetCamposClienteExtras();
   abrirModal("modal-cliente");
 });
 function editarCliente(id) {
@@ -2060,6 +2180,7 @@ function editarCliente(id) {
   document.getElementById("mc-endereco-busca").value = c.endereco || "";
   document.getElementById("mc-origem").value = c.origem || "";
   document.getElementById("mc-obs").value = c.observacoes || "";
+  preencherCamposClienteExtras(c);
   abrirModal("modal-cliente");
 }
 // Abre o cadastro de cliente "por cima" de outro modal já aberto (o
@@ -2079,6 +2200,7 @@ function abrirClienteEmbutido(onSalvar, { clienteId, nomeInicial } = {}) {
     pendingClienteId = null;
     document.getElementById("modal-cliente-titulo").textContent = "Novo cliente";
     ["mc-nome", "mc-telefone", "mc-email", "mc-cpfcnpj", "mc-endereco-busca", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
+    resetCamposClienteExtras();
     if (nomeInicial) document.getElementById("mc-nome").value = nomeInicial;
     abrirModal("modal-cliente");
   }
@@ -2095,10 +2217,16 @@ document.getElementById("btn-salvar-cliente").addEventListener("click", async ()
   if (!nome) { mostrarErro("Informe o nome."); return; }
   const dados = {
     nome, telefone: document.getElementById("mc-telefone").value.trim(),
+    instagram: document.getElementById("mc-instagram").value.trim(),
     email: document.getElementById("mc-email").value.trim(),
     cpfCnpj: document.getElementById("mc-cpfcnpj").value.trim(),
     endereco: document.getElementById("mc-endereco-busca").value.trim(),
     origem: document.getElementById("mc-origem").value.trim(),
+    estabelecimento: pickerEstabelecimento.valor,
+    timeComercial: document.getElementById("mc-time-comercial").value,
+    faturamento6meses: document.getElementById("mc-faturamento").value,
+    ondeTrava: checkboxOndeTrava.getSelecionados(),
+    comprometimento: pickerComprometimento.valor != null ? Number(pickerComprometimento.valor) : null,
     observacoes: document.getElementById("mc-obs").value.trim()
   };
   try {
@@ -2130,10 +2258,16 @@ function abrirDetalheCliente(id) {
     titulo: c.nome,
     campos: [
       ["Telefone", esc(c.telefone || "—")],
+      ["Instagram da empresa", esc(c.instagram || "—")],
       ["E-mail", esc(c.email || "—")],
       ["CPF/CNPJ", esc(c.cpfCnpj || "—")],
       ["Endereço", esc(c.endereco || "—")],
       ["Origem", esc(c.origem || "—")],
+      ["Estabelecimento", esc(LABEL_ESTABELECIMENTO[c.estabelecimento] || "—")],
+      ["Time comercial", esc(LABEL_TIME_COMERCIAL[c.timeComercial] || "—")],
+      ["Faturamento (últimos 6 meses)", esc(LABEL_FATURAMENTO[c.faturamento6meses] || "—")],
+      ["Onde a empresa trava", (c.ondeTrava && c.ondeTrava.length) ? esc(c.ondeTrava.join("; ")) : "—"],
+      ["Comprometimento (0 a 10)", c.comprometimento != null ? `${c.comprometimento}/10` : "—"],
       ["Observações", esc(c.observacoes || "—")]
     ],
     onEditar: () => editarCliente(id),
@@ -2175,6 +2309,8 @@ document.getElementById("btn-nova-etapa-agendamento").addEventListener("click", 
   document.getElementById("mea2-nome").value = "";
   document.getElementById("mea2-ordem").value = STATE.etapasAgendamento.length + 1;
   document.getElementById("mea2-entra-vendas").checked = false;
+  document.getElementById("mea2-exige-contato").checked = false;
+  document.getElementById("mea2-exige-qualificacao").checked = false;
   document.getElementById("mea2-perda").checked = false;
   preencherCamposSla("mea2", null);
   abrirModal("modal-etapa-agendamento");
@@ -2187,6 +2323,8 @@ function editarEtapaAgendamento(id) {
   document.getElementById("mea2-nome").value = e.nome;
   document.getElementById("mea2-ordem").value = e.ordem;
   document.getElementById("mea2-entra-vendas").checked = !!e.entraFunilVendas;
+  document.getElementById("mea2-exige-contato").checked = !!e.exigeContato;
+  document.getElementById("mea2-exige-qualificacao").checked = !!e.exigeQualificacao;
   document.getElementById("mea2-perda").checked = !!e.perda;
   preencherCamposSla("mea2", e);
   abrirModal("modal-etapa-agendamento");
@@ -2197,6 +2335,8 @@ document.getElementById("btn-salvar-etapa-agendamento").addEventListener("click"
   const dados = {
     nome, ordem: parseInt(document.getElementById("mea2-ordem").value, 10) || (STATE.etapasAgendamento.length + 1),
     entraFunilVendas: document.getElementById("mea2-entra-vendas").checked,
+    exigeContato: document.getElementById("mea2-exige-contato").checked,
+    exigeQualificacao: document.getElementById("mea2-exige-qualificacao").checked,
     perda: document.getElementById("mea2-perda").checked,
     ...lerCamposSla("mea2")
   };
@@ -2302,8 +2442,8 @@ function fmtSla(e) {
 
 function renderConfigEtapasAgendamento() {
   document.getElementById("tabela-etapas-agendamento").innerHTML = [...STATE.etapasAgendamento].sort((a, b) => a.ordem - b.ordem).map((e) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheEtapaAgendamento('${e.id}')">
-    <td>${e.ordem}</td><td>${esc(e.nome)}</td><td>${e.entraFunilVendas ? "Sim" : "—"}</td><td>${e.perda ? "Sim" : "—"}</td><td>${fmtSla(e)}</td>
-  </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma etapa cadastrada.</div></td></tr>`;
+    <td>${e.ordem}</td><td>${esc(e.nome)}</td><td>${e.entraFunilVendas ? "Sim" : "—"}</td><td>${e.exigeContato ? "Sim" : "—"}</td><td>${e.exigeQualificacao ? "Sim" : "—"}</td><td>${e.perda ? "Sim" : "—"}</td><td>${fmtSla(e)}</td>
+  </tr>`).join("") || `<tr><td colspan="7"><div class="empty">Nenhuma etapa cadastrada.</div></td></tr>`;
 }
 function renderConfigEtapasVenda() {
   document.getElementById("tabela-etapas-venda").innerHTML = [...STATE.etapasVenda].sort((a, b) => a.ordem - b.ordem).map((e) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheEtapaVenda('${e.id}')">
@@ -2324,6 +2464,8 @@ function abrirDetalheEtapaAgendamento(id) {
     campos: [
       ["Ordem", String(e.ordem)],
       ["Entra automaticamente em Vendas?", e.entraFunilVendas ? "Sim" : "Não"],
+      ["Exige contato (telefone/e-mail/origem/data)?", e.exigeContato ? "Sim" : "Não"],
+      ["Exige dados de qualificação?", e.exigeQualificacao ? "Sim" : "Não"],
       ["É a etapa de perda?", e.perda ? "Sim" : "Não"],
       ["SLA", fmtSla(e)]
     ],
@@ -2406,13 +2548,13 @@ function renderConfigCalendario() {
 // Agenda (e a conversão em oportunidade). "Reagendar" e as demais são só
 // etapas normais de acompanhamento, sem nenhum efeito automático.
 const DEFAULT_ETAPAS_AGENDAMENTO = [
-  { nome: "Novo Lead", ordem: 1, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 2 },
-  { nome: "Tentativa de Contato", ordem: 2, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
-  { nome: "Retomar Contato", ordem: 3, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
-  { nome: "Qualificação", ordem: 4, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
-  { nome: "Agendado", ordem: 5, entraFunilVendas: true, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
-  { nome: "Reagendar", ordem: 6, entraFunilVendas: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
-  { nome: "Perdido", ordem: 7, entraFunilVendas: false, perda: true, slaUnidade: "dias", slaAmarelo: 0, slaVermelho: 0 }
+  { nome: "Novo Lead", ordem: 1, entraFunilVendas: false, exigeContato: false, exigeQualificacao: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 2 },
+  { nome: "Tentativa de Contato", ordem: 2, entraFunilVendas: false, exigeContato: false, exigeQualificacao: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
+  { nome: "Retomar Contato", ordem: 3, entraFunilVendas: false, exigeContato: false, exigeQualificacao: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
+  { nome: "Qualificação", ordem: 4, entraFunilVendas: false, exigeContato: false, exigeQualificacao: true, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
+  { nome: "Agendado", ordem: 5, entraFunilVendas: true, exigeContato: true, exigeQualificacao: true, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
+  { nome: "Reagendar", ordem: 6, entraFunilVendas: false, exigeContato: true, exigeQualificacao: true, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },
+  { nome: "Perdido", ordem: 7, entraFunilVendas: false, exigeContato: false, exigeQualificacao: false, perda: true, slaUnidade: "dias", slaAmarelo: 0, slaVermelho: 0 }
 ];
 const DEFAULT_ETAPAS_VENDA = [
   { nome: "Reunião Agendada", ordem: 1, fechamento: false, perda: false, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 3 },

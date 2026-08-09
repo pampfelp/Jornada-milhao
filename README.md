@@ -268,13 +268,37 @@ app (Configurações) ou na `planilha.html`:
   grátis, o que não parece um requisito razoável pra uma sugestão de
   endereço. O campo nunca bloqueia: digitar o endereço na mão sem clicar
   em nenhuma sugestão funciona normalmente.
-- **Campos obrigatórios**: telefone + e-mail + data/hora são obrigatórios
-  pra um agendamento chegar numa etapa marcada `entraFunilVendas` (por
-  padrão, "Agendado") — tentar mover sem eles abre o modal de confirmação
-  pedindo antes de completar o movimento. Telefone, CPF/CNPJ e endereço são
-  obrigatórios pra gerar um contrato (e por consequência, pro card de
-  Vendas chegar na etapa de fechamento) — o gerador de contrato é a própria
-  "tela de completar os dados que faltam" antes de liberar.
+- **Campos obrigatórios por etapa do Agendamento**: cada etapa tem duas
+  travas independentes e configuráveis (Configurações → Funil de
+  Agendamento), separadas de `entraFunilVendas` (que só controla a
+  automação de Vendas/Agenda — por padrão, só "Agendado"):
+  - `exigeContato` — telefone, e-mail, origem (no cadastro do cliente) e
+    data/hora (do agendamento) precisam existir. Padrão: "Agendado" e
+    "Reagendar" (as duas, propositalmente — "Reagendar" também é uma
+    reunião marcada, então precisa das mesmas informações; antes só
+    "Agendado" exigia isso).
+  - `exigeQualificacao` — os campos de qualificação do cliente (Instagram
+    da empresa, estabelecimento, time comercial, faturamento dos últimos 6
+    meses, onde a empresa trava, nível de comprometimento 0-10) + o nível
+    de interesse do lead precisam existir. Padrão: "Qualificação",
+    "Agendado" e "Reagendar".
+  Nenhuma das duas trava a etapa de perda ("Perdido"), verificada antes.
+  Tentar mover sem tudo preenchido abre o modal do lead pedindo o que
+  falta (e, se for algo do cadastro do cliente, o botão "✏️ Editar
+  cliente" dentro dele leva direto pra lá) antes de completar o
+  movimento — em qualquer etapa sem essas exigências o card transita
+  livre, sem pedir nada. Telefone, CPF/CNPJ e endereço são obrigatórios
+  pra gerar um contrato (e por consequência, pro card de Vendas chegar na
+  etapa de fechamento) — o gerador de contrato é a própria "tela de
+  completar os dados que faltam" antes de liberar.
+- **Qualificação do lead no cadastro do cliente**: além dos campos de
+  contato, o cadastro tem Instagram da empresa, estabelecimento (ponto
+  fixo/remoto — botão), time comercial e faturamento dos últimos 6 meses
+  (seletores de opção fixa, não combobox — são listas curtas e fixas, não
+  crescem), onde a empresa trava (múltipla escolha, checkboxes) e nível de
+  comprometimento de 0 a 10 (botões). Preenchimento sempre opcional na
+  ficha em si; só vira obrigatório quando o lead entra numa etapa com
+  `exigeQualificacao` (ver acima).
 - **Contato do cliente só se edita na ficha do cliente**: os modais de
   Agendamento e Oportunidade não têm mais campos de telefone/e-mail
   digitáveis — eles mostram o contato do cliente selecionado só leitura,
