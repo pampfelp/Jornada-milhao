@@ -320,7 +320,6 @@
     <h2 id="modal-cliente-titulo">Novo cliente</h2>
     <div class="field"><label>Nome</label><input type="text" id="mc-nome"></div>
     <div class="field"><label>Telefone</label><input type="text" id="mc-telefone"></div>
-    <div class="field"><label>Instagram da empresa</label><input type="text" id="mc-instagram" placeholder="@usuario ou link do perfil"></div>
     <div class="field"><label>E-mail</label><input type="text" id="mc-email"></div>
     <div class="field"><label>CPF ou CNPJ</label><input type="text" inputmode="numeric" id="mc-cpfcnpj" placeholder="000.000.000-00 ou 00.000.000/0000-00"></div>
     <div class="field">
@@ -331,44 +330,6 @@
       </div>
     </div>
     <div class="field"><label>Origem</label><input type="text" id="mc-origem" placeholder="ex: Instagram, indicação..."></div>
-
-    <p class="hint" style="margin:16px 0 8px;border-top:1px solid var(--line);padding-top:14px;">Qualificação do lead — passam a ser obrigatórios quando o card chega na etapa "Qualificação" em diante (menos em "Perdido")</p>
-    <div class="field">
-      <label>Estabelecimento</label>
-      <div class="nivel-picker" id="mc-estabelecimento"></div>
-    </div>
-    <div class="row">
-      <div class="field">
-        <label>Time comercial</label>
-        <select id="mc-time-comercial">
-          <option value="">Selecione...</option>
-          <option value="0_1">0 a 1 vendedores</option>
-          <option value="ate_2">Até 2 vendedores</option>
-          <option value="ate_3">Até 3 vendedores</option>
-          <option value="equipe">Equipe comercial</option>
-        </select>
-      </div>
-      <div class="field">
-        <label>Faturamento nos últimos 6 meses</label>
-        <select id="mc-faturamento">
-          <option value="">Selecione...</option>
-          <option value="menos_500k">Menos de R$ 500.000,00</option>
-          <option value="500k_800k">Entre R$ 500.000,00 e R$ 800.000,00</option>
-          <option value="800k_1_2mi">Entre R$ 800.000,00 e R$ 1,2 milhão</option>
-          <option value="1_2mi_2mi">Entre R$ 1,2 milhão e R$ 2 milhões</option>
-          <option value="acima_2mi">Acima de R$ 2 milhões</option>
-        </select>
-      </div>
-    </div>
-    <div class="field">
-      <label>Onde você sente que a empresa trava?</label>
-      <div class="checkbox-group" id="mc-onde-trava"></div>
-    </div>
-    <div class="field">
-      <label>De 0 a 10, o quanto você está comprometido a resolver o problema?</label>
-      <div class="nivel-picker" id="mc-comprometimento"></div>
-    </div>
-
     <div class="field"><label>Observações</label><textarea id="mc-obs"></textarea></div>
     <div class="modal-actions">
       <button class="btn" id="btn-cancelar-cliente" data-fechar-modal="modal-cliente">Cancelar</button>
@@ -394,6 +355,44 @@
         <p class="hint" id="ma-contato-cliente" style="margin:0;">Selecione um cliente.</p>
         <button class="btn-small" type="button" id="ma-btn-editar-cliente">✏️ Editar cliente</button>
       </div>
+    </div>
+    <div class="field"><label>Instagram da empresa</label><input type="text" id="ma-instagram" placeholder="@usuario ou link do perfil"></div>
+
+    <p class="hint" style="margin:16px 0 8px;border-top:1px solid var(--line);padding-top:14px;">Qualificação do lead — passam a ser obrigatórios quando o card chega na etapa "Qualificação" em diante (menos em "Perdido")</p>
+    <div class="field">
+      <label>Estabelecimento</label>
+      <div class="nivel-picker" id="ma-estabelecimento"></div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>Time comercial</label>
+        <select id="ma-time-comercial">
+          <option value="">Selecione...</option>
+          <option value="0_1">0 a 1 vendedores</option>
+          <option value="ate_2">Até 2 vendedores</option>
+          <option value="ate_3">Até 3 vendedores</option>
+          <option value="equipe">Equipe comercial</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Faturamento nos últimos 6 meses</label>
+        <select id="ma-faturamento">
+          <option value="">Selecione...</option>
+          <option value="menos_500k">Menos de R$ 500.000,00</option>
+          <option value="500k_800k">Entre R$ 500.000,00 e R$ 800.000,00</option>
+          <option value="800k_1_2mi">Entre R$ 800.000,00 e R$ 1,2 milhão</option>
+          <option value="1_2mi_2mi">Entre R$ 1,2 milhão e R$ 2 milhões</option>
+          <option value="acima_2mi">Acima de R$ 2 milhões</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label>Onde você sente que a empresa trava?</label>
+      <div class="checkbox-group" id="ma-onde-trava"></div>
+    </div>
+    <div class="field">
+      <label>De 0 a 10, o quanto você está comprometido a resolver o problema?</label>
+      <div class="nivel-picker" id="ma-comprometimento"></div>
     </div>
     <div class="field">
       <label>Nível de interesse</label>

@@ -386,9 +386,12 @@ const LABEL_FATURAMENTO = {
 };
 const LABEL_ESTABELECIMENTO = { ponto_fixo: "Ponto fixo", remoto_online: "Remoto/Online" };
 
-const pickerEstabelecimento = criarPickerOpcaoUnica("mc-estabelecimento", OPCOES_ESTABELECIMENTO);
-const pickerComprometimento = criarPickerOpcaoUnica("mc-comprometimento", OPCOES_COMPROMETIMENTO);
-const checkboxOndeTrava = criarCheckboxGroup("mc-onde-trava", OPCOES_ONDE_TRAVA);
+// Qualificação vive no LEAD (agendamento), não no cadastro do cliente —
+// um mesmo cliente pode ter mais de um lead ao longo do tempo, e essas
+// respostas são específicas de cada conversa de qualificação.
+const pickerEstabelecimento = criarPickerOpcaoUnica("ma-estabelecimento", OPCOES_ESTABELECIMENTO);
+const pickerComprometimento = criarPickerOpcaoUnica("ma-comprometimento", OPCOES_COMPROMETIMENTO);
+const checkboxOndeTrava = criarCheckboxGroup("ma-onde-trava", OPCOES_ONDE_TRAVA);
 
 // Máscara de CPF/CNPJ — detecta pela quantidade de dígitos digitados (até
 // 11 = CPF, 12+ = CNPJ) e reformata a cada tecla.
@@ -705,12 +708,15 @@ function renderKanbanAgendamento() {
 // contato que "Agendado" sem disparar a automação de Vendas/Agenda
 // (só "entraFunilVendas" dispara isso, e só "Agendado" tem essa flag por
 // padrão):
-//   exigeContato        → telefone, e-mail, origem (cadastro do cliente) e
-//                         data/hora (do agendamento) precisam existir.
-//   exigeQualificacao   → dados de qualificação do cliente (Instagram,
+//   exigeContato        → telefone, e-mail e origem (cadastro do cliente)
+//                         e data/hora (do agendamento) precisam existir.
+//   exigeQualificacao   → dados de qualificação DO LEAD (Instagram,
 //                         estabelecimento, time comercial, faturamento,
-//                         onde trava, comprometimento) + nível de
-//                         interesse do lead precisam existir.
+//                         onde trava, comprometimento, nível de
+//                         interesse) precisam existir — ficam no
+//                         agendamento, não no cadastro do cliente, porque
+//                         um mesmo cliente pode ter mais de um lead ao
+//                         longo do tempo com respostas diferentes.
 // Nenhuma das duas trava a etapa de perda (checada antes, abaixo).
 function requisitosFaltantesEtapa(etapaCfg, cliente, ag) {
   const faltando = [];
@@ -722,12 +728,12 @@ function requisitosFaltantesEtapa(etapaCfg, cliente, ag) {
     if (!ag?.data) faltando.push("data/hora do agendamento");
   }
   if (etapaCfg.exigeQualificacao) {
-    if (!cliente?.instagram) faltando.push("Instagram da empresa");
-    if (!cliente?.estabelecimento) faltando.push("estabelecimento (ponto fixo/remoto)");
-    if (!cliente?.timeComercial) faltando.push("time comercial");
-    if (!cliente?.faturamento6meses) faltando.push("faturamento dos últimos 6 meses");
-    if (!(cliente?.ondeTrava && cliente.ondeTrava.length)) faltando.push("onde a empresa trava");
-    if (cliente?.comprometimento == null) faltando.push("nível de comprometimento (0 a 10)");
+    if (!ag?.instagram) faltando.push("Instagram da empresa");
+    if (!ag?.estabelecimento) faltando.push("estabelecimento (ponto fixo/remoto)");
+    if (!ag?.timeComercial) faltando.push("time comercial");
+    if (!ag?.faturamento6meses) faltando.push("faturamento dos últimos 6 meses");
+    if (!(ag?.ondeTrava && ag.ondeTrava.length)) faltando.push("onde a empresa trava");
+    if (ag?.comprometimento == null) faltando.push("nível de comprometimento (0 a 10)");
     if (ag?.nivelInteresse == null) faltando.push("nível de interesse");
   }
   return faltando;
@@ -796,6 +802,9 @@ async function processarAgendamentoAgendado(agendamentoId, dados) {
         await addDoc(collection(db, "oportunidades"), {
           clienteId: dados.clienteId || null, clienteNome: dados.clienteNome, telefone: dados.telefone || "",
           email: dados.email || "", nivelInteresse: dados.nivelInteresse || null,
+          instagram: dados.instagram || "", estabelecimento: dados.estabelecimento || null,
+          timeComercial: dados.timeComercial || null, faturamento6meses: dados.faturamento6meses || null,
+          ondeTrava: dados.ondeTrava || [], comprometimento: dados.comprometimento != null ? dados.comprometimento : null,
           data: dados.data || "", hora: dados.hora || "",
           agendamentoId, etapa: primeiraEtapaVenda.id, valorProposto: 0, observacoes: dados.observacoes || "",
           perdida: false, motivoPerda: "", fechada: false,
@@ -827,6 +836,25 @@ async function excluirAgendamento(id) {
   try { await deleteDoc(doc(db, "agendamentos", id)); } catch (err) { mostrarErro(err.message); }
 }
 
+// Qualificação vive no LEAD, não no cliente — um mesmo cliente pode gerar
+// mais de um lead ao longo do tempo, cada um com suas próprias respostas.
+function resetCamposQualificacaoAgendamento() {
+  document.getElementById("ma-instagram").value = "";
+  pickerEstabelecimento.set(null);
+  document.getElementById("ma-time-comercial").value = "";
+  document.getElementById("ma-faturamento").value = "";
+  checkboxOndeTrava.setSelecionados([]);
+  pickerComprometimento.set(null);
+}
+function preencherCamposQualificacaoAgendamento(a) {
+  document.getElementById("ma-instagram").value = a.instagram || "";
+  pickerEstabelecimento.set(a.estabelecimento || null);
+  document.getElementById("ma-time-comercial").value = a.timeComercial || "";
+  document.getElementById("ma-faturamento").value = a.faturamento6meses || "";
+  checkboxOndeTrava.setSelecionados(a.ondeTrava || []);
+  pickerComprometimento.set(a.comprometimento != null ? String(a.comprometimento) : null);
+}
+
 document.getElementById("btn-novo-agendamento").addEventListener("click", () => {
   pendingAgendamentoEditId = null;
   pendingAgendamentoMoveEtapa = null;
@@ -837,6 +865,7 @@ document.getElementById("btn-novo-agendamento").addEventListener("click", () => 
   document.getElementById("ma-hora").value = "";
   document.getElementById("ma-obs").value = "";
   pickerNivelAgendamento.set(null);
+  resetCamposQualificacaoAgendamento();
   document.getElementById("ma-campos-agendamento").style.display = "none";
   abrirModal("modal-agendamento");
 });
@@ -875,19 +904,31 @@ function editarAgendamento(id, opts = {}) {
   document.getElementById("ma-hora").value = a.hora || "";
   document.getElementById("ma-obs").value = a.observacoes || "";
   pickerNivelAgendamento.set(a.nivelInteresse || null);
+  preencherCamposQualificacaoAgendamento(a);
   document.getElementById("ma-campos-agendamento").style.display = (opts.confirmarAgendamento || a.data) ? "" : "none";
   abrirModal("modal-agendamento");
+}
+function lerCamposQualificacaoAgendamento() {
+  return {
+    instagram: document.getElementById("ma-instagram").value.trim(),
+    estabelecimento: pickerEstabelecimento.valor,
+    timeComercial: document.getElementById("ma-time-comercial").value,
+    faturamento6meses: document.getElementById("ma-faturamento").value,
+    ondeTrava: checkboxOndeTrava.getSelecionados(),
+    comprometimento: pickerComprometimento.valor != null ? Number(pickerComprometimento.valor) : null
+  };
 }
 document.getElementById("btn-salvar-agendamento").addEventListener("click", async () => {
   const cliente = comboAgendamento.clienteSelecionado;
   if (!cliente) { mostrarErro("Selecione um cliente da lista, ou clique em \"+ Criar cliente\" pra cadastrar um novo."); return; }
+  const qualificacao = lerCamposQualificacaoAgendamento();
 
   if (pendingAgendamentoEditId) {
     const dataEditada = document.getElementById("ma-data").value || "";
     const nivelEditado = pickerNivelAgendamento.valor;
     if (pendingAgendamentoMoveEtapa) {
       const etapaAlvo = STATE.etapasAgendamento.find((e) => e.id === pendingAgendamentoMoveEtapa);
-      const faltando = requisitosFaltantesEtapa(etapaAlvo, cliente, { data: dataEditada, nivelInteresse: nivelEditado });
+      const faltando = requisitosFaltantesEtapa(etapaAlvo, cliente, { data: dataEditada, nivelInteresse: nivelEditado, ...qualificacao });
       if (faltando.length) { mostrarErro(`Ainda falta: ${faltando.join(", ")} — clique em "✏️ Editar cliente" se for algo do cadastro.`); return; }
     }
     try {
@@ -897,6 +938,7 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
         telefone: cliente.telefone || "",
         email: cliente.email || "",
         nivelInteresse: nivelEditado,
+        ...qualificacao,
         data: dataEditada,
         hora: document.getElementById("ma-hora").value || "",
         observacoes: document.getElementById("ma-obs").value.trim(),
@@ -918,6 +960,7 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
         if (etapaCfg && etapaCfg.entraFunilVendas) {
           await processarAgendamentoAgendado(pendingAgendamentoEditId, {
             clienteId: cliente.id, clienteNome: cliente.nome, telefone: cliente.telefone || "", email: cliente.email || "", nivelInteresse: nivelEditado,
+            ...qualificacao,
             data: document.getElementById("ma-data").value, hora: document.getElementById("ma-hora").value,
             observacoes: document.getElementById("ma-obs").value.trim(),
             convertido: agendamentoOriginal ? agendamentoOriginal.convertido : false,
@@ -938,13 +981,14 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
   // Normalmente a 1ª etapa é "Novo Lead" (sem exigências), então um lead
   // novo não pede nada — só se alguém configurar o funil pra já nascer
   // direto numa etapa com exigeContato/exigeQualificacao.
-  const faltandoCriacao = requisitosFaltantesEtapa(primeiraEtapa, cliente, { data: dataNova, nivelInteresse: pickerNivelAgendamento.valor });
+  const faltandoCriacao = requisitosFaltantesEtapa(primeiraEtapa, cliente, { data: dataNova, nivelInteresse: pickerNivelAgendamento.valor, ...qualificacao });
   if (faltandoCriacao.length) { mostrarErro(`Pra criar direto em "${primeiraEtapa.nome}", falta: ${faltandoCriacao.join(", ")}.`); return; }
   const dados = {
     clienteId: cliente.id, clienteNome: cliente.nome,
     telefone: cliente.telefone || "",
     email: cliente.email || "",
     nivelInteresse: pickerNivelAgendamento.valor,
+    ...qualificacao,
     data: dataNova,
     hora: document.getElementById("ma-hora").value || "",
     etapa: primeiraEtapa.id, googleEventId: null, convertido: false, enviadoAgenda: false, motivoPerda: "",
@@ -967,6 +1011,12 @@ function abrirDetalheAgendamento(id) {
     campos: [
       ["Telefone", esc(a.telefone || "—")],
       ["E-mail", esc(a.email || "—")],
+      ["Instagram da empresa", esc(a.instagram || "—")],
+      ["Estabelecimento", esc(LABEL_ESTABELECIMENTO[a.estabelecimento] || "—")],
+      ["Time comercial", esc(LABEL_TIME_COMERCIAL[a.timeComercial] || "—")],
+      ["Faturamento (últimos 6 meses)", esc(LABEL_FATURAMENTO[a.faturamento6meses] || "—")],
+      ["Onde a empresa trava", (a.ondeTrava && a.ondeTrava.length) ? esc(a.ondeTrava.join("; ")) : "—"],
+      ["Comprometimento (0 a 10)", a.comprometimento != null ? `${a.comprometimento}/10` : "—"],
       ["Nível de interesse", esc(labelNivelInteresse(a.nivelInteresse))],
       ["Data", esc(fmtData(a.data))],
       ["Hora", esc(a.hora || "—")],
@@ -1178,6 +1228,12 @@ function abrirDetalheOportunidade(id) {
     campos: [
       ["Telefone", esc(o.telefone || "—")],
       ["E-mail", esc(o.email || "—")],
+      ["Instagram da empresa", esc(o.instagram || "—")],
+      ["Estabelecimento", esc(LABEL_ESTABELECIMENTO[o.estabelecimento] || "—")],
+      ["Time comercial", esc(LABEL_TIME_COMERCIAL[o.timeComercial] || "—")],
+      ["Faturamento (últimos 6 meses)", esc(LABEL_FATURAMENTO[o.faturamento6meses] || "—")],
+      ["Onde a empresa trava", (o.ondeTrava && o.ondeTrava.length) ? esc(o.ondeTrava.join("; ")) : "—"],
+      ["Comprometimento (0 a 10)", o.comprometimento != null ? `${o.comprometimento}/10` : "—"],
       ["Nível de interesse", esc(labelNivelInteresse(o.nivelInteresse))],
       ["Data do agendamento", esc(fmtData(o.data))],
       ["Hora do agendamento", esc(o.hora || "—")],
@@ -2141,31 +2197,10 @@ function renderTabelaEntradas() {
 
 /* ══════════════ CLIENTES ══════════════ */
 
-// Campos de qualificação repetem em 3 lugares (novo cliente, editar
-// cliente, "+ Criar cliente" embutido) — centralizados aqui pra não
-// duplicar a lista de ids nos três.
-function resetCamposClienteExtras() {
-  document.getElementById("mc-instagram").value = "";
-  pickerEstabelecimento.set(null);
-  document.getElementById("mc-time-comercial").value = "";
-  document.getElementById("mc-faturamento").value = "";
-  checkboxOndeTrava.setSelecionados([]);
-  pickerComprometimento.set(null);
-}
-function preencherCamposClienteExtras(c) {
-  document.getElementById("mc-instagram").value = c.instagram || "";
-  pickerEstabelecimento.set(c.estabelecimento || null);
-  document.getElementById("mc-time-comercial").value = c.timeComercial || "";
-  document.getElementById("mc-faturamento").value = c.faturamento6meses || "";
-  checkboxOndeTrava.setSelecionados(c.ondeTrava || []);
-  pickerComprometimento.set(c.comprometimento != null ? String(c.comprometimento) : null);
-}
-
 document.getElementById("btn-novo-cliente").addEventListener("click", () => {
   pendingClienteId = null;
   document.getElementById("modal-cliente-titulo").textContent = "Novo cliente";
   ["mc-nome", "mc-telefone", "mc-email", "mc-cpfcnpj", "mc-endereco-busca", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
-  resetCamposClienteExtras();
   abrirModal("modal-cliente");
 });
 function editarCliente(id) {
@@ -2180,7 +2215,6 @@ function editarCliente(id) {
   document.getElementById("mc-endereco-busca").value = c.endereco || "";
   document.getElementById("mc-origem").value = c.origem || "";
   document.getElementById("mc-obs").value = c.observacoes || "";
-  preencherCamposClienteExtras(c);
   abrirModal("modal-cliente");
 }
 // Abre o cadastro de cliente "por cima" de outro modal já aberto (o
@@ -2200,7 +2234,6 @@ function abrirClienteEmbutido(onSalvar, { clienteId, nomeInicial } = {}) {
     pendingClienteId = null;
     document.getElementById("modal-cliente-titulo").textContent = "Novo cliente";
     ["mc-nome", "mc-telefone", "mc-email", "mc-cpfcnpj", "mc-endereco-busca", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
-    resetCamposClienteExtras();
     if (nomeInicial) document.getElementById("mc-nome").value = nomeInicial;
     abrirModal("modal-cliente");
   }
@@ -2217,16 +2250,10 @@ document.getElementById("btn-salvar-cliente").addEventListener("click", async ()
   if (!nome) { mostrarErro("Informe o nome."); return; }
   const dados = {
     nome, telefone: document.getElementById("mc-telefone").value.trim(),
-    instagram: document.getElementById("mc-instagram").value.trim(),
     email: document.getElementById("mc-email").value.trim(),
     cpfCnpj: document.getElementById("mc-cpfcnpj").value.trim(),
     endereco: document.getElementById("mc-endereco-busca").value.trim(),
     origem: document.getElementById("mc-origem").value.trim(),
-    estabelecimento: pickerEstabelecimento.valor,
-    timeComercial: document.getElementById("mc-time-comercial").value,
-    faturamento6meses: document.getElementById("mc-faturamento").value,
-    ondeTrava: checkboxOndeTrava.getSelecionados(),
-    comprometimento: pickerComprometimento.valor != null ? Number(pickerComprometimento.valor) : null,
     observacoes: document.getElementById("mc-obs").value.trim()
   };
   try {
@@ -2258,16 +2285,10 @@ function abrirDetalheCliente(id) {
     titulo: c.nome,
     campos: [
       ["Telefone", esc(c.telefone || "—")],
-      ["Instagram da empresa", esc(c.instagram || "—")],
       ["E-mail", esc(c.email || "—")],
       ["CPF/CNPJ", esc(c.cpfCnpj || "—")],
       ["Endereço", esc(c.endereco || "—")],
       ["Origem", esc(c.origem || "—")],
-      ["Estabelecimento", esc(LABEL_ESTABELECIMENTO[c.estabelecimento] || "—")],
-      ["Time comercial", esc(LABEL_TIME_COMERCIAL[c.timeComercial] || "—")],
-      ["Faturamento (últimos 6 meses)", esc(LABEL_FATURAMENTO[c.faturamento6meses] || "—")],
-      ["Onde a empresa trava", (c.ondeTrava && c.ondeTrava.length) ? esc(c.ondeTrava.join("; ")) : "—"],
-      ["Comprometimento (0 a 10)", c.comprometimento != null ? `${c.comprometimento}/10` : "—"],
       ["Observações", esc(c.observacoes || "—")]
     ],
     onEditar: () => editarCliente(id),
