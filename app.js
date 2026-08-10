@@ -1250,9 +1250,12 @@ function abrirDetalheOportunidade(id) {
 
 /* ══════════════ GERADOR DE CONTRATO ══════════════ */
 
-function calcularParcelas(valorTotal, forma, valorEntrada, numParcelas, diaVencimento, dataPrimeira) {
+function calcularParcelas(valorTotal, forma, valorEntrada, numParcelas, diaVencimento, dataPrimeira, parcelasPersonalizadas) {
   if (forma === "avista") {
     return [{ numero: 1, valor: valorTotal, vencimento: dataPrimeira }];
+  }
+  if (forma === "personalizada") {
+    return (parcelasPersonalizadas || []).map((p, i) => ({ numero: i + 1, valor: p.valor, vencimento: p.vencimento }));
   }
   const parcelas = [{ numero: 0, valor: valorEntrada, vencimento: dataPrimeira }];
   const restante = Math.max(valorTotal - valorEntrada, 0);
@@ -1271,24 +1274,90 @@ function calcularParcelas(valorTotal, forma, valorEntrada, numParcelas, diaVenci
   return parcelas;
 }
 
+// "Parcelas personalizadas" — cada linha tem valor e vencimento digitados
+// à mão (em vez de calculado por divisão igual), pra casos como "1º mês
+// 4.000, 2º mês 4.000, 3º mês 5.000...". O DOM é a única fonte de verdade
+// (não existe um array espelho) — cada linha carrega seus próprios inputs.
+let parcelaPersonalizadaSeq = 0;
+function linhaParcelaPersonalizadaHtml(idx, valor, vencimento) {
+  return `
+    <div class="row parcela-personalizada-linha" data-idx="${idx}" style="align-items:flex-end;gap:8px;margin-bottom:6px;">
+      <div class="field" style="flex:1;"><label>Valor</label><input type="text" inputmode="decimal" class="mpp-valor" placeholder="0,00" value="${valor || ""}"></div>
+      <div class="field" style="flex:1;"><label>Vencimento</label><input type="date" class="mpp-vencimento" value="${vencimento || ""}"></div>
+      <button type="button" class="btn btn-remover-parcela-personalizada" data-idx="${idx}" style="height:38px;">×</button>
+    </div>`;
+}
+function adicionarParcelaPersonalizada(valor, vencimento) {
+  const idx = parcelaPersonalizadaSeq++;
+  document.getElementById("mct-parcelas-personalizadas-lista").insertAdjacentHTML("beforeend", linhaParcelaPersonalizadaHtml(idx, valor, vencimento));
+  atualizarPreviewParcelas();
+}
+function limparParcelasPersonalizadas() {
+  document.getElementById("mct-parcelas-personalizadas-lista").innerHTML = "";
+  parcelaPersonalizadaSeq = 0;
+}
+function proximaDataSugeridaParcelaPersonalizada() {
+  const linhas = [...document.querySelectorAll("#mct-parcelas-personalizadas-lista .parcela-personalizada-linha")];
+  const diaVenc = parseInt(document.getElementById("mct-diavencimento").value, 10) || 10;
+  if (!linhas.length) return document.getElementById("mct-primeiraparcela").value || hojeStr();
+  const ultimaData = linhas[linhas.length - 1].querySelector(".mpp-vencimento").value || hojeStr();
+  const base = new Date(ultimaData + "T12:00:00");
+  base.setMonth(base.getMonth() + 1);
+  const y = base.getFullYear(), m = String(base.getMonth() + 1).padStart(2, "0");
+  const dia = String(Math.min(diaVenc, diasNoMes(y, base.getMonth() + 1))).padStart(2, "0");
+  return `${y}-${m}-${dia}`;
+}
+document.getElementById("btn-add-parcela-personalizada").addEventListener("click", () => {
+  adicionarParcelaPersonalizada("", proximaDataSugeridaParcelaPersonalizada());
+});
+document.getElementById("mct-parcelas-personalizadas-lista").addEventListener("click", (e) => {
+  const btn = e.target.closest(".btn-remover-parcela-personalizada");
+  if (!btn) return;
+  btn.closest(".parcela-personalizada-linha").remove();
+  atualizarPreviewParcelas();
+});
+document.getElementById("mct-parcelas-personalizadas-lista").addEventListener("input", atualizarPreviewParcelas);
+
+function lerParcelasPersonalizadasForm() {
+  return [...document.querySelectorAll("#mct-parcelas-personalizadas-lista .parcela-personalizada-linha")].map((linha) => ({
+    valor: parseMoeda(linha.querySelector(".mpp-valor").value),
+    vencimento: linha.querySelector(".mpp-vencimento").value
+  }));
+}
+
+function descricaoFormaPagamento(forma, valorEntrada, numParcelas) {
+  if (forma === "avista") return "À vista";
+  if (forma === "personalizada") return `${numParcelas}x personalizadas`;
+  return `Entrada de ${fmtMoeda(valorEntrada)} + ${numParcelas}x`;
+}
+
 function lerFormularioContrato() {
+  const forma = document.getElementById("mct-forma").value;
+  const parcelasPersonalizadas = forma === "personalizada" ? lerParcelasPersonalizadasForm() : [];
   return {
-    valorTotal: parseMoeda(document.getElementById("mct-valor").value),
-    forma: document.getElementById("mct-forma").value,
+    valorTotal: forma === "personalizada"
+      ? parcelasPersonalizadas.reduce((s, p) => s + p.valor, 0)
+      : parseMoeda(document.getElementById("mct-valor").value),
+    forma,
     valorEntrada: parseMoeda(document.getElementById("mct-entrada").value),
-    numParcelas: parseInt(document.getElementById("mct-numparcelas").value, 10) || 1,
+    numParcelas: forma === "personalizada" ? parcelasPersonalizadas.length : (parseInt(document.getElementById("mct-numparcelas").value, 10) || 1),
     diaVencimento: parseInt(document.getElementById("mct-diavencimento").value, 10) || 10,
-    dataPrimeira: document.getElementById("mct-primeiraparcela").value || hojeStr()
+    dataPrimeira: document.getElementById("mct-primeiraparcela").value || hojeStr(),
+    parcelasPersonalizadas
   };
 }
 
 function atualizarPreviewParcelas() {
   const f = lerFormularioContrato();
+  if (f.forma === "personalizada") {
+    document.getElementById("mct-valor").value = f.valorTotal ? String(f.valorTotal.toFixed(2)).replace(".", ",") : "";
+  }
   if (!f.valorTotal) { document.getElementById("mct-preview-parcelas").textContent = ""; return; }
-  const parcelas = calcularParcelas(f.valorTotal, f.forma, f.valorEntrada, f.numParcelas, f.diaVencimento, f.dataPrimeira);
-  const texto = f.forma === "avista"
-    ? `À vista: ${fmtMoeda(parcelas[0].valor)} em ${fmtData(parcelas[0].vencimento)}.`
-    : `Entrada de ${fmtMoeda(parcelas[0].valor)} em ${fmtData(parcelas[0].vencimento)} + ${f.numParcelas}x de ~${fmtMoeda(parcelas[1] ? parcelas[1].valor : 0)}, todo dia ${f.diaVencimento}.`;
+  const parcelas = calcularParcelas(f.valorTotal, f.forma, f.valorEntrada, f.numParcelas, f.diaVencimento, f.dataPrimeira, f.parcelasPersonalizadas);
+  let texto;
+  if (f.forma === "avista") texto = `À vista: ${fmtMoeda(parcelas[0].valor)} em ${fmtData(parcelas[0].vencimento)}.`;
+  else if (f.forma === "personalizada") texto = `${parcelas.length}x personalizadas, total ${fmtMoeda(f.valorTotal)}.`;
+  else texto = `Entrada de ${fmtMoeda(parcelas[0].valor)} em ${fmtData(parcelas[0].vencimento)} + ${f.numParcelas}x de ~${fmtMoeda(parcelas[1] ? parcelas[1].valor : 0)}, todo dia ${f.diaVencimento}.`;
   document.getElementById("mct-preview-parcelas").textContent = texto;
 }
 ["mct-valor", "mct-forma", "mct-entrada", "mct-numparcelas", "mct-diavencimento", "mct-primeiraparcela"].forEach((id) => {
@@ -1296,7 +1365,14 @@ function atualizarPreviewParcelas() {
   document.getElementById(id).addEventListener("change", atualizarPreviewParcelas);
 });
 document.getElementById("mct-forma").addEventListener("change", (e) => {
-  document.getElementById("mct-linha-parcelamento").style.display = e.target.value === "avista" ? "none" : "flex";
+  const forma = e.target.value;
+  document.getElementById("mct-linha-parcelamento").style.display = forma === "entrada_parcelas" ? "flex" : "none";
+  document.getElementById("mct-bloco-personalizadas").style.display = forma === "personalizada" ? "block" : "none";
+  document.getElementById("mct-valor").readOnly = forma === "personalizada";
+  if (forma === "personalizada" && !document.querySelectorAll("#mct-parcelas-personalizadas-lista .parcela-personalizada-linha").length) {
+    adicionarParcelaPersonalizada("", document.getElementById("mct-primeiraparcela").value || hojeStr());
+  }
+  atualizarPreviewParcelas();
 });
 
 function limparFormularioContrato() {
@@ -1305,6 +1381,10 @@ function limparFormularioContrato() {
   document.getElementById("mct-numparcelas").value = 1;
   document.getElementById("mct-diavencimento").value = 10;
   document.getElementById("mct-forma").value = "avista";
+  document.getElementById("mct-valor").readOnly = false;
+  document.getElementById("mct-linha-parcelamento").style.display = "none";
+  document.getElementById("mct-bloco-personalizadas").style.display = "none";
+  limparParcelasPersonalizadas();
   document.getElementById("mct-preview-parcelas").textContent = "";
 }
 
@@ -1338,6 +1418,10 @@ async function gerarContrato() {
   if (!clienteSelecionado) { mostrarErro("Selecione um cliente da lista, ou clique em \"+ Criar cliente\" pra cadastrar um novo."); return; }
   const f = lerFormularioContrato();
   if (!f.valorTotal) { mostrarErro("Informe o valor total."); return; }
+  if (f.forma === "personalizada" && f.parcelasPersonalizadas.some((p) => !p.valor || !p.vencimento)) {
+    mostrarErro("Preencha valor e vencimento de todas as parcelas personalizadas.");
+    return;
+  }
 
   // Telefone, CPF/CNPJ e endereço são obrigatórios pra gerar o contrato —
   // o card só sai da etapa de origem depois de passar por aqui.
@@ -1348,7 +1432,7 @@ async function gerarContrato() {
   if (!cpfCnpjContrato) { mostrarErro("CPF ou CNPJ é obrigatório pra gerar o contrato."); return; }
   if (!enderecoContrato) { mostrarErro("Endereço é obrigatório pra gerar o contrato."); return; }
 
-  const parcelasCalc = calcularParcelas(f.valorTotal, f.forma, f.valorEntrada, f.numParcelas, f.diaVencimento, f.dataPrimeira);
+  const parcelasCalc = calcularParcelas(f.valorTotal, f.forma, f.valorEntrada, f.numParcelas, f.diaVencimento, f.dataPrimeira, f.parcelasPersonalizadas);
 
   try {
     // Pré-preenchido a partir de uma oportunidade sem clienteId (dado
@@ -1379,7 +1463,7 @@ async function gerarContrato() {
       clienteId: cliente.id, clienteNome: cliente.nome,
       valorTotal: f.valorTotal, formaPagamento: f.forma,
       valorEntrada: f.forma === "entrada_parcelas" ? f.valorEntrada : 0,
-      numParcelas: f.forma === "entrada_parcelas" ? f.numParcelas : 1,
+      numParcelas: f.forma === "avista" ? 1 : f.numParcelas,
       diaVencimento: f.diaVencimento, dataContrato,
       dataGeracao: serverTimestamp(), pdfUrl: null, pdfFileId: null, status: "ativo"
     });
@@ -1424,7 +1508,7 @@ async function gerarContrato() {
     gerarPdfContratoEmSegundoPlano(contratoRef.id, cliente.nome, {
       CLIENTE: cliente.nome,
       VALOR_TOTAL: fmtMoeda(f.valorTotal),
-      FORMA_PAGAMENTO: f.forma === "avista" ? "À vista" : `Entrada de ${fmtMoeda(f.valorEntrada)} + ${f.numParcelas}x`,
+      FORMA_PAGAMENTO: descricaoFormaPagamento(f.forma, f.valorEntrada, f.numParcelas),
       DATA: fmtData(hojeStr())
     });
   } catch (err) {
@@ -1468,7 +1552,7 @@ function renderTabelaContratos() {
     return `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheContrato('${c.id}')">
       <td>${esc(c.clienteNome)}</td>
       <td class="num">${fmtMoeda(c.valorTotal)}</td>
-      <td>${c.formaPagamento === "avista" ? "À vista" : `Entrada + ${c.numParcelas}x`}</td>
+      <td>${c.formaPagamento === "avista" ? "À vista" : c.formaPagamento === "personalizada" ? `${c.numParcelas}x personalizadas` : `Entrada + ${c.numParcelas}x`}</td>
       <td>${pagas}/${parcelasDoContrato.length}</td>
       <td>${fmtData(dataContratoDe(c))}</td>
       <td>${links ? `<a href="${esc(links.download)}" onclick="event.stopPropagation()">Baixar PDF</a>` : c.pdfUrl ? `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Ver PDF</a>` : `<a href="#" onclick="event.stopPropagation();event.preventDefault();window.__jm.gerarPdfContratoExistente('${c.id}')">Gerar PDF</a>`}</td>
@@ -1517,7 +1601,7 @@ function abrirDetalheContrato(id) {
   const links = linksPdfDrive(c.pdfFileId);
   const campos = [
     ["Valor total", esc(fmtMoeda(c.valorTotal))],
-    ["Forma de pagamento", c.formaPagamento === "avista" ? "À vista" : `Entrada de ${esc(fmtMoeda(c.valorEntrada))} + ${c.numParcelas}x`],
+    ["Forma de pagamento", esc(descricaoFormaPagamento(c.formaPagamento, c.valorEntrada, c.numParcelas))],
     ["Parcelas pagas", `${pagas}/${parcelasDoContrato.length}`],
     ["Data do contrato", esc(fmtData(dataContratoDe(c)))],
     ["Lançado no sistema em", esc(fmtDataHora(c.dataGeracao))],
@@ -1536,6 +1620,19 @@ function abrirDetalheContrato(id) {
       <p class="hint" style="margin-bottom:8px;">Ainda não gerado (pode ter sido criado antes do Apps Script estar configurado).</p>
       <button class="btn btn-primary" onclick="window.__jm.gerarPdfContratoExistente('${id}')">🔄 Gerar PDF agora</button>
     `]);
+  }
+  const clienteDoContrato = STATE.clientes.find((x) => x.id === c.clienteId);
+  if (c.linkAssinatura) {
+    campos.push(["Assinatura eletrônica", `
+      <p class="hint" style="margin-bottom:6px;">Status: ${esc(LABEL_STATUS_ASSINATURA[c.statusAssinatura] || "Enviado")} — e-mail disparado pra ${esc((clienteDoContrato && clienteDoContrato.email) || "—")} em ${esc(fmtDataHora(c.enviadoAssinaturaEm))}.</p>
+      <a href="${esc(c.linkAssinatura)}" target="_blank" rel="noopener">Abrir link de assinatura</a>
+    `]);
+  } else if (c.pdfFileId) {
+    const emailCliente = clienteDoContrato && clienteDoContrato.email;
+    campos.push(["Assinatura eletrônica", emailCliente
+      ? `<button class="btn btn-primary" onclick="window.__jm.enviarContratoParaAssinatura('${id}')">✍️ Enviar para assinatura digital</button>`
+      : `<p class="hint">Cadastre um e-mail pro cliente pra poder enviar o contrato pra assinatura digital.</p>`
+    ]);
   }
   abrirDetalhe({
     titulo: c.clienteNome,
@@ -1556,7 +1653,7 @@ async function gerarPdfContratoExistente(id) {
       dados: {
         CLIENTE: c.clienteNome,
         VALOR_TOTAL: fmtMoeda(c.valorTotal),
-        FORMA_PAGAMENTO: c.formaPagamento === "avista" ? "À vista" : `Entrada de ${fmtMoeda(c.valorEntrada)} + ${c.numParcelas}x`,
+        FORMA_PAGAMENTO: descricaoFormaPagamento(c.formaPagamento, c.valorEntrada, c.numParcelas),
         DATA: fmtData(hojeStr())
       }
     });
@@ -1564,6 +1661,37 @@ async function gerarPdfContratoExistente(id) {
     mostrarToast("PDF gerado com sucesso.");
     abrirDetalheContrato(id);
   } catch (err) { mostrarErro("Não foi possível gerar o PDF: " + err.message); }
+}
+
+// ═══ Assinatura eletrônica (Autentique) — o Code.gs é quem fala com a API
+// (o token fica em Script Properties, nunca no navegador). A Autentique
+// dispara o e-mail com o link de assinatura sozinha; guardamos o link
+// aqui também só como cópia de backup, caso o Benedito precise reenviar.
+const LABEL_STATUS_ASSINATURA = { enviado: "Enviado, aguardando assinatura", assinado: "Assinado" };
+
+async function enviarContratoParaAssinatura(id) {
+  const c = STATE.contratos.find((x) => x.id === id);
+  if (!c) return;
+  if (!c.pdfFileId) { mostrarErro("Gere o PDF do contrato antes de enviar pra assinatura."); return; }
+  const cliente = STATE.clientes.find((x) => x.id === c.clienteId);
+  if (!cliente || !cliente.email) { mostrarErro("Cadastre o e-mail do cliente antes de enviar pra assinatura."); return; }
+  mostrarToast(`Enviando contrato de ${c.clienteNome} pra assinatura...`);
+  try {
+    const resp = await chamarAppsScript("enviarParaAssinatura", {
+      fileId: c.pdfFileId, clienteNome: c.clienteNome, clienteEmail: cliente.email,
+      nomeDocumento: `Contrato - ${c.clienteNome}`
+    });
+    await updateDoc(doc(db, "contratos", id), {
+      autentiqueDocId: resp.autentiqueDocId || null,
+      linkAssinatura: resp.link || null,
+      statusAssinatura: "enviado",
+      enviadoAssinaturaEm: serverTimestamp()
+    });
+    mostrarToast(`Contrato enviado pra assinatura — e-mail disparado pra ${cliente.email}.`);
+    abrirDetalheContrato(id);
+  } catch (err) {
+    mostrarErro("Não foi possível enviar pra assinatura: " + err.message);
+  }
 }
 
 /* ══════════════ FUNIL ADMINISTRATIVO ══════════════ */
@@ -2684,7 +2812,7 @@ window.__jm = {
   abrirModalMarcarPago,
   abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela, abrirDetalheEntrada,
   abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin,
-  gerarPdfContratoExistente
+  gerarPdfContratoExistente, enviarContratoParaAssinatura
 };
 
 iniciarListeners();

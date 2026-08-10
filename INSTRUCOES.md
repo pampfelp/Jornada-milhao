@@ -39,6 +39,26 @@ Enquanto você não fizer isso, o resto do sistema já funciona normal — só a
 
 **Importante**: o fluxo é sempre sistema → Agenda, nunca o contrário — o sistema não lê nem importa nada da sua Agenda, só cria eventos novos quando você cria um agendamento por aqui. Em **Configurações → Calendário do Google Agenda**, escolha em qual calendário esses eventos são criados (pode ser um calendário dedicado a clientes, separado do seu pessoal).
 
+### Ligar a assinatura eletrônica (Autentique) — opcional
+
+Depois de gerar o PDF de um contrato, dá pra mandar ele direto pra
+assinatura digital: a Autentique manda um e-mail pro cliente com o link
+pra assinar, sozinha. Pra ligar isso:
+
+1. Gere um token em [painel.autentique.com.br/perfil/api](https://painel.autentique.com.br/perfil/api).
+2. No mesmo Apps Script do Passo 2 (⚙️ Configurações do projeto → Script
+   Properties), adicione `AUTENTIQUE_API_TOKEN` com esse token.
+   **Nunca cole esse token dentro do `Code.gs` nem em nenhum outro
+   arquivo que vá pro GitHub** — como esses arquivos ficam públicos no
+   repositório, o token vazaria pra qualquer pessoa. Script Properties é
+   o único lugar seguro (fica só dentro do projeto do Apps Script).
+3. Se quiser testar sem gastar documento de verdade, adicione também
+   `AUTENTIQUE_SANDBOX` = `true` — depois troque pra `false` (ou apague)
+   quando for usar pra valer.
+
+Sem isso configurado, o resto do sistema continua funcionando normal — só
+o botão "Enviar para assinatura digital" mostra um aviso do que falta.
+
 ## Passo 3 — Colocar no ar
 
 Este sistema **não funciona só abrindo o `index.html` no computador** (é
@@ -115,9 +135,15 @@ kanban está visível, sem sair da tela.
   arrastar pra etapa marcada como "fechamento" (vem como "Fechado" por
   padrão), o card **não é movido ainda** — abre o gerador de contrato com
   cliente e valor já preenchidos; complete o que faltar (telefone, e-mail,
-  forma de pagamento) e gere. Só depois disso o card entra de fato em
-  "Fechado", as parcelas aparecem no financeiro e um card novo nasce no
-  Funil Administrativo. Arrastar pra "Perdido" pede o motivo.
+  forma de pagamento) e gere. A forma de pagamento pode ser à vista,
+  entrada + parcelas iguais, ou **parcelas personalizadas** (você digita o
+  valor e o vencimento de cada uma — útil quando as parcelas não são todas
+  do mesmo valor, tipo "1º e 2º mês R$4.000, 3º e 4º mês R$5.000..."). Só
+  depois de gerado o contrato o card entra de fato em "Fechado", as
+  parcelas aparecem no financeiro e um card novo nasce no Funil
+  Administrativo. Arrastar pra "Perdido" pede o motivo. No detalhe do
+  contrato (depois do PDF pronto), dá pra mandar direto pra assinatura
+  eletrônica — veja "Ligar a assinatura eletrônica" no Passo 2.
 - **Funil Administrativo**: arraste o card entre as etapas conforme o
   atendimento avança — a cor do SLA no card reflete quanto tempo falta
   (ou já passou) do prazo daquela etapa.

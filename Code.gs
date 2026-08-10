@@ -16,6 +16,13 @@
  *      placeholders pelos dados do contrato, exporta como PDF pro Google
  *      Drive e devolve o link. Sem isso o navegador não tem como gerar um
  *      PDF formatado nem guardá-lo em algum lugar de graça.
+ *   4. "enviarParaAssinatura" — manda o PDF do contrato (já gerado no
+ *      Drive) pra Autentique via API, que dispara sozinha um e-mail pro
+ *      cliente com o link de assinatura digital. Fica aqui (e não no
+ *      navegador) só por causa do token da API: ele mora em Script
+ *      Properties (AUTENTIQUE_API_TOKEN), nunca no código-fonte, então
+ *      nunca aparece no repositório público nem no navegador de quem usa
+ *      o sistema.
  *
  * ESCOPO — SÓ CRIAÇÃO de evento na Agenda, SÓ CRIAÇÃO de arquivo no Drive:
  * nenhuma ação aqui lê, edita ou apaga evento da Agenda, nem apaga arquivo
@@ -31,6 +38,13 @@
  *    passo completo de cada uma):
  *      AGENDA_CALENDAR_ID     = (opcional; "primary" se não preencher)
  *      CONTRATO_TEMPLATE_DOC_ID = (ID do Google Docs modelo do contrato)
+ *      AUTENTIQUE_API_TOKEN   = (opcional; token gerado em
+ *                                 painel.autentique.com.br/perfil/api —
+ *                                 sem isso, só o botão "Enviar para
+ *                                 assinatura digital" fica indisponível)
+ *      AUTENTIQUE_SANDBOX     = (opcional; "true" pra testar sem gastar
+ *                                 crédito/documento real — deixe em
+ *                                 branco ou "false" em produção)
  * 5. Rode a função "autorizar" uma vez direto no editor (▶) pra autorizar
  *    o acesso à Agenda e ao Drive antes de implantar.
  * 6. Menu Implantar > Nova implantação > tipo "Aplicativo da Web".
@@ -64,6 +78,7 @@ function rotear_(body) {
       case "listarCalendarios": return acaoListarCalendarios_();
       case "criarEventoAgenda": return acaoCriarEventoAgenda_(body.calendarId, body.clienteNome, body.clienteEmail, body.observacoes, body.inicio, body.duracaoMinutos);
       case "gerarContratoPDF": return acaoGerarContratoPDF_(body.dados);
+      case "enviarParaAssinatura": return acaoEnviarParaAssinatura_(body.fileId, body.clienteNome, body.clienteEmail, body.nomeDocumento);
       default: return { ok: false, erro: "Ação desconhecida: " + body.action };
     }
   } catch (err) {
@@ -178,6 +193,76 @@ function getContratosFolder_() {
   var pasta = pastas.hasNext() ? pastas.next() : DriveApp.createFolder(CONTRATOS_FOLDER_NAME);
   props.setProperty("CONTRATOS_FOLDER_ID", pasta.getId());
   return pasta;
+}
+
+// ══════════════ ASSINATURA ELETRÔNICA (Autentique) ══════════════
+
+var AUTENTIQUE_GRAPHQL_URL_ = "https://api.autentique.com.br/v2/graphql";
+
+// Manda o PDF do contrato (já gerado no Drive por acaoGerarContratoPDF_,
+// identificado por "fileId") pra Autentique via GraphQL, criando um
+// documento com um único signatário (o cliente). A própria Autentique
+// dispara o e-mail com o link de assinatura pro "clienteEmail" — este
+// script só aciona a API e devolve o link também, como cópia de backup
+// (ex: caso o Benedito precise reenviar manualmente por WhatsApp).
+function acaoEnviarParaAssinatura_(fileId, clienteNome, clienteEmail, nomeDocumento) {
+  if (!fileId) return { ok: false, erro: "Falta o PDF do contrato — gere o PDF antes de enviar pra assinatura." };
+  if (!clienteEmail) return { ok: false, erro: "O cliente precisa ter um e-mail cadastrado pra receber o link de assinatura." };
+
+  var props = PropertiesService.getScriptProperties();
+  var token = props.getProperty("AUTENTIQUE_API_TOKEN");
+  if (!token) return { ok: false, erro: "Configure AUTENTIQUE_API_TOKEN em Project Settings > Script Properties." };
+  var sandbox = props.getProperty("AUTENTIQUE_SANDBOX") === "true";
+
+  var blob;
+  try {
+    blob = DriveApp.getFileById(fileId).getBlob();
+  } catch (err) {
+    return { ok: false, erro: "Não encontrei o PDF do contrato no Drive (fileId inválido)." };
+  }
+
+  // Segue o "GraphQL multipart request spec" que a Autentique usa pra
+  // receber upload de arquivo: 3 partes no multipart — "operations" (a
+  // query+variáveis, com o campo do arquivo como null), "map" (aponta
+  // qual parte do multipart preenche qual variável) e a parte com o
+  // arquivo em si, com o mesmo nome usado no "map" ("file").
+  var query = "mutation CreateDocumentMutation($document: DocumentInput!, $signers: [SignerInput!]!, $file: Upload!) { " +
+    "createDocument(document: $document, signers: $signers, file: $file, sandbox: " + (sandbox ? "true" : "false") + ") { " +
+    "id name signatures { public_id email link { short_link } } } }";
+  var variables = {
+    document: { name: nomeDocumento || ("Contrato - " + (clienteNome || "Cliente")) },
+    signers: [{ email: clienteEmail, name: clienteNome || "", action: "SIGN" }],
+    file: null
+  };
+  var operations = JSON.stringify({ query: query, variables: variables });
+  var map = JSON.stringify({ file: ["variables.file"] });
+
+  var resposta = UrlFetchApp.fetch(AUTENTIQUE_GRAPHQL_URL_, {
+    method: "post",
+    headers: { Authorization: "Bearer " + token },
+    payload: { operations: operations, map: map, file: blob },
+    muteHttpExceptions: true
+  });
+
+  var json;
+  try {
+    json = JSON.parse(resposta.getContentText());
+  } catch (err) {
+    return { ok: false, erro: "Resposta inválida da Autentique: " + resposta.getContentText() };
+  }
+  if (json.errors && json.errors.length) {
+    return { ok: false, erro: "Autentique: " + json.errors.map(function (e) { return e.message; }).join("; ") };
+  }
+  var documento = json.data && json.data.createDocument;
+  if (!documento) return { ok: false, erro: "Autentique não retornou o documento criado." };
+  var assinatura = (documento.signatures || [])[0] || {};
+
+  return {
+    ok: true,
+    autentiqueDocId: documento.id,
+    link: assinatura.link ? assinatura.link.short_link : null,
+    sandbox: sandbox
+  };
 }
 
 function json_(obj) {

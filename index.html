@@ -493,6 +493,7 @@
         <select id="mct-forma">
           <option value="avista">À vista</option>
           <option value="entrada_parcelas">Entrada + parcelas</option>
+          <option value="personalizada">Parcelas personalizadas (valores diferentes)</option>
         </select>
       </div>
     </div>
@@ -507,6 +508,11 @@
       <div class="field"><label>Vencimento — todo dia</label><input type="number" id="mct-diavencimento" min="1" max="28" value="10"></div>
     </div>
     <div class="field"><label>Data da 1ª parcela</label><input type="date" id="mct-primeiraparcela"></div>
+    <div class="field" id="mct-bloco-personalizadas" style="display:none;">
+      <label>Parcelas — valor e vencimento de cada uma</label>
+      <div id="mct-parcelas-personalizadas-lista"></div>
+      <button type="button" class="btn" id="btn-add-parcela-personalizada" style="margin-top:2px;">+ Adicionar parcela</button>
+    </div>
     <p class="hint" id="mct-preview-parcelas" style="margin:8px 0 4px;"></p>
     <div class="modal-actions">
       <button class="btn" data-fechar-modal="modal-contrato">Cancelar</button>

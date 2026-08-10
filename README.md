@@ -2,9 +2,9 @@
 
 Frontend estático (HTML/CSS/JS puro, sem framework) hospedado no GitHub
 Pages, com **Cloud Firestore** (Firebase) como banco de dados em tempo real,
-e um Apps Script mínimo (`Code.gs`) usado **só como proxy de 2 APIs
-externas** — Google Agenda e geração de PDF de contrato — nunca como banco
-de dados.
+e um Apps Script mínimo (`Code.gs`) usado **só como proxy de 3 APIs
+externas** — Google Agenda, geração de PDF de contrato e envio pra
+assinatura eletrônica (Autentique) — nunca como banco de dados.
 
 **Importante sobre a Agenda: o fluxo é sempre sistema → Google Agenda,
 nunca o contrário.** Nada é importado da Agenda pra dentro do sistema —
@@ -39,12 +39,13 @@ apague o conteúdo → cole o de [`firestore.rules`](firestore.rules) →
 
 Essas chaves (`apiKey`, `projectId` etc.) são **públicas por design** no Firebase Web — pode subir pro GitHub sem problema. A segurança de verdade vem das regras do Firestore (passo 3).
 
-## 2. Apps Script — Google Agenda + geração de PDF de contrato
+## 2. Apps Script — Google Agenda + geração de PDF de contrato + assinatura eletrônica
 
-O `Code.gs` faz 3 coisas, e só essas três:
+O `Code.gs` faz 4 coisas, e só essas quatro:
 - Lista os **calendários** que a conta implantada enxerga (alimenta o seletor em Configurações).
 - Cria um **evento na Google Agenda** quando um agendamento é criado no sistema (nunca lê nem importa nada da Agenda).
 - Gera o **PDF do contrato** a partir de um modelo do Google Docs e salva no Drive.
+- Envia o **PDF do contrato pra assinatura eletrônica** via [Autentique](https://autentique.com.br) (veja 2.4).
 
 ### 2.1. Preparar o modelo do contrato (Google Docs)
 
@@ -62,6 +63,8 @@ O `Code.gs` faz 3 coisas, e só essas três:
    |---|---|
    | `CONTRATO_TEMPLATE_DOC_ID` | o ID copiado no passo 2.1 |
    | `AGENDA_CALENDAR_ID` | opcional — usado só como calendário **padrão** antes de escolher um em Configurações (veja 2.3). Deixe em branco pra cair no calendário principal ("primary") até lá. |
+   | `AUTENTIQUE_API_TOKEN` | opcional — só se for usar o botão "Enviar para assinatura digital" (veja 2.4). |
+   | `AUTENTIQUE_SANDBOX` | opcional — `true` pra testar sem gastar documento/crédito real na Autentique. Deixe em branco (ou `false`) em produção. |
 
 5. Rode a função `autorizar` uma vez direto no editor (▶) — vai pedir permissão de acesso à Agenda e ao Drive.
 6. **Implantar → Nova implantação** → tipo **"Aplicativo da Web"**:
@@ -93,6 +96,34 @@ conta que implantou o `Code.gs` (Google Agenda → configurações do
 calendário dele → "Compartilhar com pessoas específicas"), ou o `Code.gs`
 precisa ser implantado a partir da própria conta dele (repita o passo 2.2
 logado como ele).
+
+### 2.4. Assinatura eletrônica (Autentique)
+
+No detalhe de um contrato que já tem PDF gerado, aparece o botão **"✍️
+Enviar para assinatura digital"** (só se o cliente já tiver e-mail
+cadastrado). Ele manda o PDF pra [Autentique](https://autentique.com.br)
+via API — ela mesma dispara, sozinha, um e-mail pro cliente com o link de
+assinatura (o sistema não manda esse e-mail, só aciona a Autentique). O
+link também fica salvo no contrato, como cópia de backup caso seja preciso
+reenviar por WhatsApp.
+
+1. Gere um token em [painel.autentique.com.br/perfil/api](https://painel.autentique.com.br/perfil/api).
+2. Adicione como Script Property `AUTENTIQUE_API_TOKEN` (passo 2.2.4) —
+   **nunca** cole o token direto no código do `Code.gs` nem em nenhum
+   arquivo do repositório: como o `Code.gs` fica versionado no GitHub
+   junto com o resto do site, qualquer coisa escrita nele é pública. Script
+   Properties é o único lugar seguro — só existe dentro do projeto do Apps
+   Script, nunca é exportado.
+3. (Opcional) Enquanto estiver testando, adicione `AUTENTIQUE_SANDBOX` =
+   `true` — os documentos de teste não consomem crédito e são apagados
+   automaticamente depois de alguns dias pela própria Autentique. Remova
+   (ou troque pra `false`) quando for usar de verdade.
+4. Sem essas properties configuradas, o resto do sistema funciona
+   normalmente — só o botão de assinatura mostra um erro explicando o que
+   falta.
+
+Cada nova implantação do `Code.gs` (passo 2.2.6) já cobre essa integração,
+não precisa de nenhum passo extra além dos de sempre.
 
 ## 3. Planilha administrativa
 
@@ -138,7 +169,7 @@ vez que a tela renderiza).
 - **agendamentos/{id}**: `clienteId`, `clienteNome`, `telefone`, `data` (yyyy-MM-dd), `hora`, `etapa` (id de `etapasAgendamentoConfig`), `dataEntrouEtapa`, `convertido` (bool — já virou oportunidade?), `enviadoAgenda` (bool — já criou o evento no Google?), `googleEventId`, `motivoPerda`, `observacoes`, `createdAt`, `updatedAt` — Funil de Agendamento. Subcoleção `historico/` (create-only).
 - **etapasVendaConfig/{id}**: `nome`, `ordem`, `fechamento` (bool — abre o gerador de contrato), `perda` (bool), `slaUnidade`, `slaAmarelo`, `slaVermelho`.
 - **oportunidades/{id}**: `clienteId`, `clienteNome`, `telefone`, `agendamentoId`, `etapa` (id de `etapasVendaConfig`), `dataEntrouEtapa`, `valorProposto`, `observacoes`, `perdida` (bool), `motivoPerda`, `fechada` (bool), `contratoId`, `createdAt`, `updatedAt` — Funil de Vendas. Subcoleção `historico/`.
-- **contratos/{id}**: `oportunidadeId`, `clienteId`, `clienteNome`, `valorTotal`, `formaPagamento` (`avista`/`entrada_parcelas`), `valorEntrada`, `numParcelas`, `diaVencimento`, `dataGeracao`, `pdfUrl`, `pdfFileId`, `status`.
+- **contratos/{id}**: `oportunidadeId`, `clienteId`, `clienteNome`, `valorTotal`, `formaPagamento` (`avista`/`entrada_parcelas`/`personalizada` — a última tem cada parcela com valor/vencimento digitados à mão, em vez de divisão igual), `valorEntrada`, `numParcelas`, `diaVencimento`, `dataGeracao`, `pdfUrl`, `pdfFileId`, `status`, `autentiqueDocId`, `linkAssinatura`, `statusAssinatura`, `enviadoAssinaturaEm` — os 4 últimos só existem depois de enviado pra assinatura eletrônica (veja seção 2.4).
 - **parcelas/{id}**: `contratoId`, `clienteId`, `clienteNome`, `numero` (0 = entrada), `valor`, `vencimento` (yyyy-MM-dd), `status` (`esperado`/`realizado`), `dataPagamento` — geradas automaticamente ao gerar um contrato.
 - **despesas/{id}**: `descricao`, `categoria`, `tipo` (`despesa`/`outro_custo`), `valor`, `data`, `recorrente` (bool), `diaVencimento`, `ultimoMesLancado`, `origemRecorrenteId`.
 - **etapasAdminConfig/{id}**: `nome`, `ordem`, `slaUnidade`, `slaAmarelo`, `slaVermelho`.
