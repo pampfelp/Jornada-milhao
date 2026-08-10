@@ -2026,26 +2026,17 @@ function statusDespesa(d) { return d.status === "realizado" ? "realizado" : "esp
 
 function renderTabelaDespesas() {
   const de = STATE.periodoDespesasDe, ate = STATE.periodoDespesasAte;
-  const despesasFiltradas = STATE.despesas.filter((d) => {
+  const despesasDoPeriodo = STATE.despesas.filter((d) => {
     const data = d.data || "";
     return (!de || data >= de) && (!ate || data <= ate);
   });
   const hoje = hojeStr();
-  const pendentes = despesasFiltradas.filter((d) => statusDespesa(d) === "esperado");
-  const pagas = despesasFiltradas.filter((d) => statusDespesa(d) === "realizado");
-  const aPagarAteHoje = pendentes.filter((d) => (d.data || "") <= hoje);
-  const somar = (lista) => lista.reduce((s, d) => s + (Number(d.valor) || 0), 0);
 
-  document.getElementById("despesas-kpis").innerHTML = `
-    <div class="kpi-card negative"><div class="label">A pagar até hoje</div><div class="value">${fmtMoeda(somar(aPagarAteHoje))}</div><div class="sub">pendentes com data de hoje ou anterior</div></div>
-    <div class="kpi-card"><div class="label">Total pendente</div><div class="value">${fmtMoeda(somar(pendentes))}</div><div class="sub">todas as não pagas do período (inclusive futuras)</div></div>
-    <div class="kpi-card positive"><div class="label">Total pago</div><div class="value">${fmtMoeda(somar(pagas))}</div><div class="sub">todas as pagas do período</div></div>
-  `;
-
-  // A busca só filtra as linhas mostradas na tabela — os KPIs em cima
-  // continuam refletindo o período inteiro, não o texto buscado.
+  // A busca filtra tanto a tabela quanto os KPIs em cima — digitar algo
+  // restringe os dois juntos, pra "quanto isso que eu busquei soma" já
+  // vir pronto sem precisar somar na mão.
   const termoBusca = STATE.buscaDespesas.trim().toLowerCase();
-  const linhasVisiveis = !termoBusca ? despesasFiltradas : despesasFiltradas.filter((d) => {
+  const linhasVisiveis = !termoBusca ? despesasDoPeriodo : despesasDoPeriodo.filter((d) => {
     const status = statusDespesa(d);
     const vencida = status === "esperado" && (d.data || "") <= hoje;
     const statusLabel = status === "realizado" ? "pago" : vencida ? "a pagar" : "pendente";
@@ -2055,6 +2046,17 @@ function renderTabelaDespesas() {
     ].join(" ").toLowerCase();
     return alvo.includes(termoBusca);
   });
+
+  const pendentes = linhasVisiveis.filter((d) => statusDespesa(d) === "esperado");
+  const pagas = linhasVisiveis.filter((d) => statusDespesa(d) === "realizado");
+  const aPagarAteHoje = pendentes.filter((d) => (d.data || "") <= hoje);
+  const somar = (lista) => lista.reduce((s, d) => s + (Number(d.valor) || 0), 0);
+
+  document.getElementById("despesas-kpis").innerHTML = `
+    <div class="kpi-card negative"><div class="label">A pagar até hoje</div><div class="value">${fmtMoeda(somar(aPagarAteHoje))}</div><div class="sub">pendentes com data de hoje ou anterior</div></div>
+    <div class="kpi-card"><div class="label">Total pendente</div><div class="value">${fmtMoeda(somar(pendentes))}</div><div class="sub">todas as não pagas do período (inclusive futuras)</div></div>
+    <div class="kpi-card positive"><div class="label">Total pago</div><div class="value">${fmtMoeda(somar(pagas))}</div><div class="sub">todas as pagas do período</div></div>
+  `;
 
   document.getElementById("tabela-despesas").innerHTML = linhasVisiveis
     .slice().sort((a, b) => (b.data || "").localeCompare(a.data || ""))
