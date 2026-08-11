@@ -1433,9 +1433,9 @@ function adicionarParcelaPersonalizada(valor, vencimento) {
   atualizarPreviewParcelas();
 }
 // Ponto de partida sugerido ao escolher "personalizada" pela 1ª vez —
-// Benedito pediu esse padrão específico (2 parcelas de 2.000, 2 de 4.000,
+// Benedito pediu esse padrão específico (2 parcelas de 4.000, 2 de 5.000,
 // 2 de 6.000); a pessoa edita valor/vencimento de qualquer linha depois.
-const VALORES_PADRAO_PARCELAS_PERSONALIZADAS = [2000, 2000, 4000, 4000, 6000, 6000];
+const VALORES_PADRAO_PARCELAS_PERSONALIZADAS = [4000, 4000, 5000, 5000, 6000, 6000];
 function preencherPadraoParcelasPersonalizadas() {
   VALORES_PADRAO_PARCELAS_PERSONALIZADAS.forEach((valor) => {
     adicionarParcelaPersonalizada(String(valor.toFixed(2)).replace(".", ","), proximaDataSugeridaParcelaPersonalizada());
