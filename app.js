@@ -415,6 +415,22 @@ function wireMascaraCpfCnpj(inputId) {
   });
 }
 wireMascaraCpfCnpj("mc-cpfcnpj");
+wireMascaraCpfCnpj("mc-representante-cpf");
+
+// Mostra os campos de representante legal só quando o CPF/CNPJ digitado
+// tiver mais de 11 dígitos (ou seja, é um CNPJ) — cliente pessoa física
+// não tem "representante", é qualificado direto no contrato. Retorna a
+// função de atualização pra poder ser chamada de novo depois de um
+// preenchimento programático (que não dispara o evento "input").
+function wireBlocoRepresentante(cpfCnpjInputId, blocoId) {
+  const input = document.getElementById(cpfCnpjInputId);
+  const bloco = document.getElementById(blocoId);
+  const atualizar = () => { bloco.style.display = apenasDigitos(input.value).length > 11 ? "flex" : "none"; };
+  input.addEventListener("input", atualizar);
+  atualizar();
+  return atualizar;
+}
+const atualizarBlocoRepresentanteCliente = wireBlocoRepresentante("mc-cpfcnpj", "mc-bloco-representante");
 
 // Busca de endereço com sugestões — usa a API pública do Nominatim
 // (OpenStreetMap), gratuita e sem chave/cartão de crédito. O Google
@@ -1250,6 +1266,130 @@ function abrirDetalheOportunidade(id) {
 
 /* ══════════════ GERADOR DE CONTRATO ══════════════ */
 
+function apenasDigitos(s) {
+  return String(s || "").replace(/\D/g, "");
+}
+
+// Número por extenso em português — usado nos textos do contrato em PDF,
+// que seguem o padrão jurídico de escrever valores entre parênteses (ex:
+// "R$ 4.000,00 (quatro mil reais)"). Cobre de 0 a 999.999.999, o
+// suficiente pra qualquer valor de contrato realista.
+const EXTENSO_UNIDADES = ["", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove"];
+const EXTENSO_DEZ_A_DEZENOVE = ["dez", "onze", "doze", "treze", "catorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove"];
+const EXTENSO_DEZENAS = ["", "", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa"];
+const EXTENSO_CENTENAS = ["", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos", "seiscentos", "setecentos", "oitocentos", "novecentos"];
+const MESES_NOME_EXTENSO = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+
+function extensoAte999(n) {
+  if (n === 0) return "";
+  if (n === 100) return "cem";
+  const partes = [];
+  const centena = Math.floor(n / 100);
+  const resto = n % 100;
+  if (centena) partes.push(EXTENSO_CENTENAS[centena]);
+  if (resto) {
+    if (resto < 10) partes.push(EXTENSO_UNIDADES[resto]);
+    else if (resto < 20) partes.push(EXTENSO_DEZ_A_DEZENOVE[resto - 10]);
+    else {
+      const dezena = Math.floor(resto / 10), unidade = resto % 10;
+      partes.push(EXTENSO_DEZENAS[dezena] + (unidade ? " e " + EXTENSO_UNIDADES[unidade] : ""));
+    }
+  }
+  return partes.join(" e ");
+}
+function numeroInteiroExtenso(n) {
+  if (n === 0) return "zero";
+  const milhoes = Math.floor(n / 1000000);
+  const milhares = Math.floor((n % 1000000) / 1000);
+  const centenas = n % 1000;
+  const partes = [];
+  if (milhoes) partes.push(extensoAte999(milhoes) + (milhoes === 1 ? " milhão" : " milhões"));
+  if (milhares) partes.push(milhares === 1 ? "mil" : extensoAte999(milhares) + " mil");
+  if (centenas) partes.push(extensoAte999(centenas));
+  return partes.join(" e ");
+}
+function valorExtenso(valor) {
+  const inteiro = Math.floor(Math.abs(valor) + 1e-9);
+  const centavos = Math.round((Math.abs(valor) - inteiro) * 100);
+  // "um milhão DE reais" — o "de" só entra quando "milhão/milhões" fica
+  // colado direto na moeda (nenhum "mil"/centena no meio, ex: 1.200.000
+  // não leva "de": "um milhão e duzentos mil reais").
+  const precisaDe = inteiro >= 1000000 && inteiro % 1000000 === 0;
+  let texto = `${numeroInteiroExtenso(inteiro)}${precisaDe ? " de " : " "}${inteiro === 1 ? "real" : "reais"}`;
+  if (centavos > 0) texto += ` e ${numeroInteiroExtenso(centavos)} ${centavos === 1 ? "centavo" : "centavos"}`;
+  return texto;
+}
+function dataExtenso(dataStr) {
+  const [y, m, d] = (dataStr || hojeStr()).split("-").map(Number);
+  return `${d} de ${MESES_NOME_EXTENSO[m - 1]} de ${y}`;
+}
+
+// Monta o parágrafo de qualificação do CONTRATANTE (cliente) pro PDF do
+// contrato — varia conforme o CPF/CNPJ tem 11 ou mais de 11 dígitos
+// (mesmo critério de aplicarMascaraCpfCnpj). Pessoa jurídica inclui o
+// representante legal (se cadastrado); pessoa física é qualificada
+// diretamente, sem representante.
+function construirQualificacaoContratante(cliente) {
+  const digitos = apenasDigitos(cliente.cpfCnpj);
+  const endereco = cliente.endereco || "endereço não informado";
+  if (digitos.length > 11) {
+    let texto = `pessoa jurídica de direito privado, inscrita no CNPJ sob o nº ${cliente.cpfCnpj || "—"}, com sede em ${endereco}`;
+    if (cliente.representanteNome) {
+      texto += `, neste ato representada por ${cliente.representanteNome}`;
+      if (cliente.representanteCpf) texto += `, portador(a) do CPF nº ${cliente.representanteCpf}`;
+    }
+    return texto;
+  }
+  return `pessoa física, portador(a) do CPF nº ${cliente.cpfCnpj || "—"}, residente e domiciliado(a) em ${endereco}`;
+}
+
+// "6 (seis) meses" — conta os meses-calendário distintos cobertos pelos
+// vencimentos das parcelas, em vez de assumir 1 parcela = 1 mês (que
+// quebraria num contrato com parcelas personalizadas onde um mês foi
+// dividido em duas datas, como "1º mês em 2 parcelas").
+function calcularPrazoTexto(parcelas) {
+  const meses = new Set((parcelas || []).map((p) => (p.vencimento || "").slice(0, 7)));
+  const n = meses.size || 1;
+  return `${n} (${numeroInteiroExtenso(n)}) ${n === 1 ? "mês" : "meses"}`;
+}
+
+// Tabela (em texto simples, com marcadores) de cada parcela do contrato —
+// substitui o placeholder {{TABELA_PARCELAS}} no modelo. Funciona pras 3
+// formas de pagamento: à vista (1 linha), entrada + parcelas (rotula a
+// numero=0 como "Entrada") e personalizada (cada linha já vem com o
+// valor/vencimento digitado à mão).
+function construirTabelaParcelasTexto(parcelas, forma) {
+  return (parcelas || []).map((p) => {
+    const rotulo = forma === "avista" ? "Pagamento único" : p.numero === 0 ? "Entrada" : `Parcela ${p.numero}`;
+    return `• ${rotulo}: ${fmtMoeda(p.valor)} (${valorExtenso(p.valor)}), com vencimento em ${fmtData(p.vencimento)}.`;
+  }).join("\n");
+}
+
+// Monta o objeto completo de placeholders {{CHAVE}} enviado pro Code.gs
+// gerar o PDF — usado tanto na geração original (dados só em memória, o
+// contrato ainda nem foi salvo com id) quanto na regeração de um contrato
+// já existente (dados vindos do Firestore).
+function montarDadosPdfContrato(cliente, contrato, parcelas) {
+  const dataContrato = contrato.dataContrato || hojeStr();
+  return {
+    CLIENTE: cliente.nome,
+    VALOR_TOTAL: fmtMoeda(contrato.valorTotal),
+    VALOR_TOTAL_EXTENSO: valorExtenso(contrato.valorTotal),
+    FORMA_PAGAMENTO: descricaoFormaPagamento(contrato.formaPagamento, contrato.valorEntrada, contrato.numParcelas),
+    CONTRATANTE_QUALIFICACAO: construirQualificacaoContratante(cliente),
+    PRAZO_TEXTO: calcularPrazoTexto(parcelas),
+    TABELA_PARCELAS: construirTabelaParcelasTexto(parcelas, contrato.formaPagamento),
+    DATA: fmtData(dataContrato),
+    DATA_CONTRATO_EXTENSO: dataExtenso(dataContrato),
+    // Linha extra na assinatura, só aparece quando o cliente é pessoa
+    // jurídica com representante cadastrado — fica em branco (some do
+    // documento) pra pessoa física, que assina em nome próprio.
+    CONTRATANTE_REPRESENTANTE_LINHA: apenasDigitos(cliente.cpfCnpj).length > 11 && cliente.representanteNome
+      ? `Nome: ${cliente.representanteNome}`
+      : ""
+  };
+}
+
 function calcularParcelas(valorTotal, forma, valorEntrada, numParcelas, diaVencimento, dataPrimeira, parcelasPersonalizadas) {
   if (forma === "avista") {
     return [{ numero: 1, valor: valorTotal, vencimento: dataPrimeira }];
@@ -1291,6 +1431,15 @@ function adicionarParcelaPersonalizada(valor, vencimento) {
   const idx = parcelaPersonalizadaSeq++;
   document.getElementById("mct-parcelas-personalizadas-lista").insertAdjacentHTML("beforeend", linhaParcelaPersonalizadaHtml(idx, valor, vencimento));
   atualizarPreviewParcelas();
+}
+// Ponto de partida sugerido ao escolher "personalizada" pela 1ª vez —
+// Benedito pediu esse padrão específico (2 parcelas de 2.000, 2 de 4.000,
+// 2 de 6.000); a pessoa edita valor/vencimento de qualquer linha depois.
+const VALORES_PADRAO_PARCELAS_PERSONALIZADAS = [2000, 2000, 4000, 4000, 6000, 6000];
+function preencherPadraoParcelasPersonalizadas() {
+  VALORES_PADRAO_PARCELAS_PERSONALIZADAS.forEach((valor) => {
+    adicionarParcelaPersonalizada(String(valor.toFixed(2)).replace(".", ","), proximaDataSugeridaParcelaPersonalizada());
+  });
 }
 function limparParcelasPersonalizadas() {
   document.getElementById("mct-parcelas-personalizadas-lista").innerHTML = "";
@@ -1348,6 +1497,7 @@ function lerFormularioContrato() {
 }
 
 function atualizarPreviewParcelas() {
+  if (document.getElementById("mct-forma").value === "entrada_parcelas") aplicarPadraoEntradaParcelas();
   const f = lerFormularioContrato();
   if (f.forma === "personalizada") {
     document.getElementById("mct-valor").value = f.valorTotal ? String(f.valorTotal.toFixed(2)).replace(".", ",") : "";
@@ -1361,23 +1511,44 @@ function atualizarPreviewParcelas() {
   document.getElementById("mct-preview-parcelas").textContent = texto;
 }
 ["mct-valor", "mct-forma", "mct-entrada", "mct-numparcelas", "mct-diavencimento", "mct-primeiraparcela"].forEach((id) => {
-  document.getElementById(id).addEventListener("input", atualizarPreviewParcelas);
+  document.getElementById(id).addEventListener("input", () => {
+    // Editar entrada/nº de parcelas à mão desliga a sugestão automática
+    // ANTES de recalcular o preview, senão o 1º caractere digitado seria
+    // sobrescrito pelo valor sugerido no mesmo evento.
+    if (id === "mct-entrada" || id === "mct-numparcelas") parcelamentoAutoPreenchido = false;
+    atualizarPreviewParcelas();
+  });
   document.getElementById(id).addEventListener("change", atualizarPreviewParcelas);
 });
+// Enquanto true, "entrada" e "nº de parcelas" ainda não foram editados à
+// mão — o sistema pode continuar sugerindo entrada = 1/6 do valor total e
+// 5 parcelas (6 pagamentos iguais no total) sempre que o valor mudar.
+// Vira false assim que a pessoa mexe em qualquer um dos dois campos, e aí
+// para de sugerir/sobrescrever o que ela já ajustou.
+let parcelamentoAutoPreenchido = true;
+function aplicarPadraoEntradaParcelas() {
+  if (!parcelamentoAutoPreenchido) return;
+  const total = parseMoeda(document.getElementById("mct-valor").value);
+  document.getElementById("mct-numparcelas").value = 5;
+  const entradaSugerida = total > 0 ? Math.round((total / 6) * 100) / 100 : 0;
+  document.getElementById("mct-entrada").value = entradaSugerida ? String(entradaSugerida.toFixed(2)).replace(".", ",") : "";
+}
 document.getElementById("mct-forma").addEventListener("change", (e) => {
   const forma = e.target.value;
   document.getElementById("mct-linha-parcelamento").style.display = forma === "entrada_parcelas" ? "flex" : "none";
   document.getElementById("mct-bloco-personalizadas").style.display = forma === "personalizada" ? "block" : "none";
   document.getElementById("mct-valor").readOnly = forma === "personalizada";
   if (forma === "personalizada" && !document.querySelectorAll("#mct-parcelas-personalizadas-lista .parcela-personalizada-linha").length) {
-    adicionarParcelaPersonalizada("", document.getElementById("mct-primeiraparcela").value || hojeStr());
+    preencherPadraoParcelasPersonalizadas();
   }
   atualizarPreviewParcelas();
 });
 
 function limparFormularioContrato() {
-  ["mct-valor", "mct-entrada", "mct-telefone", "mct-email", "mct-cpfcnpj", "mct-endereco-busca"].forEach((id) => (document.getElementById(id).value = ""));
+  ["mct-valor", "mct-entrada", "mct-telefone", "mct-email", "mct-cpfcnpj", "mct-endereco-busca", "mct-representante-nome", "mct-representante-cpf"].forEach((id) => (document.getElementById(id).value = ""));
+  atualizarBlocoRepresentanteContrato();
   comboContrato.reset();
+  parcelamentoAutoPreenchido = true;
   document.getElementById("mct-numparcelas").value = 1;
   document.getElementById("mct-diavencimento").value = 10;
   document.getElementById("mct-forma").value = "avista";
@@ -1398,8 +1569,13 @@ function preencherCamposFaltantesContrato(clienteId) {
   document.getElementById("mct-email").value = cliente ? (cliente.email || "") : "";
   document.getElementById("mct-cpfcnpj").value = cliente ? (cliente.cpfCnpj || "") : "";
   document.getElementById("mct-endereco-busca").value = cliente ? (cliente.endereco || "") : "";
+  document.getElementById("mct-representante-nome").value = cliente ? (cliente.representanteNome || "") : "";
+  document.getElementById("mct-representante-cpf").value = cliente ? (cliente.representanteCpf || "") : "";
+  atualizarBlocoRepresentanteContrato();
 }
 wireMascaraCpfCnpj("mct-cpfcnpj");
+wireMascaraCpfCnpj("mct-representante-cpf");
+const atualizarBlocoRepresentanteContrato = wireBlocoRepresentante("mct-cpfcnpj", "mct-bloco-representante");
 criarBuscaEndereco("mct-endereco-busca", "mct-endereco-dropdown");
 
 document.getElementById("btn-novo-contrato").addEventListener("click", () => {
@@ -1432,6 +1608,14 @@ async function gerarContrato() {
   if (!cpfCnpjContrato) { mostrarErro("CPF ou CNPJ é obrigatório pra gerar o contrato."); return; }
   if (!enderecoContrato) { mostrarErro("Endereço é obrigatório pra gerar o contrato."); return; }
 
+  // Cliente pessoa jurídica (CNPJ) precisa de um representante legal
+  // qualificado no contrato — pessoa física não (ela mesma assina).
+  const representanteNomeContrato = document.getElementById("mct-representante-nome").value.trim();
+  const representanteCpfContrato = document.getElementById("mct-representante-cpf").value.trim();
+  const clienteEhPj = apenasDigitos(cpfCnpjContrato).length > 11;
+  if (clienteEhPj && !representanteNomeContrato) { mostrarErro("Nome do representante legal é obrigatório pra CNPJ."); return; }
+  if (clienteEhPj && !representanteCpfContrato) { mostrarErro("CPF do representante legal é obrigatório pra CNPJ."); return; }
+
   const parcelasCalc = calcularParcelas(f.valorTotal, f.forma, f.valorEntrada, f.numParcelas, f.diaVencimento, f.dataPrimeira, f.parcelasPersonalizadas);
 
   try {
@@ -1450,7 +1634,17 @@ async function gerarContrato() {
     if (emailContrato && !(clienteAtual && clienteAtual.email)) patchCliente.email = emailContrato;
     if (cpfCnpjContrato && !(clienteAtual && clienteAtual.cpfCnpj)) patchCliente.cpfCnpj = cpfCnpjContrato;
     if (enderecoContrato && !(clienteAtual && clienteAtual.endereco)) patchCliente.endereco = enderecoContrato;
+    if (representanteNomeContrato && !(clienteAtual && clienteAtual.representanteNome)) patchCliente.representanteNome = representanteNomeContrato;
+    if (representanteCpfContrato && !(clienteAtual && clienteAtual.representanteCpf)) patchCliente.representanteCpf = representanteCpfContrato;
     if (Object.keys(patchCliente).length) await updateDoc(doc(db, "clientes", cliente.id), patchCliente);
+
+    // Pro texto do PDF, usa sempre o que está no formulário agora (mais
+    // recente que o "cliente" selecionado no combobox, que pode não ter
+    // esses campos se acabaram de ser preenchidos aqui pela 1ª vez).
+    const clienteParaPdf = {
+      nome: cliente.nome, cpfCnpj: cpfCnpjContrato, endereco: enderecoContrato,
+      representanteNome: representanteNomeContrato, representanteCpf: representanteCpfContrato
+    };
 
     // "dataContrato" (data da assinatura, editável) é o que conta pro
     // faturamento do período — "dataGeracao" continua sendo o timestamp
@@ -1505,12 +1699,11 @@ async function gerarContrato() {
     pendingContratoEtapaFechamentoId = null;
     mostrarToast("Contrato criado.");
 
-    gerarPdfContratoEmSegundoPlano(contratoRef.id, cliente.nome, {
-      CLIENTE: cliente.nome,
-      VALOR_TOTAL: fmtMoeda(f.valorTotal),
-      FORMA_PAGAMENTO: descricaoFormaPagamento(f.forma, f.valorEntrada, f.numParcelas),
-      DATA: fmtData(hojeStr())
-    });
+    gerarPdfContratoEmSegundoPlano(contratoRef.id, cliente.nome, montarDadosPdfContrato(
+      clienteParaPdf,
+      { valorTotal: f.valorTotal, formaPagamento: f.forma, valorEntrada: f.valorEntrada, numParcelas: f.numParcelas, dataContrato },
+      parcelasCalc
+    ));
   } catch (err) {
     mostrarErro("Não foi possível gerar o contrato: " + err.message);
   }
@@ -1648,14 +1841,11 @@ function abrirDetalheContrato(id) {
 async function gerarPdfContratoExistente(id) {
   const c = STATE.contratos.find((x) => x.id === id);
   if (!c) return;
+  const cliente = STATE.clientes.find((x) => x.id === c.clienteId) || { nome: c.clienteNome };
+  const parcelasDoContrato = STATE.parcelas.filter((p) => p.contratoId === id).sort((a, b) => a.numero - b.numero);
   try {
     const resp = await chamarAppsScript("gerarContratoPDF", {
-      dados: {
-        CLIENTE: c.clienteNome,
-        VALOR_TOTAL: fmtMoeda(c.valorTotal),
-        FORMA_PAGAMENTO: descricaoFormaPagamento(c.formaPagamento, c.valorEntrada, c.numParcelas),
-        DATA: fmtData(hojeStr())
-      }
+      dados: montarDadosPdfContrato(cliente, c, parcelasDoContrato)
     });
     await updateDoc(doc(db, "contratos", id), { pdfUrl: resp.url, pdfFileId: resp.fileId || null });
     mostrarToast("PDF gerado com sucesso.");
@@ -2330,7 +2520,8 @@ function renderTabelaEntradas() {
 document.getElementById("btn-novo-cliente").addEventListener("click", () => {
   pendingClienteId = null;
   document.getElementById("modal-cliente-titulo").textContent = "Novo cliente";
-  ["mc-nome", "mc-telefone", "mc-email", "mc-cpfcnpj", "mc-endereco-busca", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
+  ["mc-nome", "mc-telefone", "mc-email", "mc-cpfcnpj", "mc-endereco-busca", "mc-representante-nome", "mc-representante-cpf", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
+  atualizarBlocoRepresentanteCliente();
   abrirModal("modal-cliente");
 });
 function editarCliente(id) {
@@ -2343,6 +2534,9 @@ function editarCliente(id) {
   document.getElementById("mc-email").value = c.email || "";
   document.getElementById("mc-cpfcnpj").value = c.cpfCnpj || "";
   document.getElementById("mc-endereco-busca").value = c.endereco || "";
+  document.getElementById("mc-representante-nome").value = c.representanteNome || "";
+  document.getElementById("mc-representante-cpf").value = c.representanteCpf || "";
+  atualizarBlocoRepresentanteCliente();
   document.getElementById("mc-origem").value = c.origem || "";
   document.getElementById("mc-obs").value = c.observacoes || "";
   abrirModal("modal-cliente");
@@ -2363,7 +2557,8 @@ function abrirClienteEmbutido(onSalvar, { clienteId, nomeInicial } = {}) {
   } else {
     pendingClienteId = null;
     document.getElementById("modal-cliente-titulo").textContent = "Novo cliente";
-    ["mc-nome", "mc-telefone", "mc-email", "mc-cpfcnpj", "mc-endereco-busca", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
+    ["mc-nome", "mc-telefone", "mc-email", "mc-cpfcnpj", "mc-endereco-busca", "mc-representante-nome", "mc-representante-cpf", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
+  atualizarBlocoRepresentanteCliente();
     if (nomeInicial) document.getElementById("mc-nome").value = nomeInicial;
     abrirModal("modal-cliente");
   }
@@ -2383,6 +2578,8 @@ document.getElementById("btn-salvar-cliente").addEventListener("click", async ()
     email: document.getElementById("mc-email").value.trim(),
     cpfCnpj: document.getElementById("mc-cpfcnpj").value.trim(),
     endereco: document.getElementById("mc-endereco-busca").value.trim(),
+    representanteNome: document.getElementById("mc-representante-nome").value.trim(),
+    representanteCpf: document.getElementById("mc-representante-cpf").value.trim(),
     origem: document.getElementById("mc-origem").value.trim(),
     observacoes: document.getElementById("mc-obs").value.trim()
   };
@@ -2418,6 +2615,10 @@ function abrirDetalheCliente(id) {
       ["E-mail", esc(c.email || "—")],
       ["CPF/CNPJ", esc(c.cpfCnpj || "—")],
       ["Endereço", esc(c.endereco || "—")],
+      ...(apenasDigitos(c.cpfCnpj).length > 11 ? [
+        ["Representante legal", esc(c.representanteNome || "—")],
+        ["CPF do representante", esc(c.representanteCpf || "—")]
+      ] : []),
       ["Origem", esc(c.origem || "—")],
       ["Observações", esc(c.observacoes || "—")]
     ],

@@ -60,10 +60,20 @@
 var CONTRATOS_FOLDER_NAME = "Jornada do Milhão - Contratos";
 
 // Rode esta função uma vez no editor (▶) antes de implantar, só pra abrir a
-// tela de autorização do Google (Agenda + Drive) de forma previsível.
+// tela de autorização do Google (Agenda + Drive + acesso a serviço
+// externo) de forma previsível. A chamada ao UrlFetchApp aqui é só pra
+// forçar o Google a listar o escopo "script.external_request" na tela de
+// autorização — sem isso, quem já tinha autorizado antes de o
+// enviarParaAssinatura existir (que é quem chama UrlFetchApp de verdade)
+// nunca vê essa permissão de novo, e a chamada à Autentique falha com
+// "Você não tem permissão para chamar UrlFetchApp.fetch" mesmo depois de
+// reimplantado. Rodar esta função de novo (▶) e aceitar a tela de
+// permissão resolve — não precisa reautorizar toda vez, só quando um
+// escopo novo é adicionado.
 function autorizar() {
   CalendarApp.getDefaultCalendar();
   DriveApp.getRootFolder();
+  UrlFetchApp.fetch("https://www.google.com", { muteHttpExceptions: true });
 }
 
 function doPost(e) {

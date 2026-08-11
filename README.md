@@ -49,7 +49,22 @@ O `Code.gs` faz 4 coisas, e só essas quatro:
 
 ### 2.1. Preparar o modelo do contrato (Google Docs)
 
-1. Crie um Google Docs com o texto do seu contrato, usando placeholders entre chaves duplas no lugar dos dados que mudam por cliente: `{{CLIENTE}}`, `{{VALOR_TOTAL}}`, `{{FORMA_PAGAMENTO}}`, `{{DATA}}`.
+1. Crie um Google Docs com o texto do seu contrato, usando placeholders entre chaves duplas no lugar dos dados que mudam por cliente. O sistema preenche estes automaticamente ao gerar o PDF:
+
+   | Placeholder | O que vira |
+   |---|---|
+   | `{{CLIENTE}}` | Nome do cliente (empresa ou pessoa física) |
+   | `{{CONTRATANTE_QUALIFICACAO}}` | Parágrafo de qualificação já pronto — "pessoa jurídica..., inscrita no CNPJ sob o nº..., com sede em..., neste ato representada por..., portador(a) do CPF nº..." (PJ) ou "pessoa física, portador(a) do CPF nº..., residente e domiciliado(a) em..." (PF, sem representante) |
+   | `{{VALOR_TOTAL}}` | Valor total formatado, ex: "R$ 30.000,00" |
+   | `{{VALOR_TOTAL_EXTENSO}}` | O mesmo valor por extenso, ex: "trinta mil reais" |
+   | `{{FORMA_PAGAMENTO}}` | Ex: "À vista", "Entrada de R$ 5.000,00 + 6x" ou "7x personalizadas" |
+   | `{{PRAZO_TEXTO}}` | Ex: "6 (seis) meses" — conta os meses-calendário distintos cobertos pelas parcelas |
+   | `{{TABELA_PARCELAS}}` | Lista com marcadores, uma linha por parcela: "• Parcela 1: R$ 2.000,00 (dois mil reais), com vencimento em 10/08/2026." — cobre à vista, entrada+parcelas e parcelas personalizadas automaticamente |
+   | `{{DATA}}` | Data do contrato, formatada (ex: "10/08/2026") |
+   | `{{DATA_CONTRATO_EXTENSO}}` | A mesma data por extenso, ex: "10 de agosto de 2026" (sem a cidade — escreva "Belém, " fixo antes, se for o caso) |
+   | `{{CONTRATANTE_REPRESENTANTE_LINHA}}` | Linha extra no bloco de assinatura ("Nome: Fulano de Tal") — só aparece se o cliente for PJ com representante cadastrado; some do documento pra PF |
+
+   Um modelo completo pronto pra colar (baseado no contrato real usado com a BRDF Energia Solar, generalizado com esses placeholders) foi entregue no chat — é só substituir o conteúdo do Google Docs por ele.
 2. Copie o **ID do documento** (a parte da URL entre `/d/` e `/edit`).
 
 ### 2.2. Implantar o Code.gs
@@ -125,6 +140,15 @@ reenviar por WhatsApp.
 Cada nova implantação do `Code.gs` (passo 2.2.6) já cobre essa integração,
 não precisa de nenhum passo extra além dos de sempre.
 
+**Erro "Você não tem permissão para chamar UrlFetchApp.fetch"**: acontece
+se o `Code.gs` foi autorizado (passo 2.2.5) antes de o `enviarParaAssinatura`
+existir — a autorização antiga não inclui o escopo de "conectar a serviço
+externo", que só esse botão usa. Corrige assim: no editor do Apps Script,
+rode a função `autorizar` de novo (▶) — ela agora força esse escopo a
+aparecer na tela de permissão — aceite a tela que aparecer, depois faça
+uma **nova implantação** (Implantar → Gerenciar implantações → editar →
+Nova versão). Não precisa repetir isso de novo depois, só na primeira vez.
+
 ## 3. Planilha administrativa
 
 Este projeto inclui [`planilha.html`](planilha.html) — uma página que
@@ -164,7 +188,7 @@ guardam `dataEntrouEtapa` (Timestamp) — é a partir dela que o badge de SLA
 é calculado, ao vivo, no navegador (não é um valor gravado, recalcula toda
 vez que a tela renderiza).
 
-- **clientes/{id}**: `nome`, `telefone`, `email`, `cpfCnpj`, `endereco`, `origem`, `observacoes`, `createdAt` — tabela auxiliar de consulta.
+- **clientes/{id}**: `nome`, `telefone`, `email`, `cpfCnpj`, `endereco`, `representanteNome`, `representanteCpf` (só relevantes/exigidos pra CNPJ — o modal mostra esses 2 campos automaticamente quando detecta 12+ dígitos no CPF/CNPJ), `origem`, `observacoes`, `createdAt` — tabela auxiliar de consulta.
 - **etapasAgendamentoConfig/{id}**: `nome`, `ordem`, `entraFunilVendas` (bool — dispara a criação automática da oportunidade + evento na Agenda), `perda` (bool — pede motivo ao arrastar um card pra cá), `slaUnidade` (`dias`/`horas`), `slaAmarelo`, `slaVermelho`.
 - **agendamentos/{id}**: `clienteId`, `clienteNome`, `telefone`, `data` (yyyy-MM-dd), `hora`, `etapa` (id de `etapasAgendamentoConfig`), `dataEntrouEtapa`, `convertido` (bool — já virou oportunidade?), `enviadoAgenda` (bool — já criou o evento no Google?), `googleEventId`, `motivoPerda`, `observacoes`, `createdAt`, `updatedAt` — Funil de Agendamento. Subcoleção `historico/` (create-only).
 - **etapasVendaConfig/{id}**: `nome`, `ordem`, `fechamento` (bool — abre o gerador de contrato), `perda` (bool), `slaUnidade`, `slaAmarelo`, `slaVermelho`.

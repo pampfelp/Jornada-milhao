@@ -59,6 +59,14 @@ pra assinar, sozinha. Pra ligar isso:
 Sem isso configurado, o resto do sistema continua funcionando normal — só
 o botão "Enviar para assinatura digital" mostra um aviso do que falta.
 
+**Deu o erro "Você não tem permissão para chamar UrlFetchApp.fetch"?**
+Isso acontece se você já tinha autorizado o `Code.gs` antes desse botão
+existir. No editor do Apps Script, rode a função `autorizar` de novo (▶)
+— vai aparecer uma tela de permissão nova, pedindo acesso a "serviço
+externo" — aceite, e depois faça uma **nova implantação** (Implantar →
+Gerenciar implantações → editar → Nova versão). Só precisa fazer isso uma
+vez.
+
 ## Passo 3 — Colocar no ar
 
 Este sistema **não funciona só abrindo o `index.html` no computador** (é
@@ -144,6 +152,12 @@ kanban está visível, sem sair da tela.
   Administrativo. Arrastar pra "Perdido" pede o motivo. No detalhe do
   contrato (depois do PDF pronto), dá pra mandar direto pra assinatura
   eletrônica — veja "Ligar a assinatura eletrônica" no Passo 2.
+- **Cliente pessoa jurídica (CNPJ)**: assim que você digita um CNPJ (12+
+  dígitos) no CPF/CNPJ do cliente, aparecem 2 campos novos — "Nome do
+  representante legal" e "CPF do representante" — obrigatórios pra gerar
+  contrato com esse cliente. É o sócio/representante que assina pela
+  empresa; entra automaticamente no texto do PDF (parágrafo de
+  qualificação e assinatura). Cliente pessoa física não precisa disso.
 - **Funil Administrativo**: arraste o card entre as etapas conforme o
   atendimento avança — a cor do SLA no card reflete quanto tempo falta
   (ou já passou) do prazo daquela etapa.
