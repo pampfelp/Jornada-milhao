@@ -1,9 +1,13 @@
 /**
  * Jornada do Milhão — Apps Script mínimo, usado SÓ como proxy de APIs
  * externas (Google Agenda e geração de PDF de contrato). NÃO é o banco de
- * dados deste sistema (isso é o Firestore) e NÃO guarda nenhum dado de
- * negócio — só repassa 3 integrações que o navegador sozinho não consegue
- * fazer:
+ * dados deste sistema (isso é o Firestore) — mas a integração com a
+ * YayForms (item 5 abaixo) É uma exceção: como não há ninguém no navegador
+ * esperando pra salvar o lead quando alguém responde um formulário, este
+ * script escreve DIRETO no Firestore nesse caso específico (via API REST,
+ * sem autenticação — as mesmas regras de formato que valem pro app.js
+ * valem aqui). Fora isso, este arquivo só repassa integrações que o
+ * navegador sozinho não consegue fazer:
  *
  *   1. "listarCalendarios" — lista os calendários que a conta implantada
  *      enxerga, pra alimentar o seletor em Configurações (pra escolher em
@@ -23,6 +27,12 @@
  *      Properties (AUTENTIQUE_API_TOKEN), nunca no código-fonte, então
  *      nunca aparece no repositório público nem no navegador de quem usa
  *      o sistema.
+ *   5. Webhook da YayForms (recebido em "?origem=yayforms", não é uma
+ *      "action" chamada pelo app.js) — toda vez que alguém responde
+ *      QUALQUER formulário cadastrado na YayForms, ela avisa este script,
+ *      que busca a resposta completa na API da YayForms e cria um lead
+ *      novo direto no Funil de Agendamento (etapa inicial), com o nome do
+ *      formulário guardado no campo "Origem" do cliente.
  *
  * ESCOPO — SÓ CRIAÇÃO de evento na Agenda, SÓ CRIAÇÃO de arquivo no Drive:
  * nenhuma ação aqui lê, edita ou apaga evento da Agenda, nem apaga arquivo
@@ -45,6 +55,15 @@
  *      AUTENTIQUE_SANDBOX     = (opcional; "true" pra testar sem gastar
  *                                 crédito/documento real — deixe em
  *                                 branco ou "false" em produção)
+ *      YAYFORMS_API_TOKEN     = (opcional; token gerado em
+ *                                 yayforms.com/help/how-to-generate-a-yay-
+ *                                 forms-api-token — sem isso, o webhook de
+ *                                 leads não funciona)
+ *      YAYFORMS_WEBHOOK_TOKEN = (opcional; uma senha longa que VOCÊ
+ *                                 inventa — é o que impede qualquer pessoa
+ *                                 na internet de forjar leads falsos nessa
+ *                                 URL pública. Veja o README, seção
+ *                                 "YayForms", pro passo a passo completo.)
  * 5. Rode a função "autorizar" uma vez direto no editor (▶) pra autorizar
  *    o acesso à Agenda e ao Drive antes de implantar.
  * 6. Menu Implantar > Nova implantação > tipo "Aplicativo da Web".
@@ -77,6 +96,12 @@ function autorizar() {
 }
 
 function doPost(e) {
+  // Webhook da YayForms não manda {action: "..."} como o app.js manda —
+  // ele tem o formato de payload dela mesma. Por isso é distinguido pela
+  // query string da URL (configurada na YayForms), não pelo corpo.
+  if (e.parameter && e.parameter.origem === "yayforms") {
+    return json_(acaoReceberLeadYayforms_(e));
+  }
   var body = {};
   try { body = JSON.parse(e.postData.contents); } catch (err) {}
   return json_(rotear_(body));
@@ -273,6 +298,205 @@ function acaoEnviarParaAssinatura_(fileId, clienteNome, clienteEmail, nomeDocume
     link: assinatura.link ? assinatura.link.short_link : null,
     sandbox: sandbox
   };
+}
+
+// ══════════════ YAYFORMS → NOVO LEAD NO FUNIL DE AGENDAMENTO ══════════════
+//
+// Fluxo: em cada formulário da YayForms, Benedito cadastra um webhook
+// apontando pra ESTA MESMA URL do Code.gs, com "?origem=yayforms&token=SEU_
+// TOKEN" no final. Toda resposta enviada (não parcial) dispara um POST
+// aqui — o corpo exato que a YayForms manda varia entre "versões" de
+// payload, então em vez de depender do formato exato, este script só usa o
+// corpo pra achar o ID da resposta, e busca os dados de verdade na API da
+// YayForms (GET /responses/{id}), que tem um formato estável e testado.
+//
+// Segurança: Apps Script não dá acesso aos headers HTTP de quem chamou
+// doPost — só à query string e ao corpo. Por isso a verificação não é por
+// header de assinatura (como a YayForms oferece), e sim por um token
+// simples na própria URL: sem ele batendo com YAYFORMS_WEBHOOK_TOKEN, a
+// requisição é rejeitada. Como a URL deste Code.gs já é pública (está no
+// app.js, que é público), esse token é a ÚNICA coisa que impede qualquer
+// pessoa na internet de forjar leads falsos direto no funil.
+
+var FIRESTORE_PROJECT_ID_ = "financeirojornadamilhao";
+// Mesma chave pública que já vive em firebase-init.js — não é segredo (é
+// assim que o Firebase Web funciona), só identifica o projeto.
+var FIRESTORE_API_KEY_ = "AIzaSyD2ud5FQsbZeWp8Yh9tIN4W1Nlr60je3dQ";
+
+// Igual ao rotear_(), sempre devolve um JSON {ok:...} mesmo se algo
+// explodir no meio (ex: Firestore fora do ar) — nunca deixa o doPost
+// devolver um erro cru pro webhook da YayForms.
+function acaoReceberLeadYayforms_(e) {
+  try {
+    return acaoReceberLeadYayformsInterno_(e);
+  } catch (err) {
+    return { ok: false, erro: String(err) };
+  }
+}
+
+function acaoReceberLeadYayformsInterno_(e) {
+  var props = PropertiesService.getScriptProperties();
+  var tokenEsperado = props.getProperty("YAYFORMS_WEBHOOK_TOKEN");
+  if (!tokenEsperado || !e.parameter || e.parameter.token !== tokenEsperado) {
+    return { ok: false, erro: "Token do webhook ausente ou inválido." };
+  }
+  var apiToken = props.getProperty("YAYFORMS_API_TOKEN");
+  if (!apiToken) return { ok: false, erro: "Configure YAYFORMS_API_TOKEN em Project Settings > Script Properties." };
+
+  var corpoTexto = (e.postData && e.postData.contents) || "{}";
+  var corpo = {};
+  try { corpo = JSON.parse(corpoTexto); } catch (err) {}
+
+  var responseId = extrairResponseIdYayforms_(corpo, corpoTexto);
+  if (!responseId) return { ok: false, erro: "Não encontrei o ID da resposta no webhook recebido." };
+
+  var respostaHttp = UrlFetchApp.fetch("https://api.yayforms.com/responses/" + responseId, {
+    headers: { Authorization: "Bearer " + apiToken }, muteHttpExceptions: true
+  });
+  var dadosResposta = JSON.parse(respostaHttp.getContentText());
+  var r = dadosResposta && dadosResposta.data;
+  if (!r) return { ok: false, erro: "Não consegui buscar a resposta " + responseId + " na API da YayForms." };
+  if (!r.submittedAt) return { ok: true, ignorado: "Resposta ainda não enviada (parcial) — não vira lead." };
+
+  var nomeFormulario = "Formulário YayForms";
+  try {
+    var respostaForm = UrlFetchApp.fetch("https://api.yayforms.com/forms/" + r.formId, {
+      headers: { Authorization: "Bearer " + apiToken }, muteHttpExceptions: true
+    });
+    var dadosForm = JSON.parse(respostaForm.getContentText());
+    if (dadosForm && dadosForm.data && dadosForm.data.title) nomeFormulario = dadosForm.data.title;
+  } catch (err) {}
+
+  var extraido = extrairContatoRespostaYayforms_(r.answers || []);
+
+  var etapaInicialId = obterPrimeiraEtapaAgendamento_();
+  if (!etapaInicialId) return { ok: false, erro: "Cadastre ao menos uma etapa no Funil de Agendamento (Configurações) antes de ligar essa integração." };
+
+  var observacoes = "Formulário: " + nomeFormulario + " (resposta " + r.id + ")";
+  if (r.tracking && (r.tracking.utm_source || r.tracking.utm_medium || r.tracking.utm_campaign)) {
+    observacoes += "\nUTM: " + [r.tracking.utm_source, r.tracking.utm_medium, r.tracking.utm_campaign].filter(function (x) { return x; }).join(" / ");
+  }
+  observacoes += "\n\n" + extraido.linhas.join("\n");
+
+  var clienteId = criarDocumentoFirestore_("clientes", {
+    nome: extraido.nome || ("Lead sem nome — " + nomeFormulario),
+    telefone: extraido.telefone, email: extraido.email, cpfCnpj: "", endereco: "",
+    representanteNome: "", representanteCpf: "", origem: nomeFormulario, observacoes: ""
+  });
+
+  criarDocumentoFirestore_("agendamentos", {
+    clienteId: clienteId, clienteNome: extraido.nome || ("Lead sem nome — " + nomeFormulario),
+    telefone: extraido.telefone, email: extraido.email,
+    data: "", hora: "", etapa: etapaInicialId,
+    convertido: false, enviadoAgenda: false, motivoPerda: "",
+    observacoes: observacoes
+  });
+
+  return { ok: true, clienteId: clienteId, formulario: nomeFormulario };
+}
+
+// A YayForms manda o ID da resposta em algum lugar do corpo do webhook —
+// como o formato exato do payload varia (v1/v2, e pode mudar), tenta
+// alguns caminhos comuns e, se nenhum bater, cai pra procurar qualquer
+// `"id":"<24 caracteres hexadecimais>"` no texto bruto (é assim que a
+// YayForms formata IDs em toda a API — bem confiável na prática).
+function extrairResponseIdYayforms_(corpo, corpoTexto) {
+  var candidatos = [
+    corpo && corpo.response && corpo.response.id,
+    corpo && corpo.responseId,
+    corpo && corpo.id,
+    corpo && corpo.data && corpo.data.id,
+    corpo && corpo.data && corpo.data.responseId
+  ];
+  for (var i = 0; i < candidatos.length; i++) {
+    if (candidatos[i] && /^[a-f0-9]{24}$/i.test(candidatos[i])) return candidatos[i];
+  }
+  var m = corpoTexto.match(/"id"\s*:\s*"([a-f0-9]{24})"/i);
+  return m ? m[1] : null;
+}
+
+// Tenta descobrir nome/telefone/e-mail nas respostas de um formulário
+// (formato livre — cada form tem perguntas diferentes) combinando o texto
+// da pergunta ("fieldPlainTitle") com o formato do valor respondido. Nada
+// disso é perdido mesmo se a classificação errar: TODAS as respostas
+// também viram texto em "linhas", que vai pras observações do lead.
+function extrairContatoRespostaYayforms_(answers) {
+  var nome = "", telefone = "", email = "";
+  var linhas = [];
+  answers.forEach(function (a) {
+    if (a.content === null || a.content === undefined) return;
+    var valorTexto = Array.isArray(a.content) ? a.content.join(", ") : String(a.content);
+    if (!valorTexto.trim()) return;
+    var tituloLower = String(a.fieldPlainTitle || "").toLowerCase();
+    var pareceEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valorTexto.trim());
+    var pareceTelefone = /^[\d+()\s-]{8,20}$/.test(valorTexto.trim());
+    if (!nome && !pareceEmail && !pareceTelefone && tituloLower.indexOf("nome") > -1) {
+      nome = valorTexto;
+    } else if (!email && (pareceEmail || tituloLower.indexOf("email") > -1 || tituloLower.indexOf("e-mail") > -1)) {
+      email = valorTexto;
+    } else if (!telefone && (pareceTelefone || tituloLower.indexOf("telefone") > -1 || tituloLower.indexOf("whatsapp") > -1 || tituloLower.indexOf("celular") > -1)) {
+      telefone = valorTexto;
+    }
+    linhas.push((a.fieldPlainTitle || "Pergunta") + ": " + valorTexto);
+  });
+  return { nome: nome, telefone: telefone, email: email, linhas: linhas };
+}
+
+// ══════════════ FIRESTORE REST (só usado pelo webhook da YayForms) ══════════════
+//
+// O resto deste sistema fala com o Firestore direto do navegador, via SDK
+// — mas não existe "navegador" esperando quando um webhook chega aqui.
+// Estas funções chamam a API REST pública do Firestore, SEM nenhum token
+// de autenticação — funciona porque as regras em firestore.rules já são
+// "de formato, não de identidade" (mesmo trade-off documentado no README):
+// qualquer requisição, autenticada ou não, que bater no formato exigido
+// (ex: `clientes` só exige um campo "nome") passa. É o mesmo modelo de
+// segurança que o app.js já usa, só que chamado de dentro do Apps Script
+// em vez de dentro do navegador.
+
+function valorFirestore_(v) {
+  if (v === null || v === undefined) return { nullValue: null };
+  if (typeof v === "boolean") return { booleanValue: v };
+  if (typeof v === "number") return { doubleValue: v };
+  return { stringValue: String(v) };
+}
+
+function criarDocumentoFirestore_(colecao, dados) {
+  var fields = {};
+  Object.keys(dados).forEach(function (k) { fields[k] = valorFirestore_(dados[k]); });
+  var agora = new Date().toISOString();
+  fields.createdAt = { timestampValue: agora };
+  fields.updatedAt = { timestampValue: agora };
+  if (colecao === "agendamentos") fields.dataEntrouEtapa = { timestampValue: agora };
+  var url = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents/" + colecao + "?key=" + FIRESTORE_API_KEY_;
+  var resp = UrlFetchApp.fetch(url, {
+    method: "post", contentType: "application/json",
+    payload: JSON.stringify({ fields: fields }), muteHttpExceptions: true
+  });
+  var json = JSON.parse(resp.getContentText());
+  if (json.error) throw new Error("Firestore (" + colecao + "): " + json.error.message);
+  var partes = json.name.split("/");
+  return partes[partes.length - 1];
+}
+
+// Acha a etapa com menor "ordem" em etapasAgendamentoConfig (normalmente
+// "Novo Lead") — é nela que todo lead vindo de formulário nasce, do mesmo
+// jeito que um lead criado manualmente no sistema.
+function obterPrimeiraEtapaAgendamento_() {
+  var url = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents/etapasAgendamentoConfig?key=" + FIRESTORE_API_KEY_ + "&pageSize=100";
+  var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  var json = JSON.parse(resp.getContentText());
+  var docs = json.documents || [];
+  var melhor = null;
+  docs.forEach(function (d) {
+    var campoOrdem = d.fields && d.fields.ordem;
+    var ordem = campoOrdem ? Number(campoOrdem.integerValue != null ? campoOrdem.integerValue : campoOrdem.doubleValue) : 999999;
+    if (!melhor || ordem < melhor.ordem) {
+      var partes = d.name.split("/");
+      melhor = { id: partes[partes.length - 1], ordem: ordem };
+    }
+  });
+  return melhor ? melhor.id : null;
 }
 
 function json_(obj) {

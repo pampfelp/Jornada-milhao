@@ -149,6 +149,64 @@ aparecer na tela de permissão — aceite a tela que aparecer, depois faça
 uma **nova implantação** (Implantar → Gerenciar implantações → editar →
 Nova versão). Não precisa repetir isso de novo depois, só na primeira vez.
 
+### 2.5. Leads automáticos (YayForms → Funil de Agendamento)
+
+Toda resposta enviada em qualquer formulário da [YayForms](https://yayforms.com)
+vira um lead novo, sozinho, na 1ª etapa do Funil de Agendamento (a de menor
+"ordem" — normalmente "Novo Lead"). O sistema tenta identificar nome,
+telefone e e-mail entre as perguntas respondidas (por palavras-chave no
+título da pergunta e pelo formato da resposta); **todas** as respostas,
+identificadas ou não, ficam guardadas nas observações do lead, então nada
+se perde mesmo se a identificação errar. O campo **"Origem"** do cliente
+(o mesmo que já existe no cadastro) recebe o nome do formulário — é assim
+que dá pra saber de qual formulário cada lead veio, tanto no detalhe do
+cliente quanto no detalhe do lead no funil.
+
+**Como funciona por baixo dos panos**: como não tem ninguém com o
+navegador aberto esperando o lead chegar, o `Code.gs` escreve o cliente e
+o lead **direto no Firestore** (via a API REST dele, sem login — as
+mesmas regras de formato que valem pro `app.js` valem aqui) assim que a
+YayForms avisa (webhook) que uma resposta foi enviada.
+
+1. Gere um token de API em [yayforms.com/help/how-to-generate-a-yay-forms-api-token](https://yayforms.com/help/how-to-generate-a-yay-forms-api-token).
+2. Adicione como Script Property `YAYFORMS_API_TOKEN` (mesmo lugar dos
+   outros — passo 2.2.4).
+3. Invente uma senha longa e aleatória e adicione como Script Property
+   `YAYFORMS_WEBHOOK_TOKEN`. **Essa senha é o que impede qualquer pessoa
+   na internet de forjar leads falsos** — a URL do `Code.gs` já é pública
+   (está no `app.js`, que é público), então sem esse token qualquer um que
+   descobrisse a URL poderia criar leads inventados no seu funil.
+4. Em cada formulário que deve alimentar o funil: no painel da YayForms,
+   abra o formulário → **Integrate → Webhooks → Add webhook** → cole a
+   URL do `Code.gs` (a mesma `.../exec` de sempre) **acrescentando
+   `?origem=yayforms&token=SEU_TOKEN_DO_PASSO_3` no final**. Método POST
+   (padrão). Salve.
+5. Repita o passo 4 pra cada formulário que deve criar leads — a
+   integração vale por formulário, não é automática pros que forem
+   criados depois.
+6. Teste: no próprio formulário, use o botão de teste do webhook (⋮ →
+   Test) ou responda o formulário de verdade uma vez — o lead deve
+   aparecer em "Novo Lead" no Funil de Agendamento em poucos segundos.
+
+**Não ative** a opção "enviar respostas incompletas" nas configurações do
+formulário/webhook, a menos que você realmente queira que gente que
+começou e abandonou o formulário também vire lead — por padrão a YayForms
+só dispara o webhook quando a resposta é enviada até o fim, e o sistema
+também confere isso (`submittedAt`) antes de criar o lead, como segurança
+extra.
+
+**Limitações conhecidas** (aceitáveis pro uso atual, mas bom saber):
+- Não há verificação criptográfica do webhook (o Apps Script não
+  consegue ler cabeçalhos HTTP da requisição recebida) — a segurança é
+  só o token na URL, que precisa continuar em segredo.
+- Não há proteção contra a YayForms reenviar o mesmo webhook duas vezes
+  (poderia criar um lead duplicado) — na prática é raro, e duplicar um
+  lead é fácil de perceber/mesclar manualmente.
+- A identificação de nome/telefone/e-mail é por palavra-chave no título
+  da pergunta ("nome", "whatsapp", "telefone"...) — perguntas fraseadas
+  de um jeito muito diferente podem não ser reconhecidas, mas a resposta
+  continua salva (só cai em "observações" em vez do campo certo).
+
 ## 3. Planilha administrativa
 
 Este projeto inclui [`planilha.html`](planilha.html) — uma página que

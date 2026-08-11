@@ -67,6 +67,31 @@ externo" — aceite, e depois faça uma **nova implantação** (Implantar →
 Gerenciar implantações → editar → Nova versão). Só precisa fazer isso uma
 vez.
 
+### Ligar os leads automáticos da YayForms — opcional
+
+Toda resposta enviada em qualquer formulário da YayForms pode virar um
+lead sozinho, direto em "Novo Lead" no Funil de Agendamento, com o nome
+do formulário salvo no campo "Origem" do cliente. Pra ligar:
+
+1. Gere um token de API da YayForms em [yayforms.com/help/how-to-generate-a-yay-forms-api-token](https://yayforms.com/help/how-to-generate-a-yay-forms-api-token).
+2. No mesmo Apps Script do Passo 2, adicione a Script Property
+   `YAYFORMS_API_TOKEN` com esse token.
+3. Invente uma senha longa (ex: uma sequência aleatória de letras e
+   números) e adicione como Script Property `YAYFORMS_WEBHOOK_TOKEN`.
+   Essa senha é o que impede qualquer pessoa que descubra a URL do
+   sistema de criar leads falsos — guarde ela como guardaria qualquer
+   senha.
+4. Em cada formulário na YayForms: **Integrate → Webhooks → Add webhook**
+   → cole a mesma URL `.../exec` do `Code.gs`, acrescentando no final
+   `?origem=yayforms&token=` seguido da senha que você inventou no passo
+   3. Salve. Repita pra cada formulário que deve virar lead.
+5. Teste respondendo o formulário (ou usando o botão de teste do
+   webhook) — o lead deve aparecer em "Novo Lead" em poucos segundos.
+
+Sem isso configurado, o resto do sistema continua funcionando normal —
+essa integração é só um jeito automático de criar leads, os manuais
+continuam funcionando igual.
+
 ## Passo 3 — Colocar no ar
 
 Este sistema **não funciona só abrindo o `index.html` no computador** (é
@@ -138,7 +163,10 @@ kanban está visível, sem sair da tela.
   chega em **Agendado** ou **Reagendado** (marcadas "Entra em Vendas" em
   Configurações), o sistema cria a oportunidade automaticamente no Funil
   de Vendas e o evento na Google Agenda, sem precisar de mais nenhum
-  clique. Arrastar pra **Perdido** pede o motivo.
+  clique. Arrastar pra **Perdido** pede o motivo. Leads que chegam
+  sozinhos por formulário (veja "Ligar os leads automáticos da YayForms"
+  no Passo 2) também nascem aqui, na mesma etapa — clique no card pra ver
+  em "Origem do lead" de qual formulário ele veio.
 - **Funil de Vendas**: arraste o card entre as etapas normalmente. Ao
   arrastar pra etapa marcada como "fechamento" (vem como "Fechado" por
   padrão), o card **não é movido ainda** — abre o gerador de contrato com

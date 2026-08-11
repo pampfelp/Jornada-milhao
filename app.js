@@ -1022,9 +1022,11 @@ function abrirDetalheAgendamento(id) {
   const a = STATE.agendamentos.find((x) => x.id === id);
   if (!a) return;
   const etapaCfg = STATE.etapasAgendamento.find((e) => e.id === a.etapa);
+  const clienteDoLead = STATE.clientes.find((c) => c.id === a.clienteId);
   abrirDetalhe({
     titulo: a.clienteNome,
     campos: [
+      ["Origem do lead", esc((clienteDoLead && clienteDoLead.origem) || "—")],
       ["Telefone", esc(a.telefone || "—")],
       ["E-mail", esc(a.email || "—")],
       ["Instagram da empresa", esc(a.instagram || "—")],
