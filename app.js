@@ -1801,10 +1801,12 @@ function abrirDetalheContrato(id) {
   ];
   if (links) {
     campos.push(["PDF", `<iframe src="${esc(links.preview)}" style="width:100%;height:340px;border:1px solid var(--line);border-radius:8px;background:#fff;"></iframe>
-      <div style="display:flex;gap:14px;margin-top:8px;">
+      <div style="display:flex;gap:14px;align-items:center;margin-top:8px;flex-wrap:wrap;">
         <a href="${esc(c.pdfUrl || links.preview)}" target="_blank" rel="noopener">Abrir em nova aba</a>
         <a href="${esc(links.download)}">Baixar PDF</a>
-      </div>`]);
+        <button class="btn-small" type="button" onclick="window.__jm.gerarPdfContratoExistente('${id}')">🔄 Gerar PDF novamente</button>
+      </div>
+      <p class="hint" style="margin-top:6px;">Use "Gerar PDF novamente" se o modelo do contrato mudou depois que este PDF foi gerado (ex: placeholder não preenchido) — ele substitui o PDF atual por um novo, com os dados de hoje.</p>`]);
   } else if (c.pdfUrl) {
     campos.push(["PDF", `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener">Ver PDF</a>`]);
   } else {
