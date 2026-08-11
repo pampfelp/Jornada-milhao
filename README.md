@@ -188,12 +188,15 @@ YayForms avisa (webhook) que uma resposta foi enviada.
    Test) ou responda o formulário de verdade uma vez — o lead deve
    aparecer em "Novo Lead" no Funil de Agendamento em poucos segundos.
 
-**Não ative** a opção "enviar respostas incompletas" nas configurações do
-formulário/webhook, a menos que você realmente queira que gente que
-começou e abandonou o formulário também vire lead — por padrão a YayForms
-só dispara o webhook quando a resposta é enviada até o fim, e o sistema
-também confere isso (`submittedAt`) antes de criar o lead, como segurança
-extra.
+**Respostas parciais (quem começou e não terminou) também viram lead** —
+por padrão a YayForms só dispara o webhook quando a resposta é enviada até
+o fim; pra também capturar quem abandonou no meio, ative a opção "enviar
+respostas incompletas" nas configurações do formulário/webhook. O sistema
+não filtra por status — cria o lead do mesmo jeito, só marca nas
+observações se foi "respondido até o fim" ou "PARCIAL", pra você priorizar
+o contato sabendo disso. Um lead parcial pode ter menos dados (só o que a
+pessoa preencheu antes de sair) — o que faltar fica em branco, como
+qualquer outro lead incompleto criado manualmente.
 
 **Limitações conhecidas** (aceitáveis pro uso atual, mas bom saber):
 - Não há verificação criptográfica do webhook (o Apps Script não

@@ -356,7 +356,6 @@ function acaoReceberLeadYayformsInterno_(e) {
   var dadosResposta = JSON.parse(respostaHttp.getContentText());
   var r = dadosResposta && dadosResposta.data;
   if (!r) return { ok: false, erro: "Não consegui buscar a resposta " + responseId + " na API da YayForms." };
-  if (!r.submittedAt) return { ok: true, ignorado: "Resposta ainda não enviada (parcial) — não vira lead." };
 
   var nomeFormulario = "Formulário YayForms";
   try {
@@ -373,6 +372,7 @@ function acaoReceberLeadYayformsInterno_(e) {
   if (!etapaInicialId) return { ok: false, erro: "Cadastre ao menos uma etapa no Funil de Agendamento (Configurações) antes de ligar essa integração." };
 
   var observacoes = "Formulário: " + nomeFormulario + " (resposta " + r.id + ")";
+  observacoes += r.submittedAt ? "\nStatus: respondido até o fim" : "\nStatus: PARCIAL — começou a responder mas não chegou ao fim";
   if (r.tracking && (r.tracking.utm_source || r.tracking.utm_medium || r.tracking.utm_campaign)) {
     observacoes += "\nUTM: " + [r.tracking.utm_source, r.tracking.utm_medium, r.tracking.utm_campaign].filter(function (x) { return x; }).join(" / ");
   }

@@ -4,7 +4,7 @@
 
 import { db, APPS_SCRIPT_PROXY_URL } from "./firebase-init.js";
 import {
-  collection, addDoc, updateDoc, deleteDoc, doc, setDoc, getDocs,
+  collection, addDoc, updateDoc, deleteDoc, doc, setDoc, getDocs, getDocsFromServer,
   onSnapshot, query, orderBy, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 
@@ -58,9 +58,6 @@ let pendingMarcarPago = null; // { tipo: "parcela"|"despesa"|"entrada", id }
 // ter ido, pra completar o movimento só depois de salvar com telefone.
 let pendingAgendamentoMoveEtapa = null;
 let lancandoRecorrentes = false;
-let etapasAgendamentoSeeded = false;
-let etapasVendaSeeded = false;
-let etapasAdminSeeded = false;
 
 /* ══════════════ HELPERS ══════════════ */
 
@@ -2924,7 +2921,28 @@ const DEFAULT_ETAPAS_ADMIN = [
   { nome: "Enviado para Mentoria", ordem: 4, slaUnidade: "dias", slaAmarelo: 3, slaVermelho: 7 }
 ];
 
-function iniciarListeners() {
+// Cria as etapas padrão de uma coleção SÓ se ela estiver mesmo vazia no
+// servidor — usa getDocsFromServer (nunca cache) porque essa checagem
+// rodava antes dentro do onSnapshot, olhando pro 1º snapshot entregue, e
+// em pelo menos duas vezes esse 1º snapshot chegou vazio antes do
+// snapshot "de verdade" (uma característica observada do SDK, não um bug
+// deste código) — cada vez que isso acontecia, semeava um conjunto NOVO
+// de etapas, duplicando tudo. Rodar isso separado, uma única vez, ANTES
+// de qualquer listener existir, elimina essa corrida inteira.
+async function seedEtapasSeVazio_(colecao, defaults) {
+  const snap = await getDocsFromServer(query(collection(db, colecao), orderBy("ordem")));
+  if (snap.empty) {
+    for (const e of defaults) await addDoc(collection(db, colecao), e);
+  }
+}
+
+async function iniciarListeners() {
+  await Promise.all([
+    seedEtapasSeVazio_("etapasAgendamentoConfig", DEFAULT_ETAPAS_AGENDAMENTO),
+    seedEtapasSeVazio_("etapasVendaConfig", DEFAULT_ETAPAS_VENDA),
+    seedEtapasSeVazio_("etapasAdminConfig", DEFAULT_ETAPAS_ADMIN)
+  ]);
+
   onSnapshot(doc(db, "config", "geral"), (snap) => {
     STATE.config = snap.exists() ? snap.data() : {};
     renderConfigCalendario();
@@ -2935,13 +2953,8 @@ function iniciarListeners() {
     renderTabelaClientes();
   }, (err) => mostrarErro("Erro de conexão (clientes): " + err.message));
 
-  onSnapshot(query(collection(db, "etapasAgendamentoConfig"), orderBy("ordem")), async (snap) => {
+  onSnapshot(query(collection(db, "etapasAgendamentoConfig"), orderBy("ordem")), (snap) => {
     STATE.etapasAgendamento = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    if (!etapasAgendamentoSeeded && STATE.etapasAgendamento.length === 0) {
-      etapasAgendamentoSeeded = true;
-      for (const e of DEFAULT_ETAPAS_AGENDAMENTO) await addDoc(collection(db, "etapasAgendamentoConfig"), e);
-      return;
-    }
     renderKanbanAgendamento();
     renderConfigEtapasAgendamento();
   }, (err) => mostrarErro("Erro de conexão (etapas de agendamento): " + err.message));
@@ -2951,13 +2964,8 @@ function iniciarListeners() {
     renderKanbanAgendamento();
   }, (err) => mostrarErro("Erro de conexão (agendamentos): " + err.message));
 
-  onSnapshot(query(collection(db, "etapasVendaConfig"), orderBy("ordem")), async (snap) => {
+  onSnapshot(query(collection(db, "etapasVendaConfig"), orderBy("ordem")), (snap) => {
     STATE.etapasVenda = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    if (!etapasVendaSeeded && STATE.etapasVenda.length === 0) {
-      etapasVendaSeeded = true;
-      for (const e of DEFAULT_ETAPAS_VENDA) await addDoc(collection(db, "etapasVendaConfig"), e);
-      return;
-    }
     renderKanbanVendas();
     renderConfigEtapasVenda();
   }, (err) => mostrarErro("Erro de conexão (etapas de venda): " + err.message));
@@ -2992,13 +3000,8 @@ function iniciarListeners() {
     renderFinanceiro();
   }, (err) => mostrarErro("Erro de conexão (entradas): " + err.message));
 
-  onSnapshot(query(collection(db, "etapasAdminConfig"), orderBy("ordem")), async (snap) => {
+  onSnapshot(query(collection(db, "etapasAdminConfig"), orderBy("ordem")), (snap) => {
     STATE.etapasAdmin = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    if (!etapasAdminSeeded && STATE.etapasAdmin.length === 0) {
-      etapasAdminSeeded = true;
-      for (const e of DEFAULT_ETAPAS_ADMIN) await addDoc(collection(db, "etapasAdminConfig"), e);
-      return;
-    }
     renderKanbanAdministrativo();
     renderConfigEtapasAdmin();
   }, (err) => mostrarErro("Erro de conexão (etapas administrativas): " + err.message));
