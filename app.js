@@ -1342,15 +1342,10 @@ function construirQualificacaoContratante(cliente) {
   return `pessoa física, portador(a) do CPF nº ${cliente.cpfCnpj || "—"}, residente e domiciliado(a) em ${endereco}`;
 }
 
-// "6 (seis) meses" — conta os meses-calendário distintos cobertos pelos
-// vencimentos das parcelas, em vez de assumir 1 parcela = 1 mês (que
-// quebraria num contrato com parcelas personalizadas onde um mês foi
-// dividido em duas datas, como "1º mês em 2 parcelas").
-function calcularPrazoTexto(parcelas) {
-  const meses = new Set((parcelas || []).map((p) => (p.vencimento || "").slice(0, 7)));
-  const n = meses.size || 1;
-  return `${n} (${numeroInteiroExtenso(n)}) ${n === 1 ? "mês" : "meses"}`;
-}
+// A mentoria é sempre um programa de 6 meses, independente da forma de
+// pagamento (à vista, entrada+parcelas ou personalizada) — não varia com
+// o número ou as datas das parcelas.
+const PRAZO_CONTRATO_TEXTO = "6 (seis) meses";
 
 // Tabela (em texto simples, com marcadores) de cada parcela do contrato —
 // substitui o placeholder {{TABELA_PARCELAS}} no modelo. Funciona pras 3
@@ -1376,7 +1371,7 @@ function montarDadosPdfContrato(cliente, contrato, parcelas) {
     VALOR_TOTAL_EXTENSO: valorExtenso(contrato.valorTotal),
     FORMA_PAGAMENTO: descricaoFormaPagamento(contrato.formaPagamento, contrato.valorEntrada, contrato.numParcelas),
     CONTRATANTE_QUALIFICACAO: construirQualificacaoContratante(cliente),
-    PRAZO_TEXTO: calcularPrazoTexto(parcelas),
+    PRAZO_TEXTO: PRAZO_CONTRATO_TEXTO,
     TABELA_PARCELAS: construirTabelaParcelasTexto(parcelas, contrato.formaPagamento),
     DATA: fmtData(dataContrato),
     DATA_CONTRATO_EXTENSO: dataExtenso(dataContrato),
@@ -2091,6 +2086,19 @@ document.getElementById("btn-confirmar-marcar-pago").addEventListener("click", a
   } catch (err) { mostrarErro(err.message); }
 });
 
+// Reverte um "marcar como pago" feito por engano — volta pra "esperado" e
+// limpa a data de pagamento. Vale pra parcela, despesa e entrada, que
+// compartilham o mesmo formato de status.
+async function desmarcarPago(tipo, id) {
+  const titulo = tituloParaMarcarPago(tipo, id);
+  const acao = tipo === "despesa" ? "pago" : tipo === "entrada" ? "recebido" : "paga";
+  if (!confirm(`Desfazer e marcar${titulo ? ` "${titulo}"` : ""} como não ${acao}?`)) return;
+  try {
+    await updateDoc(doc(db, COLECAO_POR_TIPO_PAGO[tipo], id), { status: "esperado", dataPagamento: null });
+    mostrarToast("Pagamento desfeito.");
+  } catch (err) { mostrarErro(err.message); }
+}
+
 function editarParcela(id) {
   const p = STATE.parcelas.find((x) => x.id === id);
   if (!p) return;
@@ -2130,8 +2138,9 @@ function abrirDetalheParcela(id) {
     campos: [
       ["Valor", esc(fmtMoeda(p.valor))],
       ["Vencimento", esc(fmtData(p.vencimento))],
-      ["Status", p.status === "realizado" ? "Pago" : "Esperado"],
-      ["Data do pagamento", esc(fmtData(p.dataPagamento))]
+      p.status === "realizado"
+        ? ["Status", `Pago em ${esc(fmtData(p.dataPagamento))} <button class="btn-small" style="margin-left:8px;" onclick="window.__jm.desmarcarPago('parcela','${id}')">Desfazer</button>`]
+        : ["Status", `Esperado <button class="btn-small" style="margin-left:8px;" onclick="window.__jm.abrirModalMarcarPago('parcela','${id}')">Marcar paga</button>`]
     ],
     onEditar: () => editarParcela(id),
     onExcluir: () => excluirParcela(id)
@@ -2187,7 +2196,9 @@ function renderFinanceiro() {
       <td>${esc(p.clienteNome)}</td><td>${p.numero === 0 ? "Entrada" : "Parcela " + p.numero}</td>
       <td>${fmtData(p.vencimento)}</td><td class="num">${fmtMoeda(p.valor)}</td>
       <td><span class="stamp ${p.status}">${p.status === "realizado" ? "Pago" : "Esperado"}</span></td>
-      <td>${p.status === "esperado" ? `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('parcela','${p.id}')">Marcar paga</button>` : "—"}</td>
+      <td>${p.status === "esperado"
+        ? `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('parcela','${p.id}')">Marcar paga</button>`
+        : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.desmarcarPago('parcela','${p.id}')">Desfazer</button>`}</td>
     </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma parcela neste período.</div></td></tr>`;
 
   const despesasDoPeriodo = STATE.despesas
@@ -2277,7 +2288,7 @@ function abrirDetalheDespesa(id) {
       ["Chave PIX", esc(d.chavePix || "—")],
       ["Recorrente", d.recorrente ? `Sim (dia ${d.diaVencimento})` : "—"],
       d.status === "realizado"
-        ? ["Status", `Pago em ${esc(fmtData(d.dataPagamento))}`]
+        ? ["Status", `Pago em ${esc(fmtData(d.dataPagamento))} <button class="btn-small" style="margin-left:8px;" onclick="window.__jm.desmarcarPago('despesa','${id}')">Desfazer</button>`]
         : ["Status", `Pendente <button class="btn-small" style="margin-left:8px;" onclick="window.__jm.abrirModalMarcarPago('despesa','${id}')">Marcar pago</button>`]
     ],
     onEditar: () => editarDespesa(id),
@@ -2389,7 +2400,9 @@ function renderTabelaDespesas() {
       <td class="mono-select">${esc(d.chavePix || "—")}</td>
       <td>${d.recorrente ? "Sim (dia " + d.diaVencimento + ")" : "—"}</td>
       <td><span class="stamp ${status === "realizado" ? "realizado" : vencida ? "vencido" : "esperado"}">${status === "realizado" ? "Pago" : vencida ? "A pagar" : "Pendente"}</span></td>
-      <td>${status === "realizado" ? "—" : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('despesa','${d.id}')">Marcar pago</button>`}</td>
+      <td>${status === "realizado"
+        ? `<button class="btn-small" onclick="event.stopPropagation();window.__jm.desmarcarPago('despesa','${d.id}')">Desfazer</button>`
+        : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('despesa','${d.id}')">Marcar pago</button>`}</td>
     </tr>`;
     }).join("") || `<tr><td colspan="9"><div class="empty">${termoBusca ? "Nenhuma despesa encontrada pra essa busca." : "Nenhuma despesa no período."}</div></td></tr>`;
 }
@@ -2456,7 +2469,7 @@ function abrirDetalheEntrada(id) {
       ["Valor", esc(fmtMoeda(e.valor))],
       ["Data prevista", esc(fmtData(e.data))],
       e.status === "realizado"
-        ? ["Status", `Recebido em ${esc(fmtData(e.dataPagamento))}`]
+        ? ["Status", `Recebido em ${esc(fmtData(e.dataPagamento))} <button class="btn-small" style="margin-left:8px;" onclick="window.__jm.desmarcarPago('entrada','${id}')">Desfazer</button>`]
         : ["Status", `Pendente <button class="btn-small" style="margin-left:8px;" onclick="window.__jm.abrirModalMarcarPago('entrada','${id}')">Marcar recebido</button>`]
     ],
     onEditar: () => editarEntrada(id),
@@ -2511,7 +2524,9 @@ function renderTabelaEntradas() {
       <td>${esc(e.descricao)}</td><td>${esc(e.categoria || "—")}</td>
       <td class="num">${fmtMoeda(e.valor)}</td><td>${fmtData(e.data)}</td>
       <td><span class="stamp ${status === "realizado" ? "realizado" : vencida ? "vencido" : "esperado"}">${status === "realizado" ? "Recebido" : vencida ? "A receber" : "Pendente"}</span></td>
-      <td>${status === "realizado" ? "—" : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('entrada','${e.id}')">Marcar recebido</button>`}</td>
+      <td>${status === "realizado"
+        ? `<button class="btn-small" onclick="event.stopPropagation();window.__jm.desmarcarPago('entrada','${e.id}')">Desfazer</button>`
+        : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('entrada','${e.id}')">Marcar recebido</button>`}</td>
     </tr>`;
     }).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma entrada no período.</div></td></tr>`;
 }
@@ -3017,7 +3032,7 @@ async function iniciarListeners() {
 // Funções chamadas a partir de HTML gerado por string (onclick inline) —
 // só assim dá pra referenciá-las de dentro de innerHTML num ES module.
 window.__jm = {
-  abrirModalMarcarPago,
+  abrirModalMarcarPago, desmarcarPago,
   abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela, abrirDetalheEntrada,
   abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin,
   gerarPdfContratoExistente, enviarContratoParaAssinatura
