@@ -108,8 +108,14 @@ function fmtDataHora(timestamp) {
   return d.toLocaleDateString("pt-BR") + " " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 }
 
+// NUNCA usar toISOString() aqui — ela converte pra UTC, e o Brasil é UTC-3:
+// entre ~21h e 23h59 (horário local), a data em UTC já virou amanhã, então
+// "hoje" ficaria adiantado em 1 dia bem nas últimas horas de cada dia
+// (afeta toda comparação de vencimento/"a pagar hoje" feita com essa
+// função). Usa os getters locais, mesmo padrão de primeiroDiaMes() abaixo.
 function hojeStr() {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function primeiroDiaMes() {
@@ -844,9 +850,18 @@ async function processarAgendamentoAgendado(agendamentoId, dados) {
   }
 }
 
+// Exclusão em cascata do histórico — sem isso, o subdocumento fica órfão
+// no Firestore pra sempre (as regras já permitem apagar `historico`
+// especificamente por causa disso). Compartilhada pelos 3 funis.
+async function excluirComHistorico(colecao, id) {
+  const historicoSnap = await getDocs(collection(db, colecao, id, "historico"));
+  for (const d of historicoSnap.docs) await deleteDoc(d.ref);
+  await deleteDoc(doc(db, colecao, id));
+}
+
 async function excluirAgendamento(id) {
   if (!confirm("Excluir este agendamento?")) return;
-  try { await deleteDoc(doc(db, "agendamentos", id)); } catch (err) { mostrarErro(err.message); }
+  try { await excluirComHistorico("agendamentos", id); } catch (err) { mostrarErro(err.message); }
 }
 
 // Qualificação vive no LEAD, não no cliente — um mesmo cliente pode gerar
@@ -1116,7 +1131,7 @@ async function moverOportunidade(id, novaEtapa) {
 
 async function excluirOportunidade(id) {
   if (!confirm("Excluir esta oportunidade?")) return;
-  try { await deleteDoc(doc(db, "oportunidades", id)); } catch (err) { mostrarErro(err.message); }
+  try { await excluirComHistorico("oportunidades", id); } catch (err) { mostrarErro(err.message); }
 }
 
 // Compartilhado entre Agendamento e Vendas — qualquer etapa marcada como
@@ -1323,23 +1338,25 @@ function dataExtenso(dataStr) {
   return `${d} de ${MESES_NOME_EXTENSO[m - 1]} de ${y}`;
 }
 
-// Monta o parágrafo de qualificação do CONTRATANTE (cliente) pro PDF do
-// contrato — varia conforme o CPF/CNPJ tem 11 ou mais de 11 dígitos
-// (mesmo critério de aplicarMascaraCpfCnpj). Pessoa jurídica inclui o
+// Monta o parágrafo de qualificação do CONTRATANTE (cliente) pro contrato
+// — varia conforme o CPF/CNPJ tem 11 ou mais de 11 dígitos (mesmo
+// critério de aplicarMascaraCpfCnpj). Pessoa jurídica inclui o
 // representante legal (se cadastrado); pessoa física é qualificada
-// diretamente, sem representante.
+// diretamente, sem representante. Já devolve HTML escapado — é inserido
+// direto no corpo do PDF (ver montarHtmlContrato), não é mais texto puro
+// de um Google Docs.
 function construirQualificacaoContratante(cliente) {
   const digitos = apenasDigitos(cliente.cpfCnpj);
-  const endereco = cliente.endereco || "endereço não informado";
+  const endereco = esc(cliente.endereco || "endereço não informado");
   if (digitos.length > 11) {
-    let texto = `pessoa jurídica de direito privado, inscrita no CNPJ sob o nº ${cliente.cpfCnpj || "—"}, com sede em ${endereco}`;
+    let texto = `pessoa jurídica de direito privado, inscrita no CNPJ sob o nº ${esc(cliente.cpfCnpj || "—")}, com sede em ${endereco}`;
     if (cliente.representanteNome) {
-      texto += `, neste ato representada por ${cliente.representanteNome}`;
-      if (cliente.representanteCpf) texto += `, portador(a) do CPF nº ${cliente.representanteCpf}`;
+      texto += `, neste ato representada por ${esc(cliente.representanteNome)}`;
+      if (cliente.representanteCpf) texto += `, portador(a) do CPF nº ${esc(cliente.representanteCpf)}`;
     }
     return texto;
   }
-  return `pessoa física, portador(a) do CPF nº ${cliente.cpfCnpj || "—"}, residente e domiciliado(a) em ${endereco}`;
+  return `pessoa física, portador(a) do CPF nº ${esc(cliente.cpfCnpj || "—")}, residente e domiciliado(a) em ${endereco}`;
 }
 
 // A mentoria é sempre um programa de 6 meses, independente da forma de
@@ -1347,41 +1364,151 @@ function construirQualificacaoContratante(cliente) {
 // o número ou as datas das parcelas.
 const PRAZO_CONTRATO_TEXTO = "6 (seis) meses";
 
-// Tabela (em texto simples, com marcadores) de cada parcela do contrato —
-// substitui o placeholder {{TABELA_PARCELAS}} no modelo. Funciona pras 3
-// formas de pagamento: à vista (1 linha), entrada + parcelas (rotula a
-// numero=0 como "Entrada") e personalizada (cada linha já vem com o
-// valor/vencimento digitado à mão).
-function construirTabelaParcelasTexto(parcelas, forma) {
-  return (parcelas || []).map((p) => {
+// Lista (HTML) de cada parcela do contrato — funciona pras 3 formas de
+// pagamento: à vista (1 item), entrada + parcelas (rotula a numero=0 como
+// "Entrada") e personalizada (cada item já vem com o valor/vencimento
+// digitado à mão).
+function construirTabelaParcelasHtml(parcelas, forma) {
+  return `<ul>${(parcelas || []).map((p) => {
     const rotulo = forma === "avista" ? "Pagamento único" : p.numero === 0 ? "Entrada" : `Parcela ${p.numero}`;
-    return `• ${rotulo}: ${fmtMoeda(p.valor)} (${valorExtenso(p.valor)}), com vencimento em ${fmtData(p.vencimento)}.`;
-  }).join("\n");
+    return `<li>${esc(rotulo)}: ${esc(fmtMoeda(p.valor))} (${esc(valorExtenso(p.valor))}), com vencimento em ${esc(fmtData(p.vencimento))}.</li>`;
+  }).join("")}</ul>`;
 }
 
-// Monta o objeto completo de placeholders {{CHAVE}} enviado pro Code.gs
-// gerar o PDF — usado tanto na geração original (dados só em memória, o
-// contrato ainda nem foi salvo com id) quanto na regeração de um contrato
-// já existente (dados vindos do Firestore).
-function montarDadosPdfContrato(cliente, contrato, parcelas) {
+// Monta o contrato inteiro já em HTML, com CSS embutido — pronto pra virar
+// PDF direto no Code.gs (Utilities.newBlob(html,...).getAs(
+// "application/pdf")), sem passar por nenhum Google Docs modelo. Mesmo
+// padrão usado no SolarGreen-ERP (composeMonitoramento/composeManutencao
+// + actionEnviarContratoParaAssinatura): o layout inteiro vem só deste
+// HTML, sob controle total daqui — elimina de vez a "capa"/formatação
+// escondida que um Google Docs editado à mão podia carregar, porque não
+// existe mais Google Docs nenhum no meio do caminho.
+function montarHtmlContrato(cliente, contrato, parcelas) {
   const dataContrato = contrato.dataContrato || hojeStr();
-  return {
-    CLIENTE: cliente.nome,
-    VALOR_TOTAL: fmtMoeda(contrato.valorTotal),
-    VALOR_TOTAL_EXTENSO: valorExtenso(contrato.valorTotal),
-    FORMA_PAGAMENTO: descricaoFormaPagamento(contrato.formaPagamento, contrato.valorEntrada, contrato.numParcelas),
-    CONTRATANTE_QUALIFICACAO: construirQualificacaoContratante(cliente),
-    PRAZO_TEXTO: PRAZO_CONTRATO_TEXTO,
-    TABELA_PARCELAS: construirTabelaParcelasTexto(parcelas, contrato.formaPagamento),
-    DATA: fmtData(dataContrato),
-    DATA_CONTRATO_EXTENSO: dataExtenso(dataContrato),
-    // Linha extra na assinatura, só aparece quando o cliente é pessoa
-    // jurídica com representante cadastrado — fica em branco (some do
-    // documento) pra pessoa física, que assina em nome próprio.
-    CONTRATANTE_REPRESENTANTE_LINHA: apenasDigitos(cliente.cpfCnpj).length > 11 && cliente.representanteNome
-      ? `Nome: ${cliente.representanteNome}`
-      : ""
-  };
+  const nomeCliente = esc(cliente.nome);
+  const valorTotalTexto = esc(fmtMoeda(contrato.valorTotal));
+  const valorTotalExtenso = esc(valorExtenso(contrato.valorTotal));
+  const formaPagamentoTexto = esc(descricaoFormaPagamento(contrato.formaPagamento, contrato.valorEntrada, contrato.numParcelas));
+  const qualificacao = construirQualificacaoContratante(cliente);
+  const tabelaParcelas = construirTabelaParcelasHtml(parcelas, contrato.formaPagamento);
+  const dataExtensoTexto = esc(dataExtenso(dataContrato));
+  const digitos = apenasDigitos(cliente.cpfCnpj);
+  const linhaRepresentante = digitos.length > 11 && cliente.representanteNome
+    ? `<br>Nome: ${esc(cliente.representanteNome)}`
+    : "";
+
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Contrato - ${nomeCliente}</title>
+<style>
+body{font-family:"Times New Roman",Times,serif;font-size:12.5px;line-height:1.6;color:#111;max-width:760px;margin:0 auto;padding:24px 8px 48px;}
+h1{font-size:15px;text-align:center;font-weight:700;margin-bottom:22px;text-transform:uppercase;}
+h2{font-size:12.5px;font-weight:700;margin-top:16px;margin-bottom:6px;}
+p{margin:0 0 8px;text-align:justify;}
+ul{margin:0 0 8px;padding-left:22px;}
+li{margin-bottom:3px;text-align:justify;}
+.assinaturas{margin-top:56px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:32px;}
+.assinatura{width:280px;}
+.assinatura-linha{border-top:1px solid #333;margin-top:48px;padding-top:6px;font-size:11px;text-align:center;}
+@media print{@page{margin:1.5cm 2cm 2cm;}}
+</style></head><body>
+<h1>Contrato de Prestação de Serviços de Assessoria Empresarial</h1>
+
+<p><strong>CONTRATANTE:</strong></p>
+<p>${nomeCliente}, ${qualificacao}.</p>
+
+<p><strong>CONTRATADO:</strong></p>
+<p>BENEDITO JOÃO VIEGAS DE MATOS, pessoa física, brasileiro, casado, CPF nº 925.437.152/15, escritório comercial localizado na Rua Municipalidade, Edifício Mirai Offices, sala 216, bairro Umarizal, Belém/PA.</p>
+
+<p>As partes acima qualificadas têm entre si justo e contratado o presente instrumento de Prestação de Serviços de Assessoria Empresarial para Potencialização Comercial, que se regerá pelas cláusulas e condições a seguir:</p>
+
+<h2>1. OBJETO</h2>
+<p>1.1 O presente contrato tem por objeto a prestação de serviços de assessoria empresarial, com foco comercial e restruturação, no apoio direto ao diretor comercial da empresa para aprimorar estratégias comerciais e alcançar os objetivos estratégicos estabelecidos.</p>
+<p>1.2 As atividades a serem desenvolvidas pelo CONTRATADO incluem:</p>
+<h2>1.2.1. Análise e Otimização Comercial</h2>
+<ul>
+<li>Avaliação dos canais de venda e das estratégias comerciais utilizadas;</li>
+<li>Diagnóstico da performance da equipe comercial e validação de indicadores de desempenho;</li>
+<li>Criação e implementação de dispositivos de análise e verificação de performance;</li>
+<li>Implantação de novos canais de aquisição de clientes.</li>
+</ul>
+<h2>1.2.2. Mentoria e Aconselhamento Estratégico</h2>
+<ul>
+<li>Mentoria ao diretor/gerente comercial e à equipe em práticas comerciais eficazes;</li>
+<li>Construção do planejamento com acompanhamento de indicadores;</li>
+<li>Análise de compra de equipamentos, precificação de kits e remuneração de time comercial;</li>
+<li>Desenvolvimento de ações estratégicas para aumento de vendas e melhoria de resultados.</li>
+</ul>
+<p>1.3 Os serviços serão prestados de maneira autônoma e independente, sem vínculo empregatício entre as partes, sendo o CONTRATANTE responsável pela execução e implementação das estratégias, bem como pelo cumprimento dos prazos e das metas estabelecidas.</p>
+
+<h2>2. PRAZO DE VIGÊNCIA</h2>
+<p>2.1 O presente contrato terá vigência de ${PRAZO_CONTRATO_TEXTO}, contados a partir da data de sua assinatura.</p>
+<p>2.2 O contrato poderá ser prorrogado por igual período, mediante acordo entre as partes, formalizado por aditivo contratual.</p>
+
+<h2>3. REMUNERAÇÃO E CONDIÇÕES DE PAGAMENTO</h2>
+<p>3.1 Pela prestação dos serviços, a CONTRATANTE pagará ao CONTRATADO o valor total de ${valorTotalTexto} (${valorTotalExtenso}), na forma de ${formaPagamentoTexto}, conforme o detalhamento abaixo:</p>
+${tabelaParcelas}
+<p>3.2 O CONTRATADO emitirá a nota fiscal correspondente a cada parcela preferencialmente até o dia 15 de cada mês, e o pagamento pela CONTRATANTE deverá ser realizado nas datas de vencimento indicadas acima, via depósito bancário na conta indicada pelo CONTRATADO.</p>
+<p>3.3 A prestação do serviço será de forma remota, através de reuniões semanais de preferência com horários fixos estabelecidos entre as partes, tanto para financeiro quanto comercial, e uma reunião de resultado mensal.</p>
+<p>3.4 As despesas de deslocamento, hospedagem e alimentação eventualmente necessárias para a prestação dos serviços deverão ser previamente autorizadas pela CONTRATANTE e serão reembolsadas mediante apresentação de comprovantes.</p>
+
+<h2>4. OBRIGAÇÕES DAS PARTES</h2>
+<h2>4.1. Obrigações do CONTRATADO</h2>
+<p>4.1.1 Prestar os serviços contratados com alto grau de excelência técnica, adotando as melhores práticas de mercado em consultoria comercial, observando as diretrizes estratégicas estabelecidas pela CONTRATANTE e mantendo compromisso com a maximização de resultados.</p>
+<p>4.1.2 Atuar de forma proativa na identificação de oportunidades de melhoria e inovação nos processos comerciais da CONTRATANTE, sugerindo ações estratégicas baseadas em análise de dados e tendências de mercado.</p>
+<p>4.1.3 Manter total confidencialidade sobre quaisquer informações estratégicas, operacionais e comerciais da CONTRATANTE, protegendo o sigilo dos dados a que tiver acesso, inclusive após o término do contrato, salvo mediante autorização expressa.</p>
+<p>4.1.4 Apresentar, conforme o requerido, relatórios analíticos e gerenciais periódicos sobre as atividades desenvolvidas, contemplando métricas de desempenho, impactos estratégicos e recomendações para aprimoramento contínuo das operações comerciais da CONTRATANTE.</p>
+<p>4.1.5 Disponibilizar suporte consultivo ao diretor comercial e demais profissionais envolvidos, sempre que necessário, garantindo alinhamento contínuo entre as diretrizes estratégicas e a execução prática.</p>
+<p>4.1.6 Garantir que os serviços sejam prestados com independência técnica, sem qualquer subordinação hierárquica à CONTRATANTE, resguardando o caráter consultivo e estratégico da prestação de serviços.</p>
+<p>4.1.7 Assegurar conformidade com todas as normas regulatórias aplicáveis e com os princípios éticos e de governança corporativa vigentes no mercado, garantindo que suas ações estejam alinhadas às boas práticas empresariais.</p>
+<h2>4.2. Obrigações da CONTRATANTE</h2>
+<p>4.2.1 Disponibilizar todas as informações, documentos e acessos necessários para que o CONTRATADO possa desenvolver suas atividades de forma eficaz e estratégica, garantindo fluidez na execução dos serviços.</p>
+<p>4.2.2 Efetuar os pagamentos devidos nos prazos estabelecidos, conforme as condições acordadas, assegurando a previsibilidade e estabilidade financeira da relação contratual.</p>
+<p>4.2.3 Garantir um ambiente colaborativo, permitindo que o CONTRATADO tenha a autonomia necessária para sugerir e implementar melhorias estratégicas no âmbito da consultoria prestada.</p>
+<p>4.2.4 Envolver os gestores e profissionais-chave da área comercial nas ações estratégicas e recomendações apresentadas pelo CONTRATADO, assegurando que a consultoria tenha impacto efetivo na performance comercial da empresa.</p>
+<p>4.2.5 Manter diálogo contínuo com o CONTRATADO, fornecendo feedbacks e sinalizações estratégicas que possam contribuir para o aperfeiçoamento dos serviços prestados.</p>
+<p>4.2.6 Adotar as medidas cabíveis para a implementação das recomendações apresentadas pelo CONTRATADO, desde que compatíveis com os objetivos estratégicos da empresa, garantindo coerência e alinhamento entre a consultoria e a prática empresarial.</p>
+
+<h2>5. CONFIDENCIALIDADE</h2>
+<p>5.1 O CONTRATADO reconhece que, no curso da prestação dos serviços objeto deste contrato, poderá ter acesso a informações estratégicas, comerciais, operacionais, financeiras, técnicas e de qualquer outra natureza relacionadas à CONTRATANTE, suas atividades, clientes, fornecedores, parceiros e demais partes interessadas, sejam elas verbais, escritas, eletrônicas ou de qualquer outro meio tangível ou intangível ("Informações Confidenciais").</p>
+<p>5.2 O CONTRATADO se compromete a manter absoluto sigilo e confidencialidade sobre todas as Informações Confidenciais obtidas em razão deste contrato, comprometendo-se a:</p>
+<ul>
+<li>a) Não divulgar, reproduzir, compartilhar ou permitir o acesso de terceiros às Informações Confidenciais, salvo mediante autorização prévia e expressa da CONTRATANTE;</li>
+<li>b) Não utilizar as Informações Confidenciais para qualquer fim que não seja estritamente necessário para a execução dos serviços previstos neste contrato;</li>
+<li>c) Adotar todas as medidas razoáveis e necessárias para resguardar a integridade e a segurança das Informações Confidenciais, incluindo medidas técnicas, administrativas e jurídicas compatíveis com as melhores práticas de mercado;</li>
+<li>d) Garantir que seus funcionários, colaboradores, sócios, consultores, subcontratados ou quaisquer terceiros que, porventura, tenham acesso às Informações Confidenciais, assumam o mesmo compromisso de sigilo e confidencialidade, sendo o CONTRATADO integralmente responsável por eventuais violações cometidas por esses agentes.</li>
+</ul>
+<p>5.3 As obrigações de confidencialidade previstas nesta cláusula não se aplicarão às informações que:</p>
+<ul>
+<li>a) Já eram de conhecimento público no momento da divulgação ou se tornarem publicamente disponíveis sem violação deste contrato;</li>
+<li>b) Forem comprovadamente desenvolvidas de forma independente pelo CONTRATADO, sem acesso às Informações Confidenciais da CONTRATANTE;</li>
+<li>c) Forem legalmente exigidas por determinação judicial, administrativa ou regulatória, hipótese em que o CONTRATADO deverá notificar a CONTRATANTE previamente e cooperar para minimizar a divulgação das informações na extensão permitida pela legislação aplicável.</li>
+</ul>
+<p>5.4 O dever de confidencialidade permanecerá vigente durante toda a vigência do contrato e pelo prazo de 5 (cinco) anos após sua rescisão ou término, independentemente do motivo.</p>
+<p>5.5 Em caso de violação da presente cláusula, a CONTRATANTE poderá adotar todas as medidas legais cabíveis, incluindo, mas não se limitando, à rescisão imediata do contrato e à indenização por perdas e danos diretos e indiretos sofridos.</p>
+
+<h2>6. RESCISÃO</h2>
+<p>6.1 O presente contrato poderá ser rescindido por qualquer das partes, a qualquer tempo, mediante notificação prévia, por escrito, com antecedência mínima de 30 (trinta) dias, sem incidência de penalidades, salvo na hipótese de descumprimento de qualquer obrigação contratual.</p>
+<p>6.2 O contrato será rescindido de pleno direito, independentemente de qualquer notificação ou interpelação judicial ou extrajudicial, nas seguintes hipóteses:</p>
+<ul>
+<li>a) Inadimplemento de qualquer obrigação assumida neste contrato por uma das partes, caso a parte adimplente notifique a parte inadimplente, concedendo prazo razoável para a devida regularização, e esta não cumpra a obrigação no prazo estabelecido;</li>
+<li>b) Decretação de falência, recuperação judicial ou extrajudicial de qualquer das partes, que comprometa a capacidade de cumprimento do presente contrato;</li>
+<li>c) Ocorrência de caso fortuito ou força maior que inviabilize, de forma definitiva, a continuidade da prestação dos serviços e o cumprimento das obrigações contratuais;</li>
+<li>d) Qualquer violação de normas legais ou regulatórias aplicáveis que impactem diretamente a execução deste contrato e inviabilizem sua continuidade.</li>
+</ul>
+<p>6.3 Na hipótese de rescisão antecipada imotivada por qualquer das partes, as obrigações pendentes de execução até a data efetiva da rescisão deverão ser cumpridas integralmente, salvo disposição expressa em contrário entre as partes.</p>
+
+<h2>7. DISPOSIÇÕES GERAIS</h2>
+<p>7.1 O CONTRATADO poderá utilizar profissionais terceirizados para a execução dos serviços, desde que previamente autorizados pela CONTRATANTE, permanecendo integralmente responsável pela qualidade, sigilo e cumprimento das obrigações assumidas neste contrato.</p>
+<p>7.2 Para dirimir quaisquer questões oriundas deste contrato que não possam ser resolvidas de forma consensual, fica eleito o Foro da Comarca de Belém/PA, com renúncia expressa a qualquer outro, por mais privilegiado que seja.</p>
+<p>7.3 O presente contrato poderá ser formalizado e assinado eletronicamente, utilizando-se plataforma reconhecida no mercado que assegure a autenticidade, integridade e validade jurídica do documento, nos termos da legislação aplicável, incluindo, mas não se limitando, à Medida Provisória nº 2.200-2/2001 e ao Código Civil. As assinaturas eletrônicas das partes terão o mesmo valor legal das assinaturas manuscritas.</p>
+<p>7.4 E, por estarem justas e contratadas, as partes firmam o presente contrato, que passa a vigorar a partir da data de sua assinatura.</p>
+
+<p>Belém, ${dataExtensoTexto}</p>
+
+<div class="assinaturas">
+<div class="assinatura"><div class="assinatura-linha">CONTRATANTE<br>${nomeCliente}${linhaRepresentante}</div></div>
+<div class="assinatura"><div class="assinatura-linha">CONTRATADO<br>BENEDITO JOÃO VIEGAS DE MATOS<br>CPF: 925.437.152-15</div></div>
+</div>
+</body></html>`;
 }
 
 function calcularParcelas(valorTotal, forma, valorEntrada, numParcelas, diaVencimento, dataPrimeira, parcelasPersonalizadas) {
@@ -1693,7 +1820,7 @@ async function gerarContrato() {
     pendingContratoEtapaFechamentoId = null;
     mostrarToast("Contrato criado.");
 
-    gerarPdfContratoEmSegundoPlano(contratoRef.id, cliente.nome, montarDadosPdfContrato(
+    gerarPdfContratoEmSegundoPlano(contratoRef.id, cliente.nome, montarHtmlContrato(
       clienteParaPdf,
       { valorTotal: f.valorTotal, formaPagamento: f.forma, valorEntrada: f.valorEntrada, numParcelas: f.numParcelas, dataContrato },
       parcelasCalc
@@ -1706,11 +1833,11 @@ async function gerarContrato() {
 // Roda depois que o modal já fechou — por isso não é "await"ado por
 // gerarContrato(). O pequeno atraso antes do "Gerando PDF..." é só pra dar
 // tempo do toast "Contrato criado." aparecer antes de ser substituído.
-async function gerarPdfContratoEmSegundoPlano(contratoId, clienteNome, dadosPdf) {
+async function gerarPdfContratoEmSegundoPlano(contratoId, clienteNome, htmlContrato) {
   await new Promise((resolve) => setTimeout(resolve, 1500));
   mostrarToast(`Gerando PDF do contrato de ${clienteNome}...`);
   try {
-    const resp = await chamarAppsScript("gerarContratoPDF", { dados: dadosPdf });
+    const resp = await chamarAppsScript("gerarContratoPDF", { html: htmlContrato, clienteNome });
     await updateDoc(doc(db, "contratos", contratoId), { pdfUrl: resp.url, pdfFileId: resp.fileId || null });
     mostrarToast(`PDF do contrato de ${clienteNome} criado.`);
   } catch (err) {
@@ -1831,9 +1958,10 @@ function abrirDetalheContrato(id) {
   });
 }
 
-// Cobre contratos que ficaram sem PDF (ex: criados antes do Code.gs estar
-// configurado com CONTRATO_TEMPLATE_DOC_ID) — gera com os mesmos dados
-// já salvos no contrato, sem precisar recriar nada.
+// Cobre contratos sem PDF ainda, ou o botão "Gerar PDF novamente" (quando
+// o modelo do contrato mudou depois que o PDF já tinha sido gerado) —
+// gera com os mesmos dados já salvos no contrato, sem precisar recriar
+// nada.
 async function gerarPdfContratoExistente(id) {
   const c = STATE.contratos.find((x) => x.id === id);
   if (!c) return;
@@ -1841,7 +1969,8 @@ async function gerarPdfContratoExistente(id) {
   const parcelasDoContrato = STATE.parcelas.filter((p) => p.contratoId === id).sort((a, b) => a.numero - b.numero);
   try {
     const resp = await chamarAppsScript("gerarContratoPDF", {
-      dados: montarDadosPdfContrato(cliente, c, parcelasDoContrato)
+      html: montarHtmlContrato(cliente, c, parcelasDoContrato),
+      clienteNome: c.clienteNome
     });
     await updateDoc(doc(db, "contratos", id), { pdfUrl: resp.url, pdfFileId: resp.fileId || null });
     mostrarToast("PDF gerado com sucesso.");
@@ -1929,7 +2058,7 @@ document.getElementById("btn-salvar-cardadmin").addEventListener("click", async 
 
 async function excluirCardAdmin(id) {
   if (!confirm("Excluir este card do Funil Administrativo? Isso NÃO exclui o contrato nem as parcelas vinculadas — use com cuidado.")) return;
-  try { await deleteDoc(doc(db, "cardsAdmin", id)); } catch (err) { mostrarErro(err.message); }
+  try { await excluirComHistorico("cardsAdmin", id); } catch (err) { mostrarErro(err.message); }
 }
 
 function abrirDetalheCardAdmin(id) {
@@ -1989,9 +2118,18 @@ async function calcularAnaliseFunil(cards, etapasSorted, colecaoNome) {
     if (!isNaN(d.getTime())) temposAtuais[c.etapa].push(agora - d.getTime());
   });
 
+  // A 1ª etapa conta por TOTAL de cards existentes, nunca por
+  // alcançabilidade — um card criado (ou editado depois, ex: via
+  // planilha.html) direto numa etapa avançada, sem nunca ter passado pela
+  // 1ª de verdade, não pode "sumir" do denominador do relatório, senão a
+  // conversão das etapas seguintes fica artificialmente maior do que
+  // realmente é. Calculado antes do map final pra também corrigir o
+  // "anterior" usado na conversão da 2ª etapa (que compara contra a 1ª).
+  const jaPassaramPorEtapa = etapasSorted.map((e, i) => i === 0 ? cards.length : alcancaram[e.id].size);
+
   return etapasSorted.map((e, i) => {
-    const jaPassaram = alcancaram[e.id].size;
-    const anterior = i > 0 ? alcancaram[etapasSorted[i - 1].id].size : jaPassaram;
+    const jaPassaram = jaPassaramPorEtapa[i];
+    const anterior = i > 0 ? jaPassaramPorEtapa[i - 1] : jaPassaram;
     const conversao = i === 0 ? (jaPassaram > 0 ? 100 : 0) : (anterior > 0 ? (jaPassaram / anterior) * 100 : 0);
     const tempos = temposAtuais[e.id];
     const tempoMedioMs = tempos.length ? tempos.reduce((s, v) => s + v, 0) / tempos.length : null;

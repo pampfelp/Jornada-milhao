@@ -31,7 +31,13 @@ service cloud.firestore {
       match /historico/{logId} {
         allow read: if true;
         allow create: if true;
-        allow update, delete: if false;
+        // Nunca editar um evento já gravado (update: false — log é
+        // append-only de verdade), mas PRECISA permitir apagar: quando o
+        // card pai é excluído, o app.js apaga o histórico junto (exclusão
+        // em cascata) — sem isso, "Missing or insufficient permissions"
+        // ao excluir, e o histórico órfão fica pra sempre no banco.
+        allow update: if false;
+        allow delete: if true;
       }
     }
 
@@ -59,7 +65,13 @@ service cloud.firestore {
       match /historico/{logId} {
         allow read: if true;
         allow create: if true;
-        allow update, delete: if false;
+        // Nunca editar um evento já gravado (update: false — log é
+        // append-only de verdade), mas PRECISA permitir apagar: quando o
+        // card pai é excluído, o app.js apaga o histórico junto (exclusão
+        // em cascata) — sem isso, "Missing or insufficient permissions"
+        // ao excluir, e o histórico órfão fica pra sempre no banco.
+        allow update: if false;
+        allow delete: if true;
       }
     }
 
@@ -116,7 +128,13 @@ service cloud.firestore {
       match /historico/{logId} {
         allow read: if true;
         allow create: if true;
-        allow update, delete: if false;
+        // Nunca editar um evento já gravado (update: false — log é
+        // append-only de verdade), mas PRECISA permitir apagar: quando o
+        // card pai é excluído, o app.js apaga o histórico junto (exclusão
+        // em cascata) — sem isso, "Missing or insufficient permissions"
+        // ao excluir, e o histórico órfão fica pra sempre no banco.
+        allow update: if false;
+        allow delete: if true;
       }
     }
 

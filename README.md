@@ -44,28 +44,33 @@ Essas chaves (`apiKey`, `projectId` etc.) são **públicas por design** no Fireb
 O `Code.gs` faz 4 coisas, e só essas quatro:
 - Lista os **calendários** que a conta implantada enxerga (alimenta o seletor em Configurações).
 - Cria um **evento na Google Agenda** quando um agendamento é criado no sistema (nunca lê nem importa nada da Agenda).
-- Gera o **PDF do contrato** a partir de um modelo do Google Docs e salva no Drive.
+- Converte em **PDF** o HTML do contrato (montado inteiro no `app.js` — ver abaixo) e salva no Drive.
 - Envia o **PDF do contrato pra assinatura eletrônica** via [Autentique](https://autentique.com.br) (veja 2.4).
 
-### 2.1. Preparar o modelo do contrato (Google Docs)
+### 2.1. Modelo do contrato — não precisa mais de Google Docs
 
-1. Crie um Google Docs com o texto do seu contrato, usando placeholders entre chaves duplas no lugar dos dados que mudam por cliente. O sistema preenche estes automaticamente ao gerar o PDF:
+Até uma versão anterior, o texto do contrato vinha de um Google Docs modelo
+(`CONTRATO_TEMPLATE_DOC_ID`) com placeholders `{{...}}` substituídos via
+`DocumentApp`. Isso foi **removido** — um Google Docs editado à mão podia
+carregar formatação escondida (o caso real: uma "capa" com o título sozinho
+numa página em branco, causada por uma propriedade de parágrafo invisível
+que nem aparecia como quebra de página visível no editor) e não tinha como
+consertar de forma confiável só editando o documento.
 
-   | Placeholder | O que vira |
-   |---|---|
-   | `{{CLIENTE}}` | Nome do cliente (empresa ou pessoa física) |
-   | `{{CONTRATANTE_QUALIFICACAO}}` | Parágrafo de qualificação já pronto — "pessoa jurídica..., inscrita no CNPJ sob o nº..., com sede em..., neste ato representada por..., portador(a) do CPF nº..." (PJ) ou "pessoa física, portador(a) do CPF nº..., residente e domiciliado(a) em..." (PF, sem representante) |
-   | `{{VALOR_TOTAL}}` | Valor total formatado, ex: "R$ 30.000,00" |
-   | `{{VALOR_TOTAL_EXTENSO}}` | O mesmo valor por extenso, ex: "trinta mil reais" |
-   | `{{FORMA_PAGAMENTO}}` | Ex: "À vista", "Entrada de R$ 5.000,00 + 6x" ou "7x personalizadas" |
-   | `{{PRAZO_TEXTO}}` | Ex: "6 (seis) meses" — conta os meses-calendário distintos cobertos pelas parcelas |
-   | `{{TABELA_PARCELAS}}` | Lista com marcadores, uma linha por parcela: "• Parcela 1: R$ 2.000,00 (dois mil reais), com vencimento em 10/08/2026." — cobre à vista, entrada+parcelas e parcelas personalizadas automaticamente |
-   | `{{DATA}}` | Data do contrato, formatada (ex: "10/08/2026") |
-   | `{{DATA_CONTRATO_EXTENSO}}` | A mesma data por extenso, ex: "10 de agosto de 2026" (sem a cidade — escreva "Belém, " fixo antes, se for o caso) |
-   | `{{CONTRATANTE_REPRESENTANTE_LINHA}}` | Linha extra no bloco de assinatura ("Nome: Fulano de Tal") — só aparece se o cliente for PJ com representante cadastrado; some do documento pra PF |
+O texto inteiro do contrato agora mora em **`app.js`, função
+`montarHtmlContrato`** — o mesmo padrão já usado no SolarGreen-ERP
+(`composeMonitoramento`/`composeManutencao` +
+`actionEnviarContratoParaAssinatura`): o HTML completo (cláusulas, tabela
+de parcelas, assinaturas, tudo) é montado em JavaScript, com os dados do
+contrato já substituídos por interpolação de verdade — nunca mais
+`{{PLACEHOLDER}}` deixado sem preencher, porque não existe mais um
+documento externo pra esquecer de atualizar. Pra mudar o texto do
+contrato (uma cláusula, o CPF/endereço do Benedito, o foro), edite direto
+essa função — é HTML simples, com uma tag `<style>` no topo controlando
+fonte/margem/parágrafo.
 
-   Um modelo completo pronto pra colar (baseado no contrato real usado com a BRDF Energia Solar, generalizado com esses placeholders) foi entregue no chat — é só substituir o conteúdo do Google Docs por ele.
-2. Copie o **ID do documento** (a parte da URL entre `/d/` e `/edit`).
+Se o seu projeto já tinha `CONTRATO_TEMPLATE_DOC_ID` configurado em Script
+Properties, pode apagar essa propriedade — não é mais lida por nada.
 
 ### 2.2. Implantar o Code.gs
 
@@ -76,7 +81,6 @@ O `Code.gs` faz 4 coisas, e só essas quatro:
 
    | Propriedade | Valor |
    |---|---|
-   | `CONTRATO_TEMPLATE_DOC_ID` | o ID copiado no passo 2.1 |
    | `AGENDA_CALENDAR_ID` | opcional — usado só como calendário **padrão** antes de escolher um em Configurações (veja 2.3). Deixe em branco pra cair no calendário principal ("primary") até lá. |
    | `AUTENTIQUE_API_TOKEN` | opcional — só se for usar o botão "Enviar para assinatura digital" (veja 2.4). |
    | `AUTENTIQUE_SANDBOX` | opcional — `true` pra testar sem gastar documento/crédito real na Autentique. Deixe em branco (ou `false`) em produção. |
@@ -275,12 +279,13 @@ app (Configurações) ou na `planilha.html`:
 - **Saldo estimado** é sempre o saldo do período isolado (mês selecionado),
   não acumulado entre meses. Se quiser visão acumulada/projeção futura,
   isso fica para uma v2.
-- **Contrato**: só geração de PDF por enquanto, sem assinatura eletrônica.
-  Um único modelo de contrato (Google Docs com placeholders) — se precisar
-  de mais de um modelo por tipo de serviço, dá pra estender
-  `CONTRATO_TEMPLATE_DOC_ID` para um mapa de modelos. O modal de contrato
-  também coleta telefone/e-mail do cliente se estiverem faltando no
-  cadastro (só preenche o que estava em branco, nunca sobrescreve).
+- **Contrato**: geração de PDF (HTML montado em `app.js`, sem Google Docs —
+  ver seção 2.1) e envio pra assinatura eletrônica via Autentique (seção
+  2.4). Um único modelo de contrato — se precisar de mais de um por tipo de
+  serviço, dá pra estender `montarHtmlContrato` pra escolher entre
+  templates conforme algum campo do contrato. O modal de contrato também
+  coleta telefone/e-mail do cliente se estiverem faltando no cadastro (só
+  preenche o que estava em branco, nunca sobrescreve).
 - **Data do contrato ≠ data de lançamento no sistema**: cada contrato tem
   `dataContrato` (a data da assinatura, editável — é ela que conta pro
   "Faturamento do período" no Painel Financeiro) separado de `dataGeracao`

@@ -16,10 +16,12 @@
  *      agendamento é criado (ou reagendado) no sistema. O fluxo é sempre
  *      Firestore → Agenda, nunca o contrário: este sistema NÃO lê/importa
  *      eventos da Agenda.
- *   3. "gerarContratoPDF" — copia um modelo do Google Docs, substitui os
- *      placeholders pelos dados do contrato, exporta como PDF pro Google
- *      Drive e devolve o link. Sem isso o navegador não tem como gerar um
- *      PDF formatado nem guardá-lo em algum lugar de graça.
+ *   3. "gerarContratoPDF" — recebe o HTML do contrato já pronto (montado
+ *      no app.js — mesmo padrão do SolarGreen-ERP: nada de Google Docs
+ *      modelo, o texto inteiro já vem com os dados substituídos), converte
+ *      em PDF de verdade e guarda no Google Drive, devolvendo o link. Sem
+ *      isso o navegador não tem como gerar um PDF formatado nem guardá-lo
+ *      em algum lugar de graça.
  *   4. "enviarParaAssinatura" — manda o PDF do contrato (já gerado no
  *      Drive) pra Autentique via API, que dispara sozinha um e-mail pro
  *      cliente com o link de assinatura digital. Fica aqui (e não no
@@ -47,7 +49,6 @@
  *    property" e adicione (veja o README, seção "Apps Script", pro passo a
  *    passo completo de cada uma):
  *      AGENDA_CALENDAR_ID     = (opcional; "primary" se não preencher)
- *      CONTRATO_TEMPLATE_DOC_ID = (ID do Google Docs modelo do contrato)
  *      AUTENTIQUE_API_TOKEN   = (opcional; token gerado em
  *                                 painel.autentique.com.br/perfil/api —
  *                                 sem isso, só o botão "Enviar para
@@ -112,7 +113,7 @@ function rotear_(body) {
     switch (body.action) {
       case "listarCalendarios": return acaoListarCalendarios_();
       case "criarEventoAgenda": return acaoCriarEventoAgenda_(body.calendarId, body.clienteNome, body.clienteEmail, body.observacoes, body.inicio, body.duracaoMinutos);
-      case "gerarContratoPDF": return acaoGerarContratoPDF_(body.dados);
+      case "gerarContratoPDF": return acaoGerarContratoPDF_(body.html, body.clienteNome);
       case "enviarParaAssinatura": return acaoEnviarParaAssinatura_(body.fileId, body.clienteNome, body.clienteEmail, body.nomeDocumento);
       default: return { ok: false, erro: "Ação desconhecida: " + body.action };
     }
@@ -178,38 +179,24 @@ function obterCalendarId_() {
 
 // ══════════════ GERAÇÃO DE CONTRATO EM PDF ══════════════
 
-// Copia o Google Docs modelo (CONTRATO_TEMPLATE_DOC_ID), substitui os
-// placeholders {{...}} pelos dados do contrato, exporta como PDF pro Drive
-// (pasta "Jornada do Milhão - Contratos") e devolve o link de leitura.
-// "dados" é um objeto simples { chave: valorTexto } — cada chave vira um
-// placeholder "{{CHAVE}}" procurado no modelo.
-function acaoGerarContratoPDF_(dados) {
-  if (!dados) return { ok: false, erro: "Faltam os dados do contrato." };
-  var props = PropertiesService.getScriptProperties();
-  var templateId = props.getProperty("CONTRATO_TEMPLATE_DOC_ID");
-  if (!templateId) {
-    return { ok: false, erro: "Configure CONTRATO_TEMPLATE_DOC_ID em Project Settings > Script Properties." };
-  }
+// "html" já vem PRONTO do app.js (montarHtmlContrato — mesmo padrão do
+// SolarGreen-ERP: o texto inteiro do contrato, com todos os dados já
+// substituídos, é montado em JavaScript no navegador, não aqui). Este
+// script só converte esse HTML em PDF de verdade e guarda no Drive (pasta
+// "Jornada do Milhão - Contratos") — não existe mais Google Docs modelo
+// nenhum no meio do caminho, o que elimina de vez qualquer formatação
+// escondida (quebra de página, estilo "Título" etc.) que um Google Docs
+// editado à mão podia carregar sem ninguém perceber.
+function acaoGerarContratoPDF_(html, clienteNome) {
+  if (!html) return { ok: false, erro: "Falta o HTML do contrato." };
 
   var pasta = getContratosFolder_();
-  var nomeArquivo = "Contrato - " + (dados.CLIENTE || "Cliente") + " - " + Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT-3", "dd-MM-yyyy HH-mm");
+  var nomeArquivo = "Contrato - " + (clienteNome || "Cliente") + " - " + Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT-3", "dd-MM-yyyy HH-mm");
 
-  var copia = DriveApp.getFileById(templateId).makeCopy(nomeArquivo, pasta);
-  var doc = DocumentApp.openById(copia.getId());
-  var corpo = doc.getBody();
-
-  Object.keys(dados).forEach(function (chave) {
-    corpo.replaceText("{{" + chave + "}}", String(dados[chave] == null ? "" : dados[chave]));
-  });
-  doc.saveAndClose();
-
-  var pdfBlob = DriveApp.getFileById(copia.getId()).getAs(MimeType.PDF);
-  var arquivoPdf = pasta.createFile(pdfBlob).setName(nomeArquivo + ".pdf");
+  var blobHtml = Utilities.newBlob(html, "text/html", nomeArquivo + ".html");
+  var pdfBlob = blobHtml.getAs("application/pdf").setName(nomeArquivo + ".pdf");
+  var arquivoPdf = pasta.createFile(pdfBlob);
   arquivoPdf.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-
-  // A cópia do Google Docs fica só como rascunho intermediário — o que
-  // importa pro cliente é o PDF final.
-  DriveApp.getFileById(copia.getId()).setTrashed(true);
 
   return {
     ok: true,

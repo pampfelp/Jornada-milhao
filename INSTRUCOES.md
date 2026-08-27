@@ -27,13 +27,15 @@ funcionando normal.
 
 ## Passo 2 — Ligar a Agenda e a geração de PDF do contrato
 
-1. Crie um Google Docs com o texto do contrato, e no lugar de cada dado que muda por cliente (nome, valor, forma de pagamento, data), escreva um destes: `{{CLIENTE}}`, `{{VALOR_TOTAL}}`, `{{FORMA_PAGAMENTO}}`, `{{DATA}}`. Copie o pedaço do link entre `/d/` e `/edit` — isso é o ID do documento.
-2. Crie uma planilha Google Sheets em branco (só serve de "casa" pro script).
-3. **Extensões → Apps Script**, cole o conteúdo de `Code.gs`.
-4. **⚙️ Configurações do projeto → Script Properties**, adicione `CONTRATO_TEMPLATE_DOC_ID` com o ID que você copiou no passo 1.
-5. Rode a função `autorizar` uma vez (▶) e autorize o acesso à Agenda e ao Drive.
-6. **Implantar → Nova implantação → Aplicativo da Web** → Executar como "Eu" → Acesso "Qualquer pessoa" → Implantar. Copie a URL.
-7. Cole essa URL no `firebase-init.js`, na constante `APPS_SCRIPT_PROXY_URL`.
+1. Crie uma planilha Google Sheets em branco (só serve de "casa" pro script).
+2. **Extensões → Apps Script**, cole o conteúdo de `Code.gs`.
+3. Rode a função `autorizar` uma vez (▶) e autorize o acesso à Agenda e ao Drive.
+4. **Implantar → Nova implantação → Aplicativo da Web** → Executar como "Eu" → Acesso "Qualquer pessoa" → Implantar. Copie a URL.
+5. Cole essa URL no `firebase-init.js`, na constante `APPS_SCRIPT_PROXY_URL`.
+
+O texto do contrato **não vem mais de um Google Docs** — ele já está pronto
+dentro do `app.js` (função `montarHtmlContrato`) e o `Code.gs` só converte
+em PDF. Se quiser mudar alguma cláusula, é lá que edita.
 
 Enquanto você não fizer isso, o resto do sistema já funciona normal — só a criação do evento na Agenda e a geração do PDF do contrato ficam pendentes (aparece um aviso, sem travar o resto).
 

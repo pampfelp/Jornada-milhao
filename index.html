@@ -321,7 +321,7 @@
     <div class="field"><label>Nome</label><input type="text" id="mc-nome"></div>
     <div class="field"><label>Telefone</label><input type="text" id="mc-telefone"></div>
     <div class="field"><label>E-mail</label><input type="text" id="mc-email"></div>
-    <div class="field"><label>CPF ou CNPJ</label><input type="text" inputmode="numeric" id="mc-cpfcnpj" placeholder="000.000.000-00 ou 00.000.000/0000-00"></div>
+    <div class="field"><label>CPF ou CNPJ</label><input type="text" inputmode="numeric" maxlength="18" id="mc-cpfcnpj" placeholder="000.000.000-00 ou 00.000.000/0000-00"></div>
     <div class="field">
       <label>Endereço</label>
       <div class="combo-wrap">
@@ -331,7 +331,7 @@
     </div>
     <div class="row" id="mc-bloco-representante" style="display:none;">
       <div class="field"><label>Nome do representante legal <span style="color:var(--dourado);">*</span></label><input type="text" id="mc-representante-nome" placeholder="sócio/representante que assina pela empresa"></div>
-      <div class="field"><label>CPF do representante <span style="color:var(--dourado);">*</span></label><input type="text" inputmode="numeric" id="mc-representante-cpf" placeholder="000.000.000-00"></div>
+      <div class="field"><label>CPF do representante <span style="color:var(--dourado);">*</span></label><input type="text" inputmode="numeric" maxlength="14" id="mc-representante-cpf" placeholder="000.000.000-00"></div>
     </div>
     <div class="field"><label>Origem</label><input type="text" id="mc-origem" placeholder="ex: Instagram, indicação..."></div>
     <div class="field"><label>Observações</label><textarea id="mc-obs"></textarea></div>
@@ -481,7 +481,7 @@
       <div class="field"><label>E-mail</label><input type="text" id="mct-email"></div>
     </div>
     <div class="row">
-      <div class="field"><label>CPF ou CNPJ <span style="color:var(--dourado);">*</span></label><input type="text" inputmode="numeric" id="mct-cpfcnpj" placeholder="000.000.000-00 ou 00.000.000/0000-00"></div>
+      <div class="field"><label>CPF ou CNPJ <span style="color:var(--dourado);">*</span></label><input type="text" inputmode="numeric" maxlength="18" id="mct-cpfcnpj" placeholder="000.000.000-00 ou 00.000.000/0000-00"></div>
     </div>
     <div class="field">
       <label>Endereço <span style="color:var(--dourado);">*</span></label>
@@ -492,7 +492,7 @@
     </div>
     <div class="row" id="mct-bloco-representante" style="display:none;">
       <div class="field"><label>Nome do representante legal <span style="color:var(--dourado);">*</span></label><input type="text" id="mct-representante-nome" placeholder="sócio/representante que assina pela empresa"></div>
-      <div class="field"><label>CPF do representante <span style="color:var(--dourado);">*</span></label><input type="text" inputmode="numeric" id="mct-representante-cpf" placeholder="000.000.000-00"></div>
+      <div class="field"><label>CPF do representante <span style="color:var(--dourado);">*</span></label><input type="text" inputmode="numeric" maxlength="14" id="mct-representante-cpf" placeholder="000.000.000-00"></div>
     </div>
     <div class="row">
       <div class="field"><label>Valor total</label><input type="text" inputmode="decimal" id="mct-valor" placeholder="0,00"></div>
