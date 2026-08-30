@@ -26,11 +26,16 @@ const STATE = {
   periodoDespesasAte: ultimoDiaMes(),
   periodoEntradasDe: primeiroDiaMes(),
   periodoEntradasAte: ultimoDiaMes(),
-  buscaDespesas: ""
+  buscaDespesas: "",
+  buscaContratos: "",
+  buscaClientes: ""
 };
 
 let pendingContratoOportunidadeId = null;
 let pendingContratoEtapaFechamentoId = null;
+// Resolve() da Promise de confirmarAcao() em aberto — ver definição da
+// função mais abaixo, perto de abrirModal/fecharModal.
+let pendingConfirmResolve = null;
 // Perda é genérica pros dois funis que têm etapa marcada como "perda"
 // (Agendamento e Vendas) — guarda qual coleção/id está pendente.
 let pendingPerda = null; // { colecao: "agendamentos"|"oportunidades", id }
@@ -184,10 +189,63 @@ function mostrarToast(msg, tipo) {
 function mostrarErro(msg) { mostrarToast(msg, "erro"); }
 
 function abrirModal(id) { document.getElementById(id).classList.add("active"); }
-function fecharModal(id) { document.getElementById(id).classList.remove("active"); }
+function fecharModal(id) {
+  document.getElementById(id).classList.remove("active");
+  // Fechar o modal de confirmação por QUALQUER caminho (Cancelar, X, Esc,
+  // clique fora) sem passar pelo botão "Confirmar" conta como negar — sem
+  // isso a Promise de confirmarAcao() nunca resolveria nesses casos.
+  if (id === "modal-confirmar-acao" && pendingConfirmResolve) {
+    const resolve = pendingConfirmResolve;
+    pendingConfirmResolve = null;
+    resolve(false);
+  }
+}
 
 document.querySelectorAll("[data-fechar-modal]").forEach((btn) => {
   btn.addEventListener("click", () => fecharModal(btn.dataset.fecharModal));
+});
+
+// Clique fora do card (no fundo escuro) fecha o modal — e[.target] só é o
+// próprio overlay quando o clique não atingiu nenhum filho (modal-box),
+// então não precisa checar "cliquei dentro por engano".
+document.querySelectorAll(".modal-overlay").forEach((overlay) => {
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) fecharModal(overlay.id);
+  });
+});
+
+// Esc fecha o modal visualmente "de cima" — como todos os overlays têm o
+// mesmo z-index, quem está por cima é sempre o último em ordem no DOM
+// entre os `.active` (é assim que o CSS já empilha visualmente, ex.:
+// "Editar cliente" aberto por cima de um Agendamento).
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const abertos = document.querySelectorAll(".modal-overlay.active");
+  if (!abertos.length) return;
+  fecharModal(abertos[abertos.length - 1].id);
+});
+
+// Substitui confirm()/alert() nativos do navegador (nunca usar esses —
+// quebram o visual e não dá pra estilizar). Uso: `if (!(await
+// confirmarAcao("Excluir?"))) return;` dentro de uma função async.
+// opcoes.textoConfirmar (padrão "Excluir") e opcoes.destrutivo (padrão
+// true → botão vermelho; false → botão dourado padrão, pra ações que não
+// destroem nada, tipo desfazer um "marcar como pago").
+function confirmarAcao(mensagem, opcoes = {}) {
+  return new Promise((resolve) => {
+    pendingConfirmResolve = resolve;
+    document.getElementById("mcf-mensagem").textContent = mensagem;
+    const btnConfirmar = document.getElementById("mcf-btn-confirmar");
+    btnConfirmar.textContent = opcoes.textoConfirmar || "Excluir";
+    btnConfirmar.className = opcoes.destrutivo === false ? "btn btn-primary" : "btn btn-danger";
+    abrirModal("modal-confirmar-acao");
+  });
+}
+document.getElementById("mcf-btn-confirmar").addEventListener("click", () => {
+  const resolve = pendingConfirmResolve;
+  pendingConfirmResolve = null;
+  fecharModal("modal-confirmar-acao");
+  if (resolve) resolve(true);
 });
 
 // Modal de detalhe genérico — toda linha de tabela e todo card de kanban
@@ -429,6 +487,27 @@ function wireMascaraCpfCnpj(inputId) {
 }
 wireMascaraCpfCnpj("mc-cpfcnpj");
 wireMascaraCpfCnpj("mc-representante-cpf");
+
+// Máscara de telefone — 10 dígitos (DDD + fixo) vira (00) 0000-0000, 11
+// dígitos (DDD + celular) vira (00) 00000-0000.
+function aplicarMascaraTelefone(valor) {
+  const digitos = String(valor || "").replace(/\D/g, "").slice(0, 11);
+  if (digitos.length <= 10) {
+    return digitos
+      .replace(/(\d{2})(\d)/, "($1) $2")
+      .replace(/(\d{4})(\d{1,4})$/, "$1-$2");
+  }
+  return digitos
+    .replace(/(\d{2})(\d)/, "($1) $2")
+    .replace(/(\d{5})(\d{1,4})$/, "$1-$2");
+}
+function wireMascaraTelefone(inputId) {
+  document.getElementById(inputId).addEventListener("input", (e) => {
+    e.target.value = aplicarMascaraTelefone(e.target.value);
+  });
+}
+wireMascaraTelefone("mc-telefone");
+wireMascaraTelefone("mct-telefone");
 
 // Mostra os campos de representante legal só quando o CPF/CNPJ digitado
 // tiver mais de 11 dígitos (ou seja, é um CNPJ) — cliente pessoa física
@@ -870,7 +949,7 @@ async function excluirComHistorico(colecao, id) {
 }
 
 async function excluirAgendamento(id) {
-  if (!confirm("Excluir este agendamento?")) return;
+  if (!(await confirmarAcao("Excluir este agendamento?"))) return;
   try { await excluirComHistorico("agendamentos", id); } catch (err) { mostrarErro(err.message); }
 }
 
@@ -1140,7 +1219,7 @@ async function moverOportunidade(id, novaEtapa) {
 }
 
 async function excluirOportunidade(id) {
-  if (!confirm("Excluir esta oportunidade?")) return;
+  if (!(await confirmarAcao("Excluir esta oportunidade?"))) return;
   try { await excluirComHistorico("oportunidades", id); } catch (err) { mostrarErro(err.message); }
 }
 
@@ -1868,24 +1947,55 @@ function linksPdfDrive(fileId) {
   };
 }
 
+document.getElementById("contr-busca").addEventListener("input", (e) => {
+  STATE.buscaContratos = e.target.value || "";
+  renderTabelaContratos();
+});
+
+function formaPagamentoLabel(c) {
+  return c.formaPagamento === "avista" ? "À vista" : c.formaPagamento === "personalizada" ? `${c.numParcelas}x personalizadas` : `Entrada + ${c.numParcelas}x`;
+}
+function statusContrato(c) { return c.status === "cancelado" ? "cancelado" : "ativo"; }
+
 function renderTabelaContratos() {
-  document.getElementById("tabela-contratos").innerHTML = STATE.contratos.map((c) => {
+  const termoBusca = STATE.buscaContratos.trim().toLowerCase();
+  const contratosVisiveis = !termoBusca ? STATE.contratos : STATE.contratos.filter((c) => {
+    const alvo = [
+      c.clienteNome, String(c.valorTotal || ""), fmtMoeda(c.valorTotal), formaPagamentoLabel(c),
+      statusContrato(c) === "cancelado" ? "cancelado" : "ativo", fmtData(dataContratoDe(c))
+    ].join(" ").toLowerCase();
+    return alvo.includes(termoBusca);
+  });
+
+  const hoje = hojeStr();
+  const idsVisiveis = new Set(contratosVisiveis.map((c) => c.id));
+  const parcelasVisiveis = STATE.parcelas.filter((p) => idsVisiveis.has(p.contratoId));
+  const parcelasVencidas = parcelasVisiveis.filter((p) => p.status === "esperado" && p.vencimento && p.vencimento < hoje);
+  const somar = (lista) => lista.reduce((s, p) => s + (Number(p.valor) || 0), 0);
+
+  document.getElementById("contratos-kpis").innerHTML = `
+    <div class="kpi-card negative"><div class="label">Parcelas em atraso</div><div class="value">${fmtMoeda(somar(parcelasVencidas))}</div><div class="sub">${parcelasVencidas.length} parcela(s) vencida(s) e não pagas</div></div>
+    <div class="kpi-card"><div class="label">Total contratado</div><div class="value">${fmtMoeda(contratosVisiveis.reduce((s, c) => s + (Number(c.valorTotal) || 0), 0))}</div><div class="sub">soma do valor total dos contratos</div></div>
+    <div class="kpi-card positive"><div class="label">Contratos ativos</div><div class="value">${contratosVisiveis.filter((c) => statusContrato(c) === "ativo").length}</div><div class="sub">de ${contratosVisiveis.length} no total</div></div>
+  `;
+
+  document.getElementById("tabela-contratos").innerHTML = contratosVisiveis.map((c) => {
     const parcelasDoContrato = STATE.parcelas.filter((p) => p.contratoId === c.id);
     const pagas = parcelasDoContrato.filter((p) => p.status === "realizado").length;
     const links = linksPdfDrive(c.pdfFileId);
     return `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheContrato('${c.id}')">
       <td>${esc(c.clienteNome)}</td>
       <td class="num">${fmtMoeda(c.valorTotal)}</td>
-      <td>${c.formaPagamento === "avista" ? "À vista" : c.formaPagamento === "personalizada" ? `${c.numParcelas}x personalizadas` : `Entrada + ${c.numParcelas}x`}</td>
+      <td>${formaPagamentoLabel(c)}</td>
       <td>${pagas}/${parcelasDoContrato.length}</td>
       <td>${fmtData(dataContratoDe(c))}</td>
-      <td>${links ? `<a href="${esc(links.download)}" onclick="event.stopPropagation()">Baixar PDF</a>` : c.pdfUrl ? `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Ver PDF</a>` : `<a href="#" onclick="event.stopPropagation();event.preventDefault();window.__jm.gerarPdfContratoExistente('${c.id}')">Gerar PDF</a>`}</td>
+      <td>${links ? `<a href="${esc(links.download)}" onclick="event.stopPropagation()">Baixar PDF</a>` : c.pdfUrl ? `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Ver PDF</a>` : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.gerarPdfContratoExistente('${c.id}')">Gerar PDF</button>`}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="6"><div class="empty">Nenhum contrato ainda.</div></td></tr>`;
+  }).join("") || `<tr><td colspan="6"><div class="empty">${termoBusca ? "Nenhum contrato encontrado pra essa busca." : "Nenhum contrato ainda."}</div></td></tr>`;
 }
 
 async function excluirContrato(id) {
-  if (!confirm("Excluir este contrato e todas as parcelas/etapas administrativas vinculadas? Isso não pode ser desfeito.")) return;
+  if (!(await confirmarAcao("Excluir este contrato e todas as parcelas/etapas administrativas vinculadas? Isso não pode ser desfeito."))) return;
   try {
     for (const p of STATE.parcelas.filter((x) => x.contratoId === id)) await deleteDoc(doc(db, "parcelas", p.id));
     for (const c of STATE.cardsAdmin.filter((x) => x.contratoId === id)) await deleteDoc(doc(db, "cardsAdmin", c.id));
@@ -2070,7 +2180,7 @@ document.getElementById("btn-salvar-cardadmin").addEventListener("click", async 
 });
 
 async function excluirCardAdmin(id) {
-  if (!confirm("Excluir este card do Funil Administrativo? Isso NÃO exclui o contrato nem as parcelas vinculadas — use com cuidado.")) return;
+  if (!(await confirmarAcao("Excluir este card do Funil Administrativo? Isso NÃO exclui o contrato nem as parcelas vinculadas — use com cuidado."))) return;
   try { await excluirComHistorico("cardsAdmin", id); } catch (err) { mostrarErro(err.message); }
 }
 
@@ -2281,7 +2391,7 @@ document.getElementById("btn-confirmar-marcar-pago").addEventListener("click", a
 async function desmarcarPago(tipo, id) {
   const titulo = tituloParaMarcarPago(tipo, id);
   const acao = tipo === "despesa" ? "pago" : tipo === "entrada" ? "recebido" : "paga";
-  if (!confirm(`Desfazer e marcar${titulo ? ` "${titulo}"` : ""} como não ${acao}?`)) return;
+  if (!(await confirmarAcao(`Desfazer e marcar${titulo ? ` "${titulo}"` : ""} como não ${acao}?`, { textoConfirmar: "Desfazer", destrutivo: false }))) return;
   try {
     await updateDoc(doc(db, COLECAO_POR_TIPO_PAGO[tipo], id), { status: "esperado", dataPagamento: null });
     mostrarToast("Pagamento desfeito.");
@@ -2315,7 +2425,7 @@ document.getElementById("btn-salvar-parcela").addEventListener("click", async ()
 });
 
 async function excluirParcela(id) {
-  if (!confirm("Excluir esta parcela? Isso NÃO ajusta o valor total do contrato — use com cuidado.")) return;
+  if (!(await confirmarAcao("Excluir esta parcela? Isso NÃO ajusta o valor total do contrato — use com cuidado."))) return;
   try { await deleteDoc(doc(db, "parcelas", id)); } catch (err) { mostrarErro(err.message); }
 }
 
@@ -2460,7 +2570,7 @@ document.getElementById("btn-salvar-despesa").addEventListener("click", async ()
 });
 
 async function excluirDespesa(id) {
-  if (!confirm("Excluir este lançamento?")) return;
+  if (!(await confirmarAcao("Excluir este lançamento?"))) return;
   try { await deleteDoc(doc(db, "despesas", id)); } catch (err) { mostrarErro(err.message); }
 }
 
@@ -2644,7 +2754,7 @@ document.getElementById("btn-salvar-entrada").addEventListener("click", async ()
 });
 
 async function excluirEntrada(id) {
-  if (!confirm("Excluir este lançamento?")) return;
+  if (!(await confirmarAcao("Excluir este lançamento?"))) return;
   try { await deleteDoc(doc(db, "entradas", id)); } catch (err) { mostrarErro(err.message); }
 }
 
@@ -2806,7 +2916,7 @@ document.getElementById("btn-salvar-cliente").addEventListener("click", async ()
 });
 
 async function excluirCliente(id) {
-  if (!confirm("Excluir este cliente? (Os registros já vinculados a ele nos funis não são apagados.)")) return;
+  if (!(await confirmarAcao("Excluir este cliente? (Os registros já vinculados a ele nos funis não são apagados.)"))) return;
   try { await deleteDoc(doc(db, "clientes", id)); } catch (err) { mostrarErro(err.message); }
 }
 
@@ -2832,10 +2942,32 @@ function abrirDetalheCliente(id) {
   });
 }
 
+document.getElementById("cli-busca").addEventListener("input", (e) => {
+  STATE.buscaClientes = e.target.value || "";
+  renderTabelaClientes();
+});
+
 function renderTabelaClientes() {
-  document.getElementById("tabela-clientes").innerHTML = STATE.clientes.map((c) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheCliente('${c.id}')">
+  const termoBusca = STATE.buscaClientes.trim().toLowerCase();
+  const clientesVisiveis = !termoBusca ? STATE.clientes : STATE.clientes.filter((c) => {
+    const alvo = [c.nome, c.telefone, c.email, c.origem].join(" ").toLowerCase();
+    return alvo.includes(termoBusca);
+  });
+
+  const idsComContratoAtivo = new Set(
+    STATE.contratos.filter((c) => statusContrato(c) === "ativo" && c.clienteId).map((c) => c.clienteId)
+  );
+  const comContratoAtivo = clientesVisiveis.filter((c) => idsComContratoAtivo.has(c.id)).length;
+
+  document.getElementById("clientes-kpis").innerHTML = `
+    <div class="kpi-card"><div class="label">Total de clientes</div><div class="value">${clientesVisiveis.length}</div><div class="sub">cadastrados${termoBusca ? " (com essa busca)" : ""}</div></div>
+    <div class="kpi-card positive"><div class="label">Com contrato ativo</div><div class="value">${comContratoAtivo}</div><div class="sub">já viraram contrato</div></div>
+    <div class="kpi-card"><div class="label">Sem contrato</div><div class="value">${clientesVisiveis.length - comContratoAtivo}</div><div class="sub">ainda não converteram</div></div>
+  `;
+
+  document.getElementById("tabela-clientes").innerHTML = clientesVisiveis.map((c) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheCliente('${c.id}')">
     <td>${esc(c.nome)}</td><td>${esc(c.telefone || "—")}</td><td>${esc(c.email || "—")}</td><td>${esc(c.origem || "—")}</td>
-  </tr>`).join("") || `<tr><td colspan="4"><div class="empty">Nenhum cliente cadastrado.</div></td></tr>`;
+  </tr>`).join("") || `<tr><td colspan="4"><div class="empty">${termoBusca ? "Nenhum cliente encontrado pra essa busca." : "Nenhum cliente cadastrado."}</div></td></tr>`;
 }
 
 /* ══════════════ CONFIGURAÇÕES — ETAPAS DOS FUNIS ══════════════ */
@@ -2905,7 +3037,7 @@ document.getElementById("btn-salvar-etapa-agendamento").addEventListener("click"
   } catch (err) { mostrarErro(err.message); }
 });
 async function excluirEtapaAgendamento(id) {
-  if (!confirm("Excluir esta etapa? Agendamentos nela ficarão sem coluna visível até serem movidos.")) return;
+  if (!(await confirmarAcao("Excluir esta etapa? Agendamentos nela ficarão sem coluna visível até serem movidos."))) return;
   try { await deleteDoc(doc(db, "etapasAgendamentoConfig", id)); } catch (err) { mostrarErro(err.message); }
 }
 
@@ -2949,7 +3081,7 @@ document.getElementById("btn-salvar-etapa-venda").addEventListener("click", asyn
   } catch (err) { mostrarErro(err.message); }
 });
 async function excluirEtapaVenda(id) {
-  if (!confirm("Excluir esta etapa? Oportunidades nela ficarão sem coluna visível até serem movidas.")) return;
+  if (!(await confirmarAcao("Excluir esta etapa? Oportunidades nela ficarão sem coluna visível até serem movidas."))) return;
   try { await deleteDoc(doc(db, "etapasVendaConfig", id)); } catch (err) { mostrarErro(err.message); }
 }
 
@@ -2987,7 +3119,7 @@ document.getElementById("btn-salvar-etapa-admin").addEventListener("click", asyn
   } catch (err) { mostrarErro(err.message); }
 });
 async function excluirEtapaAdmin(id) {
-  if (!confirm("Excluir esta etapa? Cards nela ficarão sem coluna visível até serem movidos.")) return;
+  if (!(await confirmarAcao("Excluir esta etapa? Cards nela ficarão sem coluna visível até serem movidos."))) return;
   try { await deleteDoc(doc(db, "etapasAdminConfig", id)); } catch (err) { mostrarErro(err.message); }
 }
 
@@ -3243,6 +3375,7 @@ async function iniciarListeners() {
   onSnapshot(query(collection(db, "contratos"), orderBy("dataGeracao", "desc")), { includeMetadataChanges: true }, (snap) => {
     STATE.contratos = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderTabelaContratos();
+    renderTabelaClientes();
     renderFinanceiro();
     rastrearSincronizacao("contratos", snap);
   }, (err) => mostrarErro("Erro de conexão (contratos): " + err.message));

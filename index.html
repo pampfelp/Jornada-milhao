@@ -161,6 +161,11 @@
         <button class="btn btn-primary" id="btn-novo-contrato">+ Novo contrato</button>
       </div>
     </header>
+    <div class="kpi-grid" id="contratos-kpis" style="margin-bottom:18px;"></div>
+    <div class="field" style="max-width:420px;margin-bottom:14px;">
+      <label>Buscar</label>
+      <input type="text" id="contr-busca" placeholder="Cliente, valor, forma de pagamento, status, data...">
+    </div>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Cliente</th><th>Valor total</th><th>Forma de pagamento</th><th>Parcelas pagas</th><th>Data do contrato</th><th>PDF</th><th></th></tr></thead>
@@ -234,6 +239,11 @@
         <button class="btn btn-primary" id="btn-novo-cliente">+ Novo cliente</button>
       </div>
     </header>
+    <div class="kpi-grid" id="clientes-kpis" style="margin-bottom:18px;"></div>
+    <div class="field" style="max-width:420px;margin-bottom:14px;">
+      <label>Buscar</label>
+      <input type="text" id="cli-busca" placeholder="Nome, telefone, e-mail, origem...">
+    </div>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Nome</th><th>Telefone</th><th>E-mail</th><th>Origem</th></tr></thead>
@@ -320,12 +330,24 @@
   </div>
 </div>
 
+<!-- ═══ MODAL: CONFIRMAÇÃO (genérico — substitui confirm() nativo) ═══ -->
+<div class="modal-overlay" id="modal-confirmar-acao">
+  <div class="modal-box modal-compacto">
+    <h2>Confirmar</h2>
+    <p id="mcf-mensagem" style="color:var(--ink);font-size:14px;line-height:1.5;margin:14px 0;"></p>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-confirmar-acao">Cancelar</button>
+      <button class="btn btn-danger" id="mcf-btn-confirmar">Confirmar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ MODAL: CLIENTE ═══ -->
 <div class="modal-overlay" id="modal-cliente">
   <div class="modal-box">
     <h2 id="modal-cliente-titulo">Novo cliente</h2>
     <div class="field"><label>Nome</label><input type="text" id="mc-nome"></div>
-    <div class="field"><label>Telefone</label><input type="text" id="mc-telefone"></div>
+    <div class="field"><label>Telefone</label><input type="text" inputmode="numeric" maxlength="15" id="mc-telefone" placeholder="(00) 00000-0000"></div>
     <div class="field"><label>E-mail</label><input type="text" id="mc-email"></div>
     <div class="field"><label>CPF ou CNPJ</label><input type="text" inputmode="numeric" maxlength="18" id="mc-cpfcnpj" placeholder="000.000.000-00 ou 00.000.000/0000-00"></div>
     <div class="field">
@@ -483,7 +505,7 @@
     </div>
     <p class="hint" id="mct-dados-faltando" style="margin:2px 0 10px;">Telefone, CPF/CNPJ e endereço são obrigatórios pra gerar o contrato — completam o cadastro do cliente.</p>
     <div class="row">
-      <div class="field"><label>Telefone <span style="color:var(--dourado);">*</span></label><input type="text" id="mct-telefone"></div>
+      <div class="field"><label>Telefone <span style="color:var(--dourado);">*</span></label><input type="text" inputmode="numeric" maxlength="15" id="mct-telefone" placeholder="(00) 00000-0000"></div>
       <div class="field"><label>E-mail</label><input type="text" id="mct-email"></div>
     </div>
     <div class="row">
