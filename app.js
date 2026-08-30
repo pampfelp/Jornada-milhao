@@ -1955,10 +1955,13 @@ function abrirDetalheContrato(id) {
     `]);
   } else if (c.pdfFileId) {
     const emailCliente = clienteDoContrato && clienteDoContrato.email;
-    campos.push(["Assinatura eletrônica", emailCliente
-      ? `<button class="btn btn-primary" onclick="window.__jm.enviarContratoParaAssinatura('${id}')">✍️ Enviar para assinatura digital</button>`
-      : `<p class="hint">Cadastre um e-mail pro cliente pra poder enviar o contrato pra assinatura digital.</p>`
-    ]);
+    // Botão sempre aparece — quando falta e-mail, fica desabilitado com um
+    // aviso explicando por quê (nunca some: a pessoa precisa entender que
+    // a ação existe, só não está disponível agora).
+    campos.push(["Assinatura eletrônica", `
+      <button class="btn btn-primary" ${emailCliente ? "" : "disabled"} title="${emailCliente ? "" : "Cadastre um e-mail pro cliente antes"}" onclick="window.__jm.enviarContratoParaAssinatura('${id}')">✍️ Enviar para assinatura digital</button>
+      ${emailCliente ? "" : `<p class="hint" style="margin-top:6px;">Cadastre um e-mail pro cliente pra poder enviar o contrato pra assinatura digital.</p>`}
+    `]);
   }
   abrirDetalhe({
     titulo: c.clienteNome,
