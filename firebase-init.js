@@ -7,7 +7,9 @@
 // banco de dados. Veja o README para o passo a passo de implantação do
 // Code.gs.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
-import { getFirestore, connectFirestoreEmulator } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+import {
+  getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator
+} from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 
 // TROQUE pela config do SEU projeto (Firebase Console > Configurações do
 // projeto > seus apps > app Web > "Config"). Essas chaves são públicas por
@@ -23,7 +25,26 @@ const firebaseConfig = {
 };
 
 export const firebaseApp = initializeApp(firebaseConfig);
-export const db = getFirestore(firebaseApp);
+
+// Cache local persistente (IndexedDB) — dados já sincronizados continuam
+// disponíveis mesmo se a internet cair no meio do uso, e escritas feitas
+// offline ficam na fila e sobem sozinhas quando a conexão volta (o
+// indicador de sincronização, bolinha amarela, mostra isso acontecendo).
+// "MultipleTabManager" permite abrir o sistema em mais de uma aba ao mesmo
+// tempo sem uma brigar com a outra pelo cache. Se o navegador não suportar
+// IndexedDB nesse contexto (raro — ex.: aba anônima em navegador antigo),
+// cai pra memória (comportamento de antes, sem persistência) em vez de
+// quebrar o carregamento do app.
+let db;
+try {
+  db = initializeFirestore(firebaseApp, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+  });
+} catch (err) {
+  console.warn("[firebase] cache persistente indisponível nesse navegador, usando memória:", err.message);
+  db = getFirestore(firebaseApp);
+}
+export { db };
 
 // Por padrão, sempre conecta no projeto Firestore REAL (mesmo testando
 // local ou pela hospedagem) — assim dá pra testar sem precisar rodar

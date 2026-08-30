@@ -94,6 +94,8 @@ header.top .view-desc{font-size:13px;color:var(--ink-soft);margin-top:6px;max-wi
 .kpi-card.negative{border-left-color:var(--debit);}
 .kpi-card.negative .value{color:var(--debit);}
 .kpi-card.positive .value{color:var(--credit);}
+.kpi-card .value.clicavel{cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:4px;}
+.kpi-card .value.clicavel:hover{color:var(--dourado);}
 
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
 .field{display:flex;flex-direction:column;gap:5px;flex:1;min-width:150px;}

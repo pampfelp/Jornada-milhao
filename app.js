@@ -248,6 +248,29 @@ document.getElementById("mcf-btn-confirmar").addEventListener("click", () => {
   if (resolve) resolve(true);
 });
 
+// Modal de "lista por trás do número" — todo KPI que é uma contagem/soma de
+// registros pode virar clicável (classe "clicavel" no ".value") e abrir
+// isto com as linhas exatas daquele recorte, em vez do número ficar opaco.
+// Um componente só, reaproveitado por Despesas/Entradas/Contratos/Clientes
+// — cada tela monta as linhas já formatadas (abrirListaModal não conhece
+// nenhuma estrutura de dados específica) e guarda em CACHE_LISTA_KPI pra
+// o onclick inline (construído junto com o HTML do KPI) só precisar
+// referenciar uma chave, sem serializar array em atributo HTML.
+const CACHE_LISTA_KPI = {};
+function abrirListaModal({ titulo, subtitulo, colunas, linhas }) {
+  document.getElementById("ml-titulo").textContent = titulo || "Detalhes";
+  document.getElementById("ml-subtitulo").textContent = subtitulo || "";
+  document.getElementById("ml-thead").innerHTML = `<tr>${(colunas || []).map((c) => `<th>${esc(c)}</th>`).join("")}</tr>`;
+  document.getElementById("ml-tbody").innerHTML = (linhas || []).length
+    ? linhas.map((linha) => `<tr>${linha.map((v) => `<td>${v}</td>`).join("")}</tr>`).join("")
+    : `<tr><td colspan="${(colunas || []).length || 1}"><div class="empty">Nenhum registro nesse recorte.</div></td></tr>`;
+  abrirModal("modal-lista");
+}
+function abrirListaKpi(chave) {
+  const dados = CACHE_LISTA_KPI[chave];
+  if (dados) abrirListaModal(dados);
+}
+
 // Modal de detalhe genérico — toda linha de tabela e todo card de kanban
 // abre isto primeiro (só leitura). "onEditar"/"onExcluir" ficam atrás dos
 // botões ✏️/🗑 lá dentro; passar null esconde o botão correspondente
@@ -1972,11 +1995,18 @@ function renderTabelaContratos() {
   const parcelasVisiveis = STATE.parcelas.filter((p) => idsVisiveis.has(p.contratoId));
   const parcelasVencidas = parcelasVisiveis.filter((p) => p.status === "esperado" && p.vencimento && p.vencimento < hoje);
   const somar = (lista) => lista.reduce((s, p) => s + (Number(p.valor) || 0), 0);
+  const contratosAtivos = contratosVisiveis.filter((c) => statusContrato(c) === "ativo");
+
+  const nomeClienteDaParcela = (p) => { const c = STATE.contratos.find((x) => x.id === p.contratoId); return c ? c.clienteNome : "—"; };
+  const linhaListaContrato = (c) => [esc(c.clienteNome), fmtMoeda(c.valorTotal), formaPagamentoLabel(c), statusContrato(c) === "ativo" ? "Ativo" : "Cancelado"];
+  CACHE_LISTA_KPI.contratosParcelasAtraso = { titulo: "Parcelas em atraso", subtitulo: `${parcelasVencidas.length} parcela(s)`, colunas: ["Cliente", "Valor", "Vencimento"], linhas: parcelasVencidas.map((p) => [esc(nomeClienteDaParcela(p)), fmtMoeda(p.valor), fmtData(p.vencimento)]) };
+  CACHE_LISTA_KPI.contratosTotal = { titulo: "Total contratado", subtitulo: `${contratosVisiveis.length} contrato(s)`, colunas: ["Cliente", "Valor total", "Forma de pagamento", "Status"], linhas: contratosVisiveis.map(linhaListaContrato) };
+  CACHE_LISTA_KPI.contratosAtivos = { titulo: "Contratos ativos", subtitulo: `${contratosAtivos.length} contrato(s)`, colunas: ["Cliente", "Valor total", "Forma de pagamento", "Status"], linhas: contratosAtivos.map(linhaListaContrato) };
 
   document.getElementById("contratos-kpis").innerHTML = `
-    <div class="kpi-card negative"><div class="label">Parcelas em atraso</div><div class="value">${fmtMoeda(somar(parcelasVencidas))}</div><div class="sub">${parcelasVencidas.length} parcela(s) vencida(s) e não pagas</div></div>
-    <div class="kpi-card"><div class="label">Total contratado</div><div class="value">${fmtMoeda(contratosVisiveis.reduce((s, c) => s + (Number(c.valorTotal) || 0), 0))}</div><div class="sub">soma do valor total dos contratos</div></div>
-    <div class="kpi-card positive"><div class="label">Contratos ativos</div><div class="value">${contratosVisiveis.filter((c) => statusContrato(c) === "ativo").length}</div><div class="sub">de ${contratosVisiveis.length} no total</div></div>
+    <div class="kpi-card negative"><div class="label">Parcelas em atraso</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('contratosParcelasAtraso')">${fmtMoeda(somar(parcelasVencidas))}</div><div class="sub">${parcelasVencidas.length} parcela(s) vencida(s) e não pagas</div></div>
+    <div class="kpi-card"><div class="label">Total contratado</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('contratosTotal')">${fmtMoeda(contratosVisiveis.reduce((s, c) => s + (Number(c.valorTotal) || 0), 0))}</div><div class="sub">soma do valor total dos contratos</div></div>
+    <div class="kpi-card positive"><div class="label">Contratos ativos</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('contratosAtivos')">${contratosAtivos.length}</div><div class="sub">de ${contratosVisiveis.length} no total</div></div>
   `;
 
   document.getElementById("tabela-contratos").innerHTML = contratosVisiveis.map((c) => {
@@ -2681,10 +2711,15 @@ function renderTabelaDespesas() {
   const aPagarAteHoje = pendentes.filter((d) => (d.data || "") <= hoje);
   const somar = (lista) => lista.reduce((s, d) => s + (Number(d.valor) || 0), 0);
 
+  const linhaLista = (d) => [esc(d.descricao), esc(d.categoria || "—"), fmtMoeda(d.valor), fmtData(d.data)];
+  CACHE_LISTA_KPI.despesasAPagarHoje = { titulo: "A pagar até hoje", subtitulo: `${aPagarAteHoje.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: aPagarAteHoje.map(linhaLista) };
+  CACHE_LISTA_KPI.despesasPendentes = { titulo: "Total pendente", subtitulo: `${pendentes.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: pendentes.map(linhaLista) };
+  CACHE_LISTA_KPI.despesasPagas = { titulo: "Total pago", subtitulo: `${pagas.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: pagas.map(linhaLista) };
+
   document.getElementById("despesas-kpis").innerHTML = `
-    <div class="kpi-card negative"><div class="label">A pagar até hoje</div><div class="value">${fmtMoeda(somar(aPagarAteHoje))}</div><div class="sub">pendentes com data de hoje ou anterior</div></div>
-    <div class="kpi-card"><div class="label">Total pendente</div><div class="value">${fmtMoeda(somar(pendentes))}</div><div class="sub">todas as não pagas do período (inclusive futuras)</div></div>
-    <div class="kpi-card positive"><div class="label">Total pago</div><div class="value">${fmtMoeda(somar(pagas))}</div><div class="sub">todas as pagas do período</div></div>
+    <div class="kpi-card negative"><div class="label">A pagar até hoje</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('despesasAPagarHoje')">${fmtMoeda(somar(aPagarAteHoje))}</div><div class="sub">pendentes com data de hoje ou anterior</div></div>
+    <div class="kpi-card"><div class="label">Total pendente</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('despesasPendentes')">${fmtMoeda(somar(pendentes))}</div><div class="sub">todas as não pagas do período (inclusive futuras)</div></div>
+    <div class="kpi-card positive"><div class="label">Total pago</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('despesasPagas')">${fmtMoeda(somar(pagas))}</div><div class="sub">todas as pagas do período</div></div>
   `;
 
   document.getElementById("tabela-despesas").innerHTML = linhasVisiveis
@@ -2808,10 +2843,15 @@ function renderTabelaEntradas() {
   const aReceberAteHoje = pendentes.filter((e) => (e.data || "") <= hoje);
   const somar = (lista) => lista.reduce((s, e) => s + (Number(e.valor) || 0), 0);
 
+  const linhaLista = (e) => [esc(e.descricao), esc(e.categoria || "—"), fmtMoeda(e.valor), fmtData(e.data)];
+  CACHE_LISTA_KPI.entradasAReceberHoje = { titulo: "A receber até hoje", subtitulo: `${aReceberAteHoje.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: aReceberAteHoje.map(linhaLista) };
+  CACHE_LISTA_KPI.entradasPendentes = { titulo: "Total pendente", subtitulo: `${pendentes.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: pendentes.map(linhaLista) };
+  CACHE_LISTA_KPI.entradasRecebidas = { titulo: "Total recebido", subtitulo: `${recebidas.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: recebidas.map(linhaLista) };
+
   document.getElementById("entradas-kpis").innerHTML = `
-    <div class="kpi-card negative"><div class="label">A receber até hoje</div><div class="value">${fmtMoeda(somar(aReceberAteHoje))}</div><div class="sub">pendentes com data de hoje ou anterior</div></div>
-    <div class="kpi-card"><div class="label">Total pendente</div><div class="value">${fmtMoeda(somar(pendentes))}</div><div class="sub">todas as não recebidas do período (inclusive futuras)</div></div>
-    <div class="kpi-card positive"><div class="label">Total recebido</div><div class="value">${fmtMoeda(somar(recebidas))}</div><div class="sub">todas as recebidas do período</div></div>
+    <div class="kpi-card negative"><div class="label">A receber até hoje</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('entradasAReceberHoje')">${fmtMoeda(somar(aReceberAteHoje))}</div><div class="sub">pendentes com data de hoje ou anterior</div></div>
+    <div class="kpi-card"><div class="label">Total pendente</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('entradasPendentes')">${fmtMoeda(somar(pendentes))}</div><div class="sub">todas as não recebidas do período (inclusive futuras)</div></div>
+    <div class="kpi-card positive"><div class="label">Total recebido</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('entradasRecebidas')">${fmtMoeda(somar(recebidas))}</div><div class="sub">todas as recebidas do período</div></div>
   `;
 
   document.getElementById("tabela-entradas").innerHTML = entradasFiltradas
@@ -2957,12 +2997,19 @@ function renderTabelaClientes() {
   const idsComContratoAtivo = new Set(
     STATE.contratos.filter((c) => statusContrato(c) === "ativo" && c.clienteId).map((c) => c.clienteId)
   );
-  const comContratoAtivo = clientesVisiveis.filter((c) => idsComContratoAtivo.has(c.id)).length;
+  const clientesComContratoAtivo = clientesVisiveis.filter((c) => idsComContratoAtivo.has(c.id));
+  const clientesSemContrato = clientesVisiveis.filter((c) => !idsComContratoAtivo.has(c.id));
+  const comContratoAtivo = clientesComContratoAtivo.length;
+
+  const linhaListaCliente = (c) => [esc(c.nome), esc(c.telefone || "—"), esc(c.email || "—"), esc(c.origem || "—")];
+  CACHE_LISTA_KPI.clientesTotal = { titulo: "Total de clientes", subtitulo: `${clientesVisiveis.length} cliente(s)`, colunas: ["Nome", "Telefone", "E-mail", "Origem"], linhas: clientesVisiveis.map(linhaListaCliente) };
+  CACHE_LISTA_KPI.clientesComContrato = { titulo: "Com contrato ativo", subtitulo: `${comContratoAtivo} cliente(s)`, colunas: ["Nome", "Telefone", "E-mail", "Origem"], linhas: clientesComContratoAtivo.map(linhaListaCliente) };
+  CACHE_LISTA_KPI.clientesSemContrato = { titulo: "Sem contrato", subtitulo: `${clientesSemContrato.length} cliente(s)`, colunas: ["Nome", "Telefone", "E-mail", "Origem"], linhas: clientesSemContrato.map(linhaListaCliente) };
 
   document.getElementById("clientes-kpis").innerHTML = `
-    <div class="kpi-card"><div class="label">Total de clientes</div><div class="value">${clientesVisiveis.length}</div><div class="sub">cadastrados${termoBusca ? " (com essa busca)" : ""}</div></div>
-    <div class="kpi-card positive"><div class="label">Com contrato ativo</div><div class="value">${comContratoAtivo}</div><div class="sub">já viraram contrato</div></div>
-    <div class="kpi-card"><div class="label">Sem contrato</div><div class="value">${clientesVisiveis.length - comContratoAtivo}</div><div class="sub">ainda não converteram</div></div>
+    <div class="kpi-card"><div class="label">Total de clientes</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('clientesTotal')">${clientesVisiveis.length}</div><div class="sub">cadastrados${termoBusca ? " (com essa busca)" : ""}</div></div>
+    <div class="kpi-card positive"><div class="label">Com contrato ativo</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('clientesComContrato')">${comContratoAtivo}</div><div class="sub">já viraram contrato</div></div>
+    <div class="kpi-card"><div class="label">Sem contrato</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('clientesSemContrato')">${clientesSemContrato.length}</div><div class="sub">ainda não converteram</div></div>
   `;
 
   document.getElementById("tabela-clientes").innerHTML = clientesVisiveis.map((c) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheCliente('${c.id}')">
@@ -3422,7 +3469,8 @@ window.__jm = {
   abrirModalMarcarPago, desmarcarPago,
   abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela, abrirDetalheEntrada,
   abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin,
-  gerarPdfContratoExistente, enviarContratoParaAssinatura
+  gerarPdfContratoExistente, enviarContratoParaAssinatura,
+  abrirListaKpi
 };
 
 iniciarListeners();
