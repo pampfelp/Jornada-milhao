@@ -51,7 +51,7 @@ let pendingEtapaVendaId = null;
 let pendingEtapaAdminId = null;
 let pendingClienteId = null;
 // Quando o cadastro de cliente é aberto "por cima" de outro modal (via
-// "+ Criar cliente" no combobox, ou "✏️ Editar cliente" dentro do
+// "+ Criar cliente" no combobox, ou "Editar cliente" dentro do
 // Agendamento/Vendas), guarda o que fazer depois de salvar: qual callback
 // chamar com o cliente resultante, e quais modais reabrir por cima dos
 // quais ele foi empilhado.
@@ -280,7 +280,7 @@ function abrirListaKpi(chave) {
 
 // Modal de detalhe genérico — toda linha de tabela e todo card de kanban
 // abre isto primeiro (só leitura). "onEditar"/"onExcluir" ficam atrás dos
-// botões ✏️/🗑 lá dentro; passar null esconde o botão correspondente
+// botões de editar/excluir lá dentro; passar null esconde o botão correspondente
 // (usado por entidades sem edição, ex: cardAdmin sem link pra excluir
 // direto). "campos" é um array de [label, valorHtmlJaEscapado].
 let detalheAtual = null;
@@ -392,24 +392,25 @@ const comboAgendamento = criarComboCliente("ma-cliente-busca", "ma-cliente-dropd
 const comboOportunidade = criarComboCliente("mo-cliente-busca", "mo-cliente-dropdown", (cliente) => atualizarContatoOportunidade(cliente));
 const comboContrato = criarComboCliente("mct-cliente-busca", "mct-cliente-dropdown", (cliente) => preencherCamposFaltantesContrato(cliente.id));
 
-// Nível de interesse do lead/oportunidade — escala fixa de 5 pontos com
-// emoji, tratada como "tag" visual nos cards e tabelas (não é uma lista
-// que cresce, então não entra na regra de combobox filtrável — é um
-// seletor de 5 botões fixos, tipo avaliação por estrelas).
+// Nível de interesse do lead/oportunidade — escala fixa de 5 pontos
+// (nunca emoji — regra do segundo-cerebro), tratada como "tag" visual nos
+// cards e tabelas (não é uma lista que cresce, então não entra na regra de
+// combobox filtrável — é um seletor de 5 botões fixos, tipo avaliação por
+// estrelas, com o número servindo de "rótulo" e o tooltip carregando o
+// significado qualitativo).
 const NIVEL_INTERESSE = {
-  1: { emoji: "😠", label: "Muito desinteressado" },
-  2: { emoji: "🙁", label: "Interesse moderadamente baixo" },
-  3: { emoji: "😐", label: "Interesse médio" },
-  4: { emoji: "🙂", label: "Interesse moderadamente alto" },
-  5: { emoji: "🤩", label: "Muito interessado" }
+  1: { label: "Muito desinteressado" },
+  2: { label: "Interesse moderadamente baixo" },
+  3: { label: "Interesse médio" },
+  4: { label: "Interesse moderadamente alto" },
+  5: { label: "Muito interessado" }
 };
-function emojiNivelInteresse(n) { return n && NIVEL_INTERESSE[n] ? NIVEL_INTERESSE[n].emoji : ""; }
-function labelNivelInteresse(n) { return n && NIVEL_INTERESSE[n] ? `${NIVEL_INTERESSE[n].emoji} ${NIVEL_INTERESSE[n].label}` : "—"; }
+function labelNivelInteresse(n) { return n && NIVEL_INTERESSE[n] ? `${n} — ${NIVEL_INTERESSE[n].label}` : "—"; }
 
 function criarPickerNivelInteresse(containerId) {
   const el = document.getElementById(containerId);
   el.innerHTML = Object.keys(NIVEL_INTERESSE).map((n) => (
-    `<button type="button" class="nivel-btn" data-nivel="${n}" title="${esc(NIVEL_INTERESSE[n].label)}">${NIVEL_INTERESSE[n].emoji}</button>`
+    `<button type="button" class="nivel-btn" data-nivel="${n}" title="${esc(NIVEL_INTERESSE[n].label)}">${n}</button>`
   )).join("");
   const api = { valor: null };
   function marcar() {
@@ -894,7 +895,7 @@ function onCardClick(funil, cardId) {
 function renderCardAgendamento(a) {
   const etapaCfg = STATE.etapasAgendamento.find((e) => e.id === a.etapa);
   return `
-    <div class="kcard-nome">${esc(a.clienteNome)}${a.nivelInteresse ? ` <span class="kcard-nivel" title="${esc(labelNivelInteresse(a.nivelInteresse))}">${emojiNivelInteresse(a.nivelInteresse)}</span>` : ""}</div>
+    <div class="kcard-nome">${esc(a.clienteNome)}${a.nivelInteresse ? ` <span class="kcard-nivel" title="${esc(labelNivelInteresse(a.nivelInteresse))}">${a.nivelInteresse}</span>` : ""}</div>
     <div class="kcard-sub">${esc(a.telefone || "")}</div>
     <div class="kcard-foot">
       <span class="kcard-prazo">${a.data ? `${fmtData(a.data)} ${esc(a.hora || "")}` : ""}</span>
@@ -965,7 +966,7 @@ async function moverAgendamento(id, novaEtapa) {
 
   // Contato e data vêm do CADASTRO DO CLIENTE / do próprio agendamento, não
   // de um campo digitado aqui — contato só se edita na ficha do cliente,
-  // via "✏️ Editar cliente" dentro do modal do lead. Sem tudo preenchido,
+  // via "Editar cliente" dentro do modal do lead. Sem tudo preenchido,
   // abre o modal pedindo antes de completar o movimento; em qualquer
   // etapa sem essas exigências o card transita livre, sem pedir nada.
   const clienteDoLead = STATE.clientes.find((c) => c.id === ag.clienteId);
@@ -986,7 +987,7 @@ async function moverAgendamento(id, novaEtapa) {
 
 // Mostra o contato do cliente selecionado no lead (só leitura — editar
 // contato é sempre pela ficha do cliente, nunca aqui) e liga/desliga o
-// botão "✏️ Editar cliente" conforme tem alguém selecionado ou não.
+// botão "Editar cliente" conforme tem alguém selecionado ou não.
 function atualizarContatoAgendamento(cliente) {
   const el = document.getElementById("ma-contato-cliente");
   const btn = document.getElementById("ma-btn-editar-cliente");
@@ -1101,13 +1102,13 @@ document.getElementById("ma-btn-editar-cliente").addEventListener("click", () =>
 });
 // opts.confirmarAgendamento: chamado pelo gate de mover pra "Agendado" —
 // nesse caso o bloco de data/hora aparece e fica implícito que é pra
-// preencher agora. Fora disso (editar um lead comum, ou o ✏️ do modal de
+// preencher agora. Fora disso (editar um lead comum, ou o "Editar cliente" do modal de
 // detalhe) o bloco só aparece se o lead já tiver data salva.
 function editarAgendamento(id, opts = {}) {
   const a = STATE.agendamentos.find((x) => x.id === id);
   if (!a) return;
   pendingAgendamentoEditId = id;
-  // "viaGateMovimento" (setado só pelo gate de mover etapa, não pelo ✏️ de
+  // "viaGateMovimento" (setado só pelo gate de mover etapa, não pelo "Editar cliente" de
   // edição normal) é quem decide se um pendingAgendamentoMoveEtapa já
   // setado deve ser preservado — não dá pra usar "confirmarAgendamento"
   // pra isso, porque uma etapa pode exigir qualificação sem exigir
@@ -1150,7 +1151,7 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
     if (pendingAgendamentoMoveEtapa) {
       const etapaAlvo = STATE.etapasAgendamento.find((e) => e.id === pendingAgendamentoMoveEtapa);
       const faltando = requisitosFaltantesEtapa(etapaAlvo, cliente, { data: dataEditada, nivelInteresse: nivelEditado, ...qualificacao });
-      if (faltando.length) { mostrarErro(`Ainda falta: ${faltando.join(", ")} — clique em "✏️ Editar cliente" se for algo do cadastro.`); return; }
+      if (faltando.length) { mostrarErro(`Ainda falta: ${faltando.join(", ")} — clique em "Editar cliente" se for algo do cadastro.`); return; }
     }
     try {
       const agendamentoOriginal = STATE.agendamentos.find((a) => a.id === pendingAgendamentoEditId);
@@ -1263,7 +1264,7 @@ function colunasVendas() {
 function renderCardOportunidade(o) {
   const etapaCfg = STATE.etapasVenda.find((e) => e.id === o.etapa);
   return `
-    <div class="kcard-nome">${esc(o.clienteNome)}${o.nivelInteresse ? ` <span class="kcard-nivel" title="${esc(labelNivelInteresse(o.nivelInteresse))}">${emojiNivelInteresse(o.nivelInteresse)}</span>` : ""}</div>
+    <div class="kcard-nome">${esc(o.clienteNome)}${o.nivelInteresse ? ` <span class="kcard-nivel" title="${esc(labelNivelInteresse(o.nivelInteresse))}">${o.nivelInteresse}</span>` : ""}</div>
     <div class="kcard-sub">${esc(o.telefone || "")}${o.data ? ` · ${fmtData(o.data)} ${esc(o.hora || "")}` : ""}</div>
     <div class="kcard-foot">
       <span class="kcard-valor">${fmtMoeda(o.valorProposto)}</span>
@@ -2160,7 +2161,7 @@ function abrirDetalheContrato(id) {
       <div style="display:flex;gap:14px;align-items:center;margin-top:8px;flex-wrap:wrap;">
         <a href="${esc(c.pdfUrl || links.preview)}" target="_blank" rel="noopener">Abrir em nova aba</a>
         <a href="${esc(links.download)}">Baixar PDF</a>
-        <button class="btn-small" type="button" onclick="window.__jm.gerarPdfContratoExistente('${id}')">🔄 Gerar PDF novamente</button>
+        <button class="btn-small" type="button" onclick="window.__jm.gerarPdfContratoExistente('${id}')">Gerar PDF novamente</button>
       </div>
       <p class="hint" style="margin-top:6px;">Use "Gerar PDF novamente" se o modelo do contrato mudou depois que este PDF foi gerado (ex: placeholder não preenchido) — ele substitui o PDF atual por um novo, com os dados de hoje.</p>`]);
   } else if (c.pdfUrl) {
@@ -2168,7 +2169,7 @@ function abrirDetalheContrato(id) {
   } else {
     campos.push(["PDF", `
       <p class="hint" style="margin-bottom:8px;">Ainda não gerado (pode ter sido criado antes do Apps Script estar configurado).</p>
-      <button class="btn btn-primary" onclick="window.__jm.gerarPdfContratoExistente('${id}')">🔄 Gerar PDF agora</button>
+      <button class="btn btn-primary" onclick="window.__jm.gerarPdfContratoExistente('${id}')">Gerar PDF agora</button>
     `]);
   }
   const clienteDoContrato = STATE.clientes.find((x) => x.id === c.clienteId);
@@ -2183,7 +2184,7 @@ function abrirDetalheContrato(id) {
     // aviso explicando por quê (nunca some: a pessoa precisa entender que
     // a ação existe, só não está disponível agora).
     campos.push(["Assinatura eletrônica", `
-      <button class="btn btn-primary" ${emailCliente ? "" : "disabled"} title="${emailCliente ? "" : "Cadastre um e-mail pro cliente antes"}" onclick="window.__jm.enviarContratoParaAssinatura('${id}')">✍️ Enviar para assinatura digital</button>
+      <button class="btn btn-primary" ${emailCliente ? "" : "disabled"} title="${emailCliente ? "" : "Cadastre um e-mail pro cliente antes"}" onclick="window.__jm.enviarContratoParaAssinatura('${id}')">Enviar para assinatura digital</button>
       ${emailCliente ? "" : `<p class="hint" style="margin-top:6px;">Cadastre um e-mail pro cliente pra poder enviar o contrato pra assinatura digital.</p>`}
     `]);
   }
@@ -2318,7 +2319,7 @@ function abrirDetalheCardAdmin(id) {
 }
 
 /* ══════════════ RELATÓRIO DE FUNIL (conversão + tempo em cada etapa) ══════════════
-   Sob demanda (só ao clicar em "📊 Relatório", não fica recalculando o
+   Sob demanda (só ao clicar em "Relatório", não fica recalculando o
    tempo todo): busca o histórico de cada card do funil (poucas dezenas de
    documentos, tranquilo em paralelo) e reconstrói o conjunto de etapas que
    cada card já visitou (posição atual + todo "para" já registrado). A
@@ -2604,7 +2605,7 @@ function renderFinanceiro() {
     <td>${esc(p.clienteNome)}</td><td>${p.numero === 0 ? "Entrada" : "Parcela " + p.numero}</td>
     <td>${fmtData(p.vencimento)}</td><td class="num">${fmtMoeda(p.valor)}</td>
     <td><button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('parcela','${p.id}')">Marcar paga</button></td>
-  </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma parcela vencida. 🎉</div></td></tr>`;
+  </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma parcela vencida.</div></td></tr>`;
 
   document.getElementById("tabela-parcelas-periodo").innerHTML = parcelasDoPeriodo
     .slice().sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""))
@@ -2985,7 +2986,7 @@ function editarCliente(id) {
 }
 // Abre o cadastro de cliente "por cima" de outro modal já aberto (o
 // combobox de qualquer funil usa isso pra "+ Criar cliente"; o botão
-// "✏️ Editar cliente" dentro do Agendamento/Vendas usa pra corrigir
+// "Editar cliente" dentro do Agendamento/Vendas usa pra corrigir
 // contato de um cliente já existente sem sair do que estava fazendo).
 // Contato (telefone/e-mail) só é preenchido/editado aqui — em nenhum
 // outro modal — por isso não pede nada além do nome pra criar.
@@ -3260,7 +3261,7 @@ async function excluirEtapaAdmin(id) {
 function fmtSla(e) {
   const unidade = e.slaUnidade === "horas" ? "h" : "d";
   if (!e.slaAmarelo && !e.slaVermelho) return "—";
-  return `🟡 ${e.slaAmarelo || 0}${unidade} · 🔴 ${e.slaVermelho || 0}${unidade}`;
+  return `<span class="dot dot-amarelo"></span> ${e.slaAmarelo || 0}${unidade} · <span class="dot dot-vermelho"></span> ${e.slaVermelho || 0}${unidade}`;
 }
 
 function renderConfigEtapasAgendamento() {
