@@ -32,6 +32,12 @@ a{color:var(--dourado);}
 .sync-item{font-size:12.5px;color:var(--ink-soft);padding:5px 0;border-bottom:1px solid var(--line);}
 .sync-item:last-child{border-bottom:none;}
 
+.pwa-banner{display:none;position:fixed;left:16px;right:16px;top:16px;max-width:420px;margin:0 auto;background:var(--panel-2);border:1.5px solid var(--dourado);border-radius:14px;padding:16px 18px;box-shadow:0 14px 34px rgba(0,0,0,.5);z-index:850;}
+.pwa-banner.active{display:flex;flex-direction:column;gap:12px;}
+.pwa-banner-texto strong{display:block;font-family:var(--display);font-size:14px;margin-bottom:4px;color:var(--dourado);}
+.pwa-banner-texto span{font-size:12.5px;color:var(--ink-soft);}
+.pwa-banner-acoes{display:flex;gap:8px;justify-content:flex-end;}
+
 .sidebar{width:var(--sidebar-w);flex:none;background:#101010;border-right:1px solid var(--line);min-height:100vh;display:flex;flex-direction:column;padding:22px 0;position:sticky;top:0;align-self:flex-start;}
 .sidebar .brandmark{padding:0 20px 18px;border-bottom:1px solid var(--line);margin-bottom:14px;display:flex;align-items:center;gap:11px;}
 .sidebar .brandmark img{width:38px;height:38px;flex:none;}
@@ -59,6 +65,7 @@ a{color:var(--dourado);}
   .app{width:100%;}
   .sync-bolinha{top:26px;right:16px;}
   .sync-painel{top:64px;}
+  .pwa-banner{top:74px;}
 }
 
 .app{flex:1;min-width:0;padding:34px 38px 90px;}

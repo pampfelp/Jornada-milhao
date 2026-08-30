@@ -3572,3 +3572,58 @@ setInterval(() => {
   renderKanbanVendas();
   renderKanbanAdministrativo();
 }, 60000);
+
+/* ══════════════ BANNER DE INSTALAÇÃO DO PWA ══════════════
+   O navegador não mostra sozinho nenhum prompt vistoso de instalação —
+   capturamos o "beforeinstallprompt" e desenhamos nosso próprio banner, no
+   visual do resto do app. iOS Safari nunca dispara esse evento (não existe
+   API de instalação lá); a única forma é instrução manual (Compartilhar →
+   Adicionar à Tela de Início), então detectamos a plataforma e trocamos o
+   conteúdo do mesmo banner em vez de duplicar o componente. */
+let pwaDeferredPrompt = null;
+
+function pwaJaInstalado() {
+  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+function pwaEhIOS() {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+}
+function pwaFoiDispensadoRecentemente() {
+  const ts = Number(localStorage.getItem("jm_pwa_dispensado_em") || 0);
+  return ts && (Date.now() - ts) < 14 * 24 * 60 * 60 * 1000; // não insiste de novo por 14 dias
+}
+function mostrarBannerPwa() {
+  if (pwaJaInstalado() || pwaFoiDispensadoRecentemente()) return;
+  const banner = document.getElementById("pwa-banner");
+  const btnInstalar = document.getElementById("pwa-banner-instalar");
+  const sub = document.getElementById("pwa-banner-sub");
+  if (pwaEhIOS()) {
+    btnInstalar.style.display = "none";
+    sub.textContent = 'Toque em Compartilhar e depois em "Adicionar à Tela de Início".';
+  } else if (pwaDeferredPrompt) {
+    btnInstalar.style.display = "";
+    sub.textContent = "Acesso rápido, tela cheia, sem precisar abrir o navegador toda vez.";
+  } else {
+    return; // navegador não ofereceu instalação — sem instrução genérica, pra não confundir
+  }
+  banner.classList.add("active");
+}
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  pwaDeferredPrompt = e;
+  setTimeout(mostrarBannerPwa, 3000);
+});
+document.getElementById("pwa-banner-instalar").addEventListener("click", async () => {
+  document.getElementById("pwa-banner").classList.remove("active");
+  if (!pwaDeferredPrompt) return;
+  pwaDeferredPrompt.prompt();
+  await pwaDeferredPrompt.userChoice;
+  pwaDeferredPrompt = null;
+});
+document.getElementById("pwa-banner-fechar").addEventListener("click", () => {
+  document.getElementById("pwa-banner").classList.remove("active");
+  localStorage.setItem("jm_pwa_dispensado_em", String(Date.now()));
+});
+// iOS não tem "beforeinstallprompt" pra escutar — mostra a instrução manual
+// direto, com um atraso pra não competir com o carregamento inicial.
+setTimeout(() => { if (pwaEhIOS()) mostrarBannerPwa(); }, 3000);
