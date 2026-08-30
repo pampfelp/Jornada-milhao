@@ -3142,6 +3142,58 @@ async function seedEtapasSeVazio_(colecao, defaults) {
   }
 }
 
+/* ══════════════ INDICADOR DE SINCRONIZAÇÃO (bolinha verde/amarelo) ══════════════
+   Nasceu de um risco real: com escrita otimista, a tela renderiza igual
+   sincronizado ou não — sem esse indicador, ninguém percebe se os dados
+   realmente chegaram no Firestore (ex: config apontando pro projeto errado)
+   até ser tarde demais. Verde = tudo confirmado pelo servidor; amarelo = há
+   documento com escrita pendente (hasPendingWrites) — passa o mouse ou
+   clica pra ver exatamente o quê. Só a bolinha, sem texto/pill ao lado
+   (regra de UI: não pode competir com o conteúdo real da tela). */
+const syncPendentes = {};
+
+function resumoRegistro_(d) {
+  return d.nome || d.clienteNome || d.descricao || "registro";
+}
+
+function atualizarBadgeSincronizacao() {
+  const pendentesLista = [];
+  Object.keys(syncPendentes).forEach((colecao) => {
+    Object.values(syncPendentes[colecao]).forEach((resumo) => pendentesLista.push({ colecao, resumo }));
+  });
+  const bolinha = document.getElementById("sync-bolinha");
+  if (!bolinha) return;
+  bolinha.classList.toggle("sync-amarelo", pendentesLista.length > 0);
+  bolinha.title = pendentesLista.length
+    ? `${pendentesLista.length} pendente(s) de confirmar no servidor`
+    : "Tudo sincronizado";
+  document.getElementById("sync-painel-lista").innerHTML = pendentesLista.length
+    ? pendentesLista.map((p) => `<div class="sync-item">${esc(p.colecao)} — ${esc(p.resumo)}</div>`).join("")
+    : `<div class="sync-item">Tudo sincronizado.</div>`;
+}
+
+// Atualiza o mapa de pendências de UMA coleção (a partir do snapshot de
+// uma query) e recalcula o indicador geral. Precisa que o onSnapshot
+// correspondente tenha sido chamado com {includeMetadataChanges:true} —
+// sem isso o listener só dispara quando o DADO muda, nunca quando ele
+// deixa de estar pendente.
+function rastrearSincronizacao(colecaoNome, snap) {
+  const pendentes = {};
+  snap.docs.forEach((d) => {
+    if (d.metadata.hasPendingWrites) pendentes[d.id] = resumoRegistro_(d.data());
+  });
+  syncPendentes[colecaoNome] = pendentes;
+  atualizarBadgeSincronizacao();
+}
+
+document.getElementById("sync-bolinha").addEventListener("click", () => {
+  document.getElementById("sync-painel").classList.toggle("active");
+});
+document.addEventListener("click", (e) => {
+  const painel = document.getElementById("sync-painel");
+  if (!painel.contains(e.target) && e.target !== document.getElementById("sync-bolinha")) painel.classList.remove("active");
+});
+
 async function iniciarListeners() {
   await Promise.all([
     seedEtapasSeVazio_("etapasAgendamentoConfig", DEFAULT_ETAPAS_AGENDAMENTO),
@@ -3149,72 +3201,85 @@ async function iniciarListeners() {
     seedEtapasSeVazio_("etapasAdminConfig", DEFAULT_ETAPAS_ADMIN)
   ]);
 
-  onSnapshot(doc(db, "config", "geral"), (snap) => {
+  onSnapshot(doc(db, "config", "geral"), { includeMetadataChanges: true }, (snap) => {
     STATE.config = snap.exists() ? snap.data() : {};
     renderConfigCalendario();
+    syncPendentes.config = snap.metadata.hasPendingWrites ? { geral: "Configurações" } : {};
+    atualizarBadgeSincronizacao();
   }, (err) => mostrarErro("Erro de conexão (config): " + err.message));
 
-  onSnapshot(query(collection(db, "clientes"), orderBy("createdAt", "desc")), (snap) => {
+  onSnapshot(query(collection(db, "clientes"), orderBy("createdAt", "desc")), { includeMetadataChanges: true }, (snap) => {
     STATE.clientes = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderTabelaClientes();
+    rastrearSincronizacao("clientes", snap);
   }, (err) => mostrarErro("Erro de conexão (clientes): " + err.message));
 
-  onSnapshot(query(collection(db, "etapasAgendamentoConfig"), orderBy("ordem")), (snap) => {
+  onSnapshot(query(collection(db, "etapasAgendamentoConfig"), orderBy("ordem")), { includeMetadataChanges: true }, (snap) => {
     STATE.etapasAgendamento = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderKanbanAgendamento();
     renderConfigEtapasAgendamento();
+    rastrearSincronizacao("etapasAgendamentoConfig", snap);
   }, (err) => mostrarErro("Erro de conexão (etapas de agendamento): " + err.message));
 
-  onSnapshot(query(collection(db, "agendamentos"), orderBy("createdAt", "desc")), (snap) => {
+  onSnapshot(query(collection(db, "agendamentos"), orderBy("createdAt", "desc")), { includeMetadataChanges: true }, (snap) => {
     STATE.agendamentos = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderKanbanAgendamento();
+    rastrearSincronizacao("agendamentos", snap);
   }, (err) => mostrarErro("Erro de conexão (agendamentos): " + err.message));
 
-  onSnapshot(query(collection(db, "etapasVendaConfig"), orderBy("ordem")), (snap) => {
+  onSnapshot(query(collection(db, "etapasVendaConfig"), orderBy("ordem")), { includeMetadataChanges: true }, (snap) => {
     STATE.etapasVenda = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderKanbanVendas();
     renderConfigEtapasVenda();
+    rastrearSincronizacao("etapasVendaConfig", snap);
   }, (err) => mostrarErro("Erro de conexão (etapas de venda): " + err.message));
 
-  onSnapshot(query(collection(db, "oportunidades"), orderBy("createdAt", "desc")), (snap) => {
+  onSnapshot(query(collection(db, "oportunidades"), orderBy("createdAt", "desc")), { includeMetadataChanges: true }, (snap) => {
     STATE.oportunidades = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderKanbanVendas();
+    rastrearSincronizacao("oportunidades", snap);
   }, (err) => mostrarErro("Erro de conexão (oportunidades): " + err.message));
 
-  onSnapshot(query(collection(db, "contratos"), orderBy("dataGeracao", "desc")), (snap) => {
+  onSnapshot(query(collection(db, "contratos"), orderBy("dataGeracao", "desc")), { includeMetadataChanges: true }, (snap) => {
     STATE.contratos = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderTabelaContratos();
     renderFinanceiro();
+    rastrearSincronizacao("contratos", snap);
   }, (err) => mostrarErro("Erro de conexão (contratos): " + err.message));
 
-  onSnapshot(query(collection(db, "parcelas"), orderBy("vencimento")), (snap) => {
+  onSnapshot(query(collection(db, "parcelas"), orderBy("vencimento")), { includeMetadataChanges: true }, (snap) => {
     STATE.parcelas = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderTabelaContratos();
     renderFinanceiro();
+    rastrearSincronizacao("parcelas", snap);
   }, (err) => mostrarErro("Erro de conexão (parcelas): " + err.message));
 
-  onSnapshot(query(collection(db, "despesas"), orderBy("createdAt", "desc")), (snap) => {
+  onSnapshot(query(collection(db, "despesas"), orderBy("createdAt", "desc")), { includeMetadataChanges: true }, (snap) => {
     STATE.despesas = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderTabelaDespesas();
     renderFinanceiro();
     lancarRecorrentesPendentes();
+    rastrearSincronizacao("despesas", snap);
   }, (err) => mostrarErro("Erro de conexão (despesas): " + err.message));
 
-  onSnapshot(query(collection(db, "entradas"), orderBy("createdAt", "desc")), (snap) => {
+  onSnapshot(query(collection(db, "entradas"), orderBy("createdAt", "desc")), { includeMetadataChanges: true }, (snap) => {
     STATE.entradas = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderTabelaEntradas();
     renderFinanceiro();
+    rastrearSincronizacao("entradas", snap);
   }, (err) => mostrarErro("Erro de conexão (entradas): " + err.message));
 
-  onSnapshot(query(collection(db, "etapasAdminConfig"), orderBy("ordem")), (snap) => {
+  onSnapshot(query(collection(db, "etapasAdminConfig"), orderBy("ordem")), { includeMetadataChanges: true }, (snap) => {
     STATE.etapasAdmin = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderKanbanAdministrativo();
     renderConfigEtapasAdmin();
+    rastrearSincronizacao("etapasAdminConfig", snap);
   }, (err) => mostrarErro("Erro de conexão (etapas administrativas): " + err.message));
 
-  onSnapshot(query(collection(db, "cardsAdmin"), orderBy("createdAt", "desc")), (snap) => {
+  onSnapshot(query(collection(db, "cardsAdmin"), orderBy("createdAt", "desc")), { includeMetadataChanges: true }, (snap) => {
     STATE.cardsAdmin = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderKanbanAdministrativo();
+    rastrearSincronizacao("cardsAdmin", snap);
   }, (err) => mostrarErro("Erro de conexão (funil administrativo): " + err.message));
 }
 
