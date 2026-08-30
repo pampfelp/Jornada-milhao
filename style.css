@@ -179,9 +179,15 @@ tbody tr.linha-clicavel{cursor:pointer;}
 .funil-toggle-btn.active{background:var(--dourado);color:#0A0A0A;}
 .funil-pane{display:none;}
 .funil-pane.active{display:block;}
+.view-toggle,.periodo-toggle{display:flex;gap:6px;flex-wrap:wrap;background:var(--panel-2);border:1px solid var(--line);border-radius:11px;padding:5px;width:fit-content;}
+.view-toggle-btn,.periodo-btn{background:none;border:none;padding:8px 14px;border-radius:8px;font-size:12.5px;font-weight:700;color:var(--ink-soft);cursor:pointer;}
+.view-toggle-btn:hover,.periodo-btn:hover{color:var(--ink);}
+.view-toggle-btn.active,.periodo-btn.active{background:var(--dourado);color:#0A0A0A;}
 @media(max-width:640px){
   .funil-toggle{width:100%;}
   .funil-toggle-btn{flex:1;padding:9px 8px;font-size:12px;}
+  .view-toggle{width:100%;}
+  .view-toggle-btn{flex:1;padding:8px 6px;font-size:12px;}
 }
 
 /* ══════════════ KANBAN (funis de agendamento/vendas/administrativo) ══════════════ */

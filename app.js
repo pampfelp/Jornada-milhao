@@ -28,7 +28,14 @@ const STATE = {
   periodoEntradasAte: ultimoDiaMes(),
   buscaDespesas: "",
   buscaContratos: "",
-  buscaClientes: ""
+  buscaClientes: "",
+  // Kanban (padrão) ou lista, e o recorte de período, por funil —
+  // independentes entre os 3 (agendamento/vendas/administrativo).
+  funilView: { agendamento: "kanban", vendas: "kanban", administrativo: "kanban" },
+  funilPeriodoPreset: { agendamento: "tudo", vendas: "tudo", administrativo: "tudo" },
+  funilPeriodoCustom: {
+    agendamento: { de: "", ate: "" }, vendas: { de: "", ate: "" }, administrativo: { de: "", ate: "" }
+  }
 };
 
 let pendingContratoOportunidadeId = null;
@@ -776,6 +783,77 @@ function ativarDragKanban(wrap) {
   });
 }
 
+// Toggle Kanban/Lista + filtro de período, comum aos 3 funis. "Lista" é uma
+// tabela achatada (sem colunas por etapa) — útil quando tem muito card e
+// arrastar deixa de ser prático; o período filtra por data de CRIAÇÃO do
+// card (mesmo campo/mesmo cuidado de fuso do Relatório do Funil).
+function periodoPresetParaRange(preset, custom) {
+  const hoje = hojeStr();
+  if (preset === "hoje") return { de: hoje, ate: hoje };
+  if (preset === "7dias") return { de: addDias(hoje, -6), ate: hoje };
+  if (preset === "15dias") return { de: addDias(hoje, -14), ate: hoje };
+  if (preset === "mes") return { de: primeiroDiaMes(), ate: ultimoDiaMes() };
+  if (preset === "personalizado") return { de: custom.de || "", ate: custom.ate || "" };
+  return { de: "", ate: "" }; // "tudo"
+}
+function filtrarCardsPorPeriodoFunil(cards, funil) {
+  const { de, ate } = periodoPresetParaRange(STATE.funilPeriodoPreset[funil], STATE.funilPeriodoCustom[funil]);
+  if (!de && !ate) return cards;
+  return cards.filter((c) => {
+    const data = dataLocalDeTimestamp(c.createdAt);
+    return (!de || data >= de) && (!ate || data <= ate);
+  });
+}
+function renderListaFunil(funil, cards, etapasRaw, getEtapaFn, detalheFn) {
+  const linhas = cards.slice().sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  document.getElementById(`lista-${funil}-corpo`).innerHTML = linhas.length ? linhas.map((c) => {
+    const etapaCfg = etapasRaw.find((e) => e.id === getEtapaFn(c));
+    return `<tr class="linha-clicavel" onclick="window.__jm.onCardClick('${funil}','${esc(c.id)}')">
+      <td>${esc(c.clienteNome || "—")}</td>
+      <td>${esc(etapaCfg ? etapaCfg.nome : "—")}</td>
+      <td>${detalheFn(c)}</td>
+      <td>${renderBadgeSla(c.dataEntrouEtapa, etapaCfg) || "—"}</td>
+      <td>${fmtData(dataLocalDeTimestamp(c.createdAt))}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="5"><div class="empty">Nenhum card nesse recorte.</div></td></tr>`;
+}
+// Liga o par de botões Kanban/Lista e o grupo de período pra um funil —
+// chamado uma vez por funil, na carga do módulo (os elementos já existem
+// no HTML, e re-renderizar só troca o conteúdo dos containers, nunca os
+// wrappers). "aoMudar" é o próprio renderKanbanX(), que já sabe montar as
+// duas visões a partir do STATE atual.
+function wireToggleFunil(funil, aoMudar) {
+  const grupoView = document.getElementById(`view-toggle-${funil}`);
+  grupoView.querySelectorAll(".view-toggle-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      grupoView.querySelectorAll(".view-toggle-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      STATE.funilView[funil] = btn.dataset.view;
+      document.getElementById(`kanban-${funil}`).style.display = btn.dataset.view === "kanban" ? "" : "none";
+      document.getElementById(`lista-${funil}`).style.display = btn.dataset.view === "lista" ? "" : "none";
+    });
+  });
+  const grupoPeriodo = document.getElementById(`periodo-toggle-${funil}`);
+  const custom = document.getElementById(`periodo-custom-${funil}`);
+  grupoPeriodo.querySelectorAll(".periodo-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      grupoPeriodo.querySelectorAll(".periodo-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      STATE.funilPeriodoPreset[funil] = btn.dataset.periodo;
+      custom.style.display = btn.dataset.periodo === "personalizado" ? "flex" : "none";
+      aoMudar();
+    });
+  });
+  custom.querySelector(".pf-de").addEventListener("change", (e) => {
+    STATE.funilPeriodoCustom[funil].de = e.target.value || "";
+    aoMudar();
+  });
+  custom.querySelector(".pf-ate").addEventListener("change", (e) => {
+    STATE.funilPeriodoCustom[funil].ate = e.target.value || "";
+    aoMudar();
+  });
+}
+
 function renderKanban(wrapId, funilKey, colunas, cards, getEtapaFn, renderCardContentFn) {
   const wrap = document.getElementById(wrapId);
   wrap.dataset.funil = funilKey;
@@ -831,8 +909,11 @@ function colunasAgendamento() {
 }
 
 function renderKanbanAgendamento() {
-  renderKanban("kanban-agendamento", "agendamento", colunasAgendamento(), STATE.agendamentos, (a) => a.etapa, renderCardAgendamento);
+  const cards = filtrarCardsPorPeriodoFunil(STATE.agendamentos, "agendamento");
+  renderKanban("kanban-agendamento", "agendamento", colunasAgendamento(), cards, (a) => a.etapa, renderCardAgendamento);
+  renderListaFunil("agendamento", cards, STATE.etapasAgendamento, (a) => a.etapa, (a) => `${esc(a.telefone || "—")}${a.data ? ` · ${fmtData(a.data)} ${esc(a.hora || "")}` : ""}`);
 }
+wireToggleFunil("agendamento", renderKanbanAgendamento);
 
 // Duas travas independentes por etapa (configuráveis em Configurações →
 // Funil de Agendamento), porque "Reagendar" precisa da mesma exigência de
@@ -1193,14 +1274,17 @@ function renderCardOportunidade(o) {
 }
 
 function renderKanbanVendas() {
-  renderKanban("kanban-vendas", "vendas", colunasVendas(), STATE.oportunidades, (o) => o.etapa, renderCardOportunidade);
-  const ativas = STATE.oportunidades.filter((o) => !o.perdida);
+  const cards = filtrarCardsPorPeriodoFunil(STATE.oportunidades, "vendas");
+  renderKanban("kanban-vendas", "vendas", colunasVendas(), cards, (o) => o.etapa, renderCardOportunidade);
+  renderListaFunil("vendas", cards, STATE.etapasVenda, (o) => o.etapa, (o) => `${fmtMoeda(o.valorProposto)} · ${esc(o.telefone || "—")}`);
+  const ativas = cards.filter((o) => !o.perdida);
   const valorTotal = ativas.reduce((s, o) => s + (Number(o.valorProposto) || 0), 0);
   document.getElementById("vendas-kpis").innerHTML = `
     <div class="funil-kpi"><div class="tag">Oportunidades ativas</div><div class="num">${ativas.length}</div></div>
     <div class="funil-kpi"><div class="tag">Valor em negociação</div><div class="num">${fmtMoeda(valorTotal)}</div></div>
   `;
 }
+wireToggleFunil("vendas", renderKanbanVendas);
 
 async function moverOportunidade(id, novaEtapa) {
   const op = STATE.oportunidades.find((o) => o.id === id);
@@ -2177,8 +2261,11 @@ function renderCardAdmin(c) {
 
 function renderKanbanAdministrativo() {
   const colunas = [...STATE.etapasAdmin].sort((a, b) => a.ordem - b.ordem).map((e) => ({ id: e.id, nome: e.nome }));
-  renderKanban("kanban-administrativo", "administrativo", colunas, STATE.cardsAdmin, (c) => c.etapa, renderCardAdmin);
+  const cards = filtrarCardsPorPeriodoFunil(STATE.cardsAdmin, "administrativo");
+  renderKanban("kanban-administrativo", "administrativo", colunas, cards, (c) => c.etapa, renderCardAdmin);
+  renderListaFunil("administrativo", cards, STATE.etapasAdmin, (c) => c.etapa, (c) => fmtMoeda(c.valorTotal));
 }
+wireToggleFunil("administrativo", renderKanbanAdministrativo);
 
 async function moverCardAdmin(id, novaEtapa) {
   const card = STATE.cardsAdmin.find((c) => c.id === id);
@@ -3470,7 +3557,7 @@ window.__jm = {
   abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela, abrirDetalheEntrada,
   abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin,
   gerarPdfContratoExistente, enviarContratoParaAssinatura,
-  abrirListaKpi
+  abrirListaKpi, onCardClick
 };
 
 iniciarListeners();

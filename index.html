@@ -125,7 +125,31 @@
       </div>
       <p class="hint" style="margin-bottom:14px;">Funil comum — arraste o card livremente entre as etapas. A única automação é a etapa "Agendado": ao chegar nela, o sistema pede telefone e data/hora do agendamento, cria o evento na Google Agenda e o card já entra como novo lead no Funil de Vendas.</p>
       <div class="card" id="relatorio-agendamento" style="display:none;"></div>
+      <div class="row" style="margin-bottom:14px;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+        <div class="view-toggle" id="view-toggle-agendamento">
+          <button class="view-toggle-btn active" data-view="kanban">Kanban</button>
+          <button class="view-toggle-btn" data-view="lista">Lista</button>
+        </div>
+        <div class="periodo-toggle" id="periodo-toggle-agendamento">
+          <button class="periodo-btn" data-periodo="hoje">Hoje</button>
+          <button class="periodo-btn" data-periodo="7dias">7 dias</button>
+          <button class="periodo-btn" data-periodo="15dias">15 dias</button>
+          <button class="periodo-btn" data-periodo="mes">Este mês</button>
+          <button class="periodo-btn active" data-periodo="tudo">Tudo</button>
+          <button class="periodo-btn" data-periodo="personalizado">Personalizado</button>
+        </div>
+        <div class="row periodo-custom" id="periodo-custom-agendamento" style="display:none;gap:8px;">
+          <div class="field"><label>De</label><input type="date" class="pf-de"></div>
+          <div class="field"><label>Até</label><input type="date" class="pf-ate"></div>
+        </div>
+      </div>
       <div class="kanban-wrap" id="kanban-agendamento"></div>
+      <div class="table-wrap lista-funil" id="lista-agendamento" style="display:none;">
+        <table>
+          <thead><tr><th>Cliente</th><th>Etapa</th><th>Detalhe</th><th>SLA</th><th>Criado em</th></tr></thead>
+          <tbody id="lista-agendamento-corpo"></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="funil-pane" id="pane-vendas">
@@ -139,7 +163,31 @@
       <p class="hint" style="margin-bottom:14px;">O topo vem do fim do Funil de Agendamento. Ao mover um card para uma etapa de fechamento, gere o contrato — o card sai daqui e entra no Funil Administrativo.</p>
       <div class="funil-kpis" id="vendas-kpis"></div>
       <div class="card" id="relatorio-vendas" style="display:none;"></div>
+      <div class="row" style="margin-bottom:14px;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+        <div class="view-toggle" id="view-toggle-vendas">
+          <button class="view-toggle-btn active" data-view="kanban">Kanban</button>
+          <button class="view-toggle-btn" data-view="lista">Lista</button>
+        </div>
+        <div class="periodo-toggle" id="periodo-toggle-vendas">
+          <button class="periodo-btn" data-periodo="hoje">Hoje</button>
+          <button class="periodo-btn" data-periodo="7dias">7 dias</button>
+          <button class="periodo-btn" data-periodo="15dias">15 dias</button>
+          <button class="periodo-btn" data-periodo="mes">Este mês</button>
+          <button class="periodo-btn active" data-periodo="tudo">Tudo</button>
+          <button class="periodo-btn" data-periodo="personalizado">Personalizado</button>
+        </div>
+        <div class="row periodo-custom" id="periodo-custom-vendas" style="display:none;gap:8px;">
+          <div class="field"><label>De</label><input type="date" class="pf-de"></div>
+          <div class="field"><label>Até</label><input type="date" class="pf-ate"></div>
+        </div>
+      </div>
       <div class="kanban-wrap" id="kanban-vendas"></div>
+      <div class="table-wrap lista-funil" id="lista-vendas" style="display:none;">
+        <table>
+          <thead><tr><th>Cliente</th><th>Etapa</th><th>Detalhe</th><th>SLA</th><th>Criado em</th></tr></thead>
+          <tbody id="lista-vendas-corpo"></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="funil-pane" id="pane-administrativo">
@@ -149,7 +197,31 @@
       </div>
       <p class="hint" style="margin-bottom:14px;">Pós-venda: prazos, grupo, recebimento, execução. O topo é alimentado automaticamente pela geração do contrato.</p>
       <div class="card" id="relatorio-administrativo" style="display:none;"></div>
+      <div class="row" style="margin-bottom:14px;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+        <div class="view-toggle" id="view-toggle-administrativo">
+          <button class="view-toggle-btn active" data-view="kanban">Kanban</button>
+          <button class="view-toggle-btn" data-view="lista">Lista</button>
+        </div>
+        <div class="periodo-toggle" id="periodo-toggle-administrativo">
+          <button class="periodo-btn" data-periodo="hoje">Hoje</button>
+          <button class="periodo-btn" data-periodo="7dias">7 dias</button>
+          <button class="periodo-btn" data-periodo="15dias">15 dias</button>
+          <button class="periodo-btn" data-periodo="mes">Este mês</button>
+          <button class="periodo-btn active" data-periodo="tudo">Tudo</button>
+          <button class="periodo-btn" data-periodo="personalizado">Personalizado</button>
+        </div>
+        <div class="row periodo-custom" id="periodo-custom-administrativo" style="display:none;gap:8px;">
+          <div class="field"><label>De</label><input type="date" class="pf-de"></div>
+          <div class="field"><label>Até</label><input type="date" class="pf-ate"></div>
+        </div>
+      </div>
       <div class="kanban-wrap" id="kanban-administrativo"></div>
+      <div class="table-wrap lista-funil" id="lista-administrativo" style="display:none;">
+        <table>
+          <thead><tr><th>Cliente</th><th>Etapa</th><th>Detalhe</th><th>SLA</th><th>Criado em</th></tr></thead>
+          <tbody id="lista-administrativo-corpo"></tbody>
+        </table>
+      </div>
     </div>
   </section>
 
