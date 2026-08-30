@@ -118,6 +118,16 @@ function hojeStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// "yyyy-MM-dd" local de um Timestamp do Firestore — mesmo cuidado de fuso
+// do hojeStr() (nunca toISOString/UTC), usado pra filtrar por data de
+// criação sem o bug clássico de virar o dia errado perto da meia-noite.
+function dataLocalDeTimestamp(ts) {
+  if (!ts) return "";
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  if (isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function primeiroDiaMes() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
@@ -2137,9 +2147,30 @@ async function calcularAnaliseFunil(cards, etapasSorted, colecaoNome) {
   });
 }
 
-function renderRelatorioFunil(containerId, linhas) {
+// Filtro De/Até por relatório (um estado por funil — os 3 relatórios podem
+// ter recortes de período diferentes ao mesmo tempo). O filtro decide só
+// QUAIS cards entram na "foto" (por data de CRIAÇÃO do card, nunca por
+// última movimentação) — "Já passaram"/"Tempo médio" continuam somando o
+// histórico INTEIRO de cada card que entrou nessa população, não só as
+// transições que caíram dentro do período. Sem filtro (De/Até vazios), o
+// relatório continua mostrando todos os cards de sempre, como antes.
+const filtrosRelatorioFunil = {
+  agendamentos: { de: "", ate: "" },
+  oportunidades: { de: "", ate: "" },
+  cardsAdmin: { de: "", ate: "" }
+};
+
+function renderRelatorioFunil(containerId, linhas, colecaoNome) {
+  const filtro = filtrosRelatorioFunil[colecaoNome];
   document.getElementById(containerId).innerHTML = `
-    <h2>Relatório do <span>funil</span></h2>
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+      <h2 style="margin:0;">Relatório do <span>funil</span></h2>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <label class="hint" style="margin:0;">De <input type="date" class="rf-de" value="${esc(filtro.de)}" style="margin-left:4px;"></label>
+        <label class="hint" style="margin:0;">Até <input type="date" class="rf-ate" value="${esc(filtro.ate)}" style="margin-left:4px;"></label>
+        <button class="btn-small rf-limpar" type="button">Tudo</button>
+      </div>
+    </div>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Etapa</th><th>Agora</th><th>Já passaram</th><th>Conversão</th><th>Tempo médio atual</th></tr></thead>
@@ -2154,22 +2185,39 @@ function renderRelatorioFunil(containerId, linhas) {
         </tbody>
       </table>
     </div>
-    <p class="hint" style="margin-top:10px;">"Já passaram" conta cada card que já esteve nessa etapa em algum momento (posição atual ou pelo histórico). Como o funil é de trânsito livre (arrastar pra qualquer etapa), a conversão é aproximada — não assume ordem estritamente sequencial.</p>
+    <p class="hint" style="margin-top:10px;">"Já passaram" conta cada card que já esteve nessa etapa em algum momento (posição atual ou pelo histórico). Como o funil é de trânsito livre (arrastar pra qualquer etapa), a conversão é aproximada — não assume ordem estritamente sequencial. ${filtro.de || filtro.ate ? "Com período ativo, a tabela considera só os cards criados nesse recorte — \"Já passaram\"/tempo médio somam o histórico inteiro desses cards, não só o que aconteceu dentro do período." : "Sem período selecionado, mostra todos os cards de sempre."}</p>
   `;
 }
 
 function configurarBotaoRelatorio(btnId, blocoId, getCards, getEtapas, colecaoNome) {
-  document.getElementById(btnId).addEventListener("click", async () => {
-    const bloco = document.getElementById(blocoId);
-    if (bloco.style.display !== "none") { bloco.style.display = "none"; return; }
-    bloco.style.display = "block";
+  const bloco = document.getElementById(blocoId);
+
+  async function recalcular() {
     bloco.innerHTML = `<p class="hint">Calculando...</p>`;
     try {
-      const linhas = await calcularAnaliseFunil(getCards(), getEtapas(), colecaoNome);
-      renderRelatorioFunil(blocoId, linhas);
+      const filtro = filtrosRelatorioFunil[colecaoNome];
+      const todosOsCards = getCards();
+      const cardsFiltrados = (!filtro.de && !filtro.ate) ? todosOsCards : todosOsCards.filter((c) => {
+        const dataCriacao = dataLocalDeTimestamp(c.createdAt);
+        return (!filtro.de || dataCriacao >= filtro.de) && (!filtro.ate || dataCriacao <= filtro.ate);
+      });
+      const linhas = await calcularAnaliseFunil(cardsFiltrados, getEtapas(), colecaoNome);
+      renderRelatorioFunil(blocoId, linhas, colecaoNome);
+      bloco.querySelector(".rf-de").addEventListener("change", (e) => { filtrosRelatorioFunil[colecaoNome].de = e.target.value; recalcular(); });
+      bloco.querySelector(".rf-ate").addEventListener("change", (e) => { filtrosRelatorioFunil[colecaoNome].ate = e.target.value; recalcular(); });
+      bloco.querySelector(".rf-limpar").addEventListener("click", () => {
+        filtrosRelatorioFunil[colecaoNome].de = ""; filtrosRelatorioFunil[colecaoNome].ate = "";
+        recalcular();
+      });
     } catch (err) {
       bloco.innerHTML = `<p class="hint">Não foi possível calcular: ${esc(err.message)}</p>`;
     }
+  }
+
+  document.getElementById(btnId).addEventListener("click", () => {
+    if (bloco.style.display !== "none") { bloco.style.display = "none"; return; }
+    bloco.style.display = "block";
+    recalcular();
   });
 }
 configurarBotaoRelatorio("btn-relatorio-agendamento", "relatorio-agendamento",
