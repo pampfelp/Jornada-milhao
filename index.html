@@ -604,6 +604,13 @@
       </div>
     </div>
     <p class="hint" id="mct-dados-faltando" style="margin:2px 0 10px;">Telefone, CPF/CNPJ e endereço são obrigatórios pra gerar o contrato — completam o cadastro do cliente.</p>
+    <div class="field">
+      <label>Tipo de contrato</label>
+      <select id="mct-tipo-contrato">
+        <option value="padrao">Padrão — Assessoria Empresarial</option>
+        <option value="consultoria_comissao">Consultoria com comissão variável (energia solar)</option>
+      </select>
+    </div>
     <div class="row">
       <div class="field"><label>Telefone <span style="color:var(--dourado);">*</span></label><input type="text" inputmode="numeric" maxlength="15" id="mct-telefone" placeholder="(00) 00000-0000"></div>
       <div class="field"><label>E-mail</label><input type="text" id="mct-email"></div>
@@ -631,6 +638,14 @@
           <option value="entrada_parcelas">Entrada + parcelas</option>
           <option value="personalizada">Parcelas personalizadas (valores diferentes)</option>
         </select>
+      </div>
+    </div>
+    <div id="mct-bloco-comissao" style="display:none;">
+      <p class="hint" style="margin-bottom:8px;">Além dos valores fixos acima, esse tipo de contrato cobra uma comissão variável sobre o faturamento excedente do cliente.</p>
+      <div class="row">
+        <div class="field"><label>% de comissão variável</label><input type="text" inputmode="decimal" id="mct-comissao-pct" placeholder="4"></div>
+        <div class="field"><label>Faturamento mínimo mensal pra incidir (R$)</label><input type="text" inputmode="decimal" id="mct-comissao-piso" placeholder="400.000,00"></div>
+        <div class="field"><label>Potência máx. do projeto pra contar (kWp)</label><input type="text" inputmode="decimal" id="mct-comissao-kwp" placeholder="60"></div>
       </div>
     </div>
     <div class="field">

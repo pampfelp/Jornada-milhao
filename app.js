@@ -1341,6 +1341,8 @@ async function moverOportunidade(id, novaEtapa) {
     document.getElementById("mct-email").value = op.email || document.getElementById("mct-email").value;
     document.getElementById("mct-valor").value = op.valorProposto ? String(op.valorProposto).replace(".", ",") : "";
     document.getElementById("mct-forma").value = "avista";
+    document.getElementById("mct-tipo-contrato").value = "padrao";
+    document.getElementById("mct-bloco-comissao").style.display = "none";
     document.getElementById("mct-data-contrato").value = hojeStr();
     document.getElementById("mct-primeiraparcela").value = hojeStr();
     document.getElementById("mct-linha-parcelamento").style.display = "none";
@@ -1610,7 +1612,16 @@ function construirTabelaParcelasHtml(parcelas, forma) {
 // HTML, sob controle total daqui — elimina de vez a "capa"/formatação
 // escondida que um Google Docs editado à mão podia carregar, porque não
 // existe mais Google Docs nenhum no meio do caminho.
+// "Padrão" (Assessoria Empresarial) é o único tipo até 2026-08-31 — o
+// contrato assinado da SOLAR ROOF LTDA (fora do sistema, comparado a
+// pedido do Felipe) usou uma consultoria com comissão variável sobre
+// faturamento, típica de energia solar. "consultoria_comissao" replica
+// esse formato, mas com a numeração de cláusulas corrigida (o PDF de
+// referência pulava 3.7 e 7.2/7.3 — sinal de edição manual sem
+// renumerar; aqui fica sequencial) e os parâmetros (%, piso, kWp)
+// configuráveis no formulário em vez de fixos no texto.
 function montarHtmlContrato(cliente, contrato, parcelas) {
+  const ehComissao = contrato.tipoContrato === "consultoria_comissao";
   const dataContrato = contrato.dataContrato || hojeStr();
   const nomeCliente = esc(cliente.nome);
   const valorTotalTexto = esc(fmtMoeda(contrato.valorTotal));
@@ -1623,31 +1634,44 @@ function montarHtmlContrato(cliente, contrato, parcelas) {
   const linhaRepresentante = digitos.length > 11 && cliente.representanteNome
     ? `<br>Nome: ${esc(cliente.representanteNome)}`
     : "";
+  const contatoCliente = [cliente.telefone && `telefone ${esc(cliente.telefone)}`, cliente.email && `e-mail ${esc(cliente.email)}`].filter(Boolean).join(", ");
+  const linhaContatoCliente = ehComissao && contatoCliente ? `, ${contatoCliente}` : "";
+  const linhaContatoContratado = ehComissao ? ", e-mail expansao.viegas@gmail.com, telefone (91) 98145-9254" : "";
 
-  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Contrato - ${nomeCliente}</title>
-<style>
-body{font-family:"Times New Roman",Times,serif;font-size:12.5px;line-height:1.6;color:#111;max-width:760px;margin:0 auto;padding:24px 8px 48px;}
-h1{font-size:15px;text-align:center;font-weight:700;margin-bottom:22px;text-transform:uppercase;}
-h2{font-size:12.5px;font-weight:700;margin-top:16px;margin-bottom:6px;}
-p{margin:0 0 8px;text-align:justify;}
-ul{margin:0 0 8px;padding-left:22px;}
-li{margin-bottom:3px;text-align:justify;}
-.assinaturas{margin-top:56px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:32px;}
-.assinatura{width:280px;}
-.assinatura-linha{border-top:1px solid #333;margin-top:48px;padding-top:6px;font-size:11px;text-align:center;}
-@media print{@page{margin:1.5cm 2cm 2cm;}}
-</style></head><body>
-<h1>Contrato de Prestação de Serviços de Assessoria Empresarial</h1>
+  const tituloContrato = ehComissao ? "Contrato de Prestação de Serviços de Consultoria" : "Contrato de Prestação de Serviços de Assessoria Empresarial";
+  const subtituloPrograma = ehComissao ? `<p style="text-align:center;margin-top:-14px;margin-bottom:18px;">Programa: Jornada do Milhão</p>` : "";
+  const introContrato = ehComissao
+    ? "Prestação de Serviços Educacionais e de Consultoria"
+    : "Prestação de Serviços de Assessoria Empresarial para Potencialização Comercial";
 
-<p><strong>CONTRATANTE:</strong></p>
-<p>${nomeCliente}, ${qualificacao}.</p>
-
-<p><strong>CONTRATADO:</strong></p>
-<p>BENEDITO JOÃO VIEGAS DE MATOS, pessoa física, brasileiro, casado, CPF nº 925.437.152/15, escritório comercial localizado na Rua Municipalidade, Edifício Mirai Offices, sala 216, bairro Umarizal, Belém/PA.</p>
-
-<p>As partes acima qualificadas têm entre si justo e contratado o presente instrumento de Prestação de Serviços de Assessoria Empresarial para Potencialização Comercial, que se regerá pelas cláusulas e condições a seguir:</p>
-
-<h2>1. OBJETO</h2>
+  const objetoDoContrato = ehComissao ? `
+<p>1.1 O presente contrato tem por objeto a prestação de serviços educacionais e de consultoria referentes ao programa "Jornada do Milhão", voltado a empresários do setor de energia solar fotovoltaica, com o objetivo de estruturar, escalar e profissionalizar as operações comerciais do CONTRATANTE.</p>
+<p>1.2 Os serviços contemplam os seguintes módulos e entregáveis, sendo a execução de inteira responsabilidade do CONTRATANTE:</p>
+<h2>Módulo 1 — Fundamentos e Diagnóstico</h2>
+<ul>
+<li>Sessão de kickoff individual (até 2h) para diagnóstico completo do negócio;</li>
+<li>Análise e definição, junto à gestão comercial, do perfil de cliente ideal e dos critérios de qualificação de leads;</li>
+<li>Avaliação do modelo comercial vigente e mapeamento de gargalos;</li>
+<li>Definição de remuneração, precificação e posicionamento de mercado;</li>
+<li>Plano de ação prático personalizado para execução imediata.</li>
+</ul>
+<h2>Módulo 2 — Estruturação Comercial</h2>
+<ul>
+<li>Criação e validação de scripts de vendas (diagnóstico, proposta e fechamento);</li>
+<li>Estruturação do funil comercial com cadência de prospecção e follow-up.</li>
+</ul>
+<h2>Módulo 3 — Gestão e Liderança do Time Comercial</h2>
+<ul>
+<li>Mentoria ao gestor/diretor comercial em práticas de liderança e gestão de resultados;</li>
+<li>Construção do planejamento comercial anual com metas e indicadores.</li>
+</ul>
+<h2>Módulo 4 — Gestão Financeira da Precificação</h2>
+<ul>
+<li>Análise de compra de equipamentos e formação de preço de kits solares;</li>
+<li>Precificação de projetos residenciais.</li>
+</ul>
+<p>1.3 Os serviços serão prestados de maneira autônoma e independente, sem vínculo empregatício entre as partes, sendo o CONTRATANTE responsável pela execução e implementação das estratégias, bem como pelo cumprimento dos prazos e das metas estabelecidas.</p>
+` : `
 <p>1.1 O presente contrato tem por objeto a prestação de serviços de assessoria empresarial, com foco comercial e restruturação, no apoio direto ao diretor comercial da empresa para aprimorar estratégias comerciais e alcançar os objetivos estratégicos estabelecidos.</p>
 <p>1.2 As atividades a serem desenvolvidas pelo CONTRATADO incluem:</p>
 <h2>1.2.1. Análise e Otimização Comercial</h2>
@@ -1665,6 +1689,50 @@ li{margin-bottom:3px;text-align:justify;}
 <li>Desenvolvimento de ações estratégicas para aumento de vendas e melhoria de resultados.</li>
 </ul>
 <p>1.3 Os serviços serão prestados de maneira autônoma e independente, sem vínculo empregatício entre as partes, sendo o CONTRATANTE responsável pela execução e implementação das estratégias, bem como pelo cumprimento dos prazos e das metas estabelecidas.</p>
+`;
+
+  // Cláusulas de remuneração variável — só existem no tipo "comissão".
+  // Numeradas em sequência depois das 4 já existentes (3.1 a 3.4), pra
+  // nunca deixar buraco de numeração como o contrato de referência tinha.
+  const comissaoPctTexto = esc(String(contrato.comissaoPct ?? 4).replace(".", ","));
+  const comissaoPisoTexto = esc(fmtMoeda(contrato.comissaoPiso ?? 400000));
+  const comissaoKwpTexto = esc(String(contrato.comissaoKwp ?? 60).replace(".", ","));
+  const clausulaComissaoExtra = ehComissao ? `
+<p>3.5 Será devida, ainda, remuneração variável correspondente a ${comissaoPctTexto}% (${esc(numeroInteiroExtenso(Math.round(contrato.comissaoPct ?? 4)))} por cento) incidente sobre o faturamento novo da CONTRATANTE que exceder o montante de ${comissaoPisoTexto} (${esc(valorExtenso(contrato.comissaoPiso ?? 400000))}) por mês, calculada exclusivamente sobre a parcela do faturamento mensal que ultrapassar esse limite.</p>
+<p>3.6 Para os fins desta cláusula, entende-se por "faturamento novo" o faturamento decorrente de vendas e projetos originados, direta ou indiretamente, das estratégias, processos e ações comerciais implementadas no âmbito da consultoria objeto deste contrato.</p>
+<p>3.7 Ficam excluídos da base de cálculo da remuneração variável: a) os projetos com potência instalada superior a ${comissaoKwpTexto} kWp (${esc(numeroInteiroExtenso(Math.round(contrato.comissaoKwp ?? 60)))} quilowatts-pico); e b) os projetos fechados/vendidos diretamente pelo próprio CONTRATANTE, na qualidade de CEO/sócio-administrador da empresa, sem participação da equipe comercial estruturada no âmbito da consultoria.</p>
+<p>3.8 Somente integrarão a base de cálculo da remuneração variável as vendas efetivamente concretizadas e cujos respectivos valores já tenham sido efetivamente recebidos pela CONTRATANTE dentro do mês de apuração.</p>
+<p>3.9 O pagamento da remuneração fixa mensal (item 3.1) será realizado todo dia 20 (vinte) de cada mês. O pagamento da remuneração variável (item 3.5) será realizado todo dia 10 (dez) do mês subsequente ao mês de apuração/referência, mediante prévio fechamento e conferência dos valores apurados entre as partes.</p>
+<p>3.10 Uma vez apurada e paga, a remuneração variável não estará sujeita a qualquer tipo de estorno, dedução, glosa ou compensação em razão de erro operacional, atraso operacional, falha de sistema ou de processo interno, sendo de responsabilidade exclusiva da CONTRATANTE conferir e validar os valores apurados previamente ao respectivo pagamento.</p>
+<p>3.11 O atraso no pagamento de quaisquer dos valores previstos nesta cláusula sujeitará a CONTRATANTE à incidência de multa de 2% (dois por cento) sobre o valor em atraso, juros de mora de 1% (um por cento) ao mês, calculados pro rata die, e atualização monetária pelo IPCA (ou índice que vier a substituí-lo), sem prejuízo da exigibilidade integral da obrigação principal.</p>
+` : "";
+
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Contrato - ${nomeCliente}</title>
+<style>
+body{font-family:"Times New Roman",Times,serif;font-size:12.5px;line-height:1.6;color:#111;max-width:760px;margin:0 auto;padding:24px 8px 48px;}
+h1{font-size:15px;text-align:center;font-weight:700;margin-bottom:22px;text-transform:uppercase;}
+h2{font-size:12.5px;font-weight:700;margin-top:16px;margin-bottom:6px;}
+p{margin:0 0 8px;text-align:justify;}
+ul{margin:0 0 8px;padding-left:22px;}
+li{margin-bottom:3px;text-align:justify;}
+.assinaturas{margin-top:56px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:32px;}
+.assinatura{width:280px;}
+.assinatura-linha{border-top:1px solid #333;margin-top:48px;padding-top:6px;font-size:11px;text-align:center;}
+@media print{@page{margin:1.5cm 2cm 2cm;}}
+</style></head><body>
+<h1>${tituloContrato}</h1>
+${subtituloPrograma}
+
+<p><strong>CONTRATANTE:</strong></p>
+<p>${nomeCliente}, ${qualificacao}${linhaContatoCliente}.</p>
+
+<p><strong>CONTRATADO:</strong></p>
+<p>BENEDITO JOÃO VIEGAS DE MATOS, pessoa física, brasileiro, casado, CPF nº 925.437.152/15, escritório comercial localizado na Rua Municipalidade, Edifício Mirai Offices, sala 216, bairro Umarizal, Belém/PA${linhaContatoContratado}.</p>
+
+<p>As partes acima qualificadas têm entre si justo e contratado o presente instrumento de ${introContrato}, que se regerá pelas cláusulas e condições a seguir:</p>
+
+<h2>1. OBJETO</h2>
+${objetoDoContrato}
 
 <h2>2. PRAZO DE VIGÊNCIA</h2>
 <p>2.1 O presente contrato terá vigência de ${PRAZO_CONTRATO_TEXTO}, contados a partir da data de sua assinatura.</p>
@@ -1676,6 +1744,7 @@ ${tabelaParcelas}
 <p>3.2 O CONTRATADO emitirá a nota fiscal correspondente a cada parcela preferencialmente até o dia 15 de cada mês, e o pagamento pela CONTRATANTE deverá ser realizado nas datas de vencimento indicadas acima, via depósito bancário na conta indicada pelo CONTRATADO.</p>
 <p>3.3 A prestação do serviço será de forma remota, através de reuniões semanais de preferência com horários fixos estabelecidos entre as partes, tanto para financeiro quanto comercial, e uma reunião de resultado mensal.</p>
 <p>3.4 As despesas de deslocamento, hospedagem e alimentação eventualmente necessárias para a prestação dos serviços deverão ser previamente autorizadas pela CONTRATANTE e serão reembolsadas mediante apresentação de comprovantes.</p>
+${clausulaComissaoExtra}
 
 <h2>4. OBRIGAÇÕES DAS PARTES</h2>
 <h2>4.1. Obrigações do CONTRATADO</h2>
@@ -1840,7 +1909,11 @@ function lerFormularioContrato() {
     numParcelas: forma === "personalizada" ? parcelasPersonalizadas.length : (parseInt(document.getElementById("mct-numparcelas").value, 10) || 1),
     diaVencimento: parseInt(document.getElementById("mct-diavencimento").value, 10) || 10,
     dataPrimeira: document.getElementById("mct-primeiraparcela").value || hojeStr(),
-    parcelasPersonalizadas
+    parcelasPersonalizadas,
+    tipoContrato: document.getElementById("mct-tipo-contrato").value,
+    comissaoPct: parseMoeda(document.getElementById("mct-comissao-pct").value) || 4,
+    comissaoPiso: parseMoeda(document.getElementById("mct-comissao-piso").value) || 400000,
+    comissaoKwp: parseMoeda(document.getElementById("mct-comissao-kwp").value) || 60
   };
 }
 
@@ -1891,10 +1964,15 @@ document.getElementById("mct-forma").addEventListener("change", (e) => {
   }
   atualizarPreviewParcelas();
 });
+document.getElementById("mct-tipo-contrato").addEventListener("change", (e) => {
+  document.getElementById("mct-bloco-comissao").style.display = e.target.value === "consultoria_comissao" ? "block" : "none";
+});
 
 function limparFormularioContrato() {
-  ["mct-valor", "mct-entrada", "mct-telefone", "mct-email", "mct-cpfcnpj", "mct-endereco-busca", "mct-representante-nome", "mct-representante-cpf"].forEach((id) => (document.getElementById(id).value = ""));
+  ["mct-valor", "mct-entrada", "mct-telefone", "mct-email", "mct-cpfcnpj", "mct-endereco-busca", "mct-representante-nome", "mct-representante-cpf", "mct-comissao-pct", "mct-comissao-piso", "mct-comissao-kwp"].forEach((id) => (document.getElementById(id).value = ""));
   atualizarBlocoRepresentanteContrato();
+  document.getElementById("mct-tipo-contrato").value = "padrao";
+  document.getElementById("mct-bloco-comissao").style.display = "none";
   comboContrato.reset();
   parcelamentoAutoPreenchido = true;
   document.getElementById("mct-numparcelas").value = 1;
@@ -1991,7 +2069,8 @@ async function gerarContrato() {
     // esses campos se acabaram de ser preenchidos aqui pela 1ª vez).
     const clienteParaPdf = {
       nome: cliente.nome, cpfCnpj: cpfCnpjContrato, endereco: enderecoContrato,
-      representanteNome: representanteNomeContrato, representanteCpf: representanteCpfContrato
+      representanteNome: representanteNomeContrato, representanteCpf: representanteCpfContrato,
+      telefone: telefoneContrato, email: emailContrato
     };
 
     // "dataContrato" (data da assinatura, editável) é o que conta pro
@@ -2000,6 +2079,7 @@ async function gerarContrato() {
     // Lançar um contrato antigo hoje não deveria contar como faturamento
     // deste mês.
     const dataContrato = document.getElementById("mct-data-contrato").value || hojeStr();
+    const ehComissao = f.tipoContrato === "consultoria_comissao";
     const contratoRef = await addDoc(collection(db, "contratos"), {
       oportunidadeId: pendingContratoOportunidadeId || null,
       clienteId: cliente.id, clienteNome: cliente.nome,
@@ -2007,6 +2087,8 @@ async function gerarContrato() {
       valorEntrada: f.forma === "entrada_parcelas" ? f.valorEntrada : 0,
       numParcelas: f.forma === "avista" ? 1 : f.numParcelas,
       diaVencimento: f.diaVencimento, dataContrato,
+      tipoContrato: f.tipoContrato,
+      ...(ehComissao ? { comissaoPct: f.comissaoPct, comissaoPiso: f.comissaoPiso, comissaoKwp: f.comissaoKwp } : {}),
       dataGeracao: serverTimestamp(), pdfUrl: null, pdfFileId: null, status: "ativo"
     });
 
@@ -2049,7 +2131,10 @@ async function gerarContrato() {
 
     gerarPdfContratoEmSegundoPlano(contratoRef.id, cliente.nome, montarHtmlContrato(
       clienteParaPdf,
-      { valorTotal: f.valorTotal, formaPagamento: f.forma, valorEntrada: f.valorEntrada, numParcelas: f.numParcelas, dataContrato },
+      {
+        valorTotal: f.valorTotal, formaPagamento: f.forma, valorEntrada: f.valorEntrada, numParcelas: f.numParcelas, dataContrato,
+        tipoContrato: f.tipoContrato, comissaoPct: f.comissaoPct, comissaoPiso: f.comissaoPiso, comissaoKwp: f.comissaoKwp
+      },
       parcelasCalc
     ));
   } catch (err) {
@@ -2179,6 +2264,7 @@ function abrirDetalheContrato(id) {
   const pagas = parcelasDoContrato.filter((p) => p.status === "realizado").length;
   const links = linksPdfDrive(c.pdfFileId);
   const campos = [
+    ["Tipo de contrato", c.tipoContrato === "consultoria_comissao" ? "Consultoria com comissão variável" : "Padrão — Assessoria Empresarial"],
     ["Valor total", esc(fmtMoeda(c.valorTotal))],
     ["Forma de pagamento", esc(descricaoFormaPagamento(c.formaPagamento, c.valorEntrada, c.numParcelas))],
     ["Parcelas pagas", `${pagas}/${parcelasDoContrato.length}`],
@@ -2186,6 +2272,9 @@ function abrirDetalheContrato(id) {
     ["Lançado no sistema em", esc(fmtDataHora(c.dataGeracao))],
     ["Status", esc(c.status === "cancelado" ? "Cancelado" : "Ativo")]
   ];
+  if (c.tipoContrato === "consultoria_comissao") {
+    campos.push(["Comissão variável", `${esc(String(c.comissaoPct ?? 4))}% sobre o que exceder ${esc(fmtMoeda(c.comissaoPiso ?? 400000))}/mês (projetos até ${esc(String(c.comissaoKwp ?? 60))} kWp)`]);
+  }
   if (links) {
     campos.push(["PDF", `<iframe src="${esc(links.preview)}" style="width:100%;height:340px;border:1px solid var(--line);border-radius:8px;background:#fff;"></iframe>
       <div style="display:flex;gap:14px;align-items:center;margin-top:8px;flex-wrap:wrap;">
