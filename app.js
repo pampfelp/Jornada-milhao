@@ -43,6 +43,12 @@ let pendingContratoEtapaFechamentoId = null;
 // Resolve() da Promise de confirmarAcao() em aberto — ver definição da
 // função mais abaixo, perto de abrirModal/fecharModal.
 let pendingConfirmResolve = null;
+// Callback pra "voltar" quando o modal-detalhe foi trocado pela ficha do
+// cliente (acesso rápido a partir de parcela/contrato/card do funil) —
+// fechar a ficha do cliente por qualquer caminho (Fechar, Esc, clique
+// fora) reabre de onde veio, em vez de só sumir. Ver abrirDetalhe/
+// abrirDetalheCliente/fecharModal.
+let pendingDetalheAoFechar = null;
 // Perda é genérica pros dois funis que têm etapa marcada como "perda"
 // (Agendamento e Vendas) — guarda qual coleção/id está pendente.
 let pendingPerda = null; // { colecao: "agendamentos"|"oportunidades", id }
@@ -206,6 +212,11 @@ function fecharModal(id) {
     pendingConfirmResolve = null;
     resolve(false);
   }
+  if (id === "modal-detalhe" && pendingDetalheAoFechar) {
+    const voltar = pendingDetalheAoFechar;
+    pendingDetalheAoFechar = null;
+    voltar();
+  }
 }
 
 document.querySelectorAll("[data-fechar-modal]").forEach((btn) => {
@@ -282,23 +293,40 @@ function abrirListaKpi(chave) {
 // abre isto primeiro (só leitura). "onEditar"/"onExcluir" ficam atrás dos
 // botões de editar/excluir lá dentro; passar null esconde o botão correspondente
 // (usado por entidades sem edição, ex: cardAdmin sem link pra excluir
-// direto). "campos" é um array de [label, valorHtmlJaEscapado].
+// direto). "campos" é um array de [label, valorHtmlJaEscapado]. "cliente"
+// (opcional) é { nome, onClick } — acesso rápido ao cadastro do cliente:
+// aparece como primeiro campo, "Cliente", com o nome clicável (mesmo
+// mecanismo de closure de onEditar/onExcluir, não string de onclick, pra
+// não precisar serializar a função).
 let detalheAtual = null;
-function abrirDetalhe({ titulo, campos, onEditar, onExcluir }) {
+function abrirDetalhe({ titulo, campos, onEditar, onExcluir, cliente }) {
   document.getElementById("mdt-titulo").textContent = titulo;
-  document.getElementById("mdt-corpo").innerHTML = campos.map(([label, valor]) => (
+  const camposHtml = campos.map(([label, valor]) => (
     `<div class="detalhe-campo"><span class="detalhe-label">${esc(label)}</span><span class="detalhe-valor">${valor}</span></div>`
-  )).join("");
+  ));
+  if (cliente) {
+    camposHtml.unshift(`<div class="detalhe-campo"><span class="detalhe-label">Cliente</span><span class="detalhe-valor"><button type="button" class="link-btn" id="mdt-cliente-link">${esc(cliente.nome || "Ver cliente")}</button></span></div>`);
+  }
+  document.getElementById("mdt-corpo").innerHTML = camposHtml.join("");
   detalheAtual = { onEditar, onExcluir };
   document.getElementById("mdt-btn-editar").style.display = onEditar ? "" : "none";
   document.getElementById("mdt-btn-excluir").style.display = onExcluir ? "" : "none";
+  if (cliente) document.getElementById("mdt-cliente-link").addEventListener("click", cliente.onClick);
   abrirModal("modal-detalhe");
 }
 document.getElementById("mdt-btn-editar").addEventListener("click", () => {
-  if (detalheAtual && detalheAtual.onEditar) { fecharModal("modal-detalhe"); detalheAtual.onEditar(); }
+  if (detalheAtual && detalheAtual.onEditar) {
+    pendingDetalheAoFechar = null; // editar avança pra outro modal, não é "voltar"
+    fecharModal("modal-detalhe");
+    detalheAtual.onEditar();
+  }
 });
 document.getElementById("mdt-btn-excluir").addEventListener("click", () => {
-  if (detalheAtual && detalheAtual.onExcluir) { fecharModal("modal-detalhe"); detalheAtual.onExcluir(); }
+  if (detalheAtual && detalheAtual.onExcluir) {
+    pendingDetalheAoFechar = null;
+    fecharModal("modal-detalhe");
+    detalheAtual.onExcluir();
+  }
 });
 
 async function chamarAppsScript(action, payload) {
@@ -1251,7 +1279,8 @@ function abrirDetalheAgendamento(id) {
       ...(a.motivoPerda ? [["Motivo da perda", esc(a.motivoPerda)]] : [])
     ],
     onEditar: () => editarAgendamento(id),
-    onExcluir: () => excluirAgendamento(id)
+    onExcluir: () => excluirAgendamento(id),
+    cliente: a.clienteId ? { nome: a.clienteNome, onClick: () => abrirDetalheCliente(a.clienteId, () => abrirDetalheAgendamento(id)) } : null
   });
 }
 
@@ -1471,7 +1500,8 @@ function abrirDetalheOportunidade(id) {
       ...(o.motivoPerda ? [["Motivo da perda", esc(o.motivoPerda)]] : [])
     ],
     onEditar: () => editarOportunidade(id),
-    onExcluir: () => excluirOportunidade(id)
+    onExcluir: () => excluirOportunidade(id),
+    cliente: o.clienteId ? { nome: o.clienteNome, onClick: () => abrirDetalheCliente(o.clienteId, () => abrirDetalheOportunidade(id)) } : null
   });
 }
 
@@ -2192,7 +2222,8 @@ function abrirDetalheContrato(id) {
     titulo: c.clienteNome,
     campos,
     onEditar: () => editarContratoStatus(id),
-    onExcluir: () => excluirContrato(id)
+    onExcluir: () => excluirContrato(id),
+    cliente: c.clienteId ? { nome: c.clienteNome, onClick: () => abrirDetalheCliente(c.clienteId, () => abrirDetalheContrato(id)) } : null
   });
 }
 
@@ -2306,6 +2337,9 @@ function abrirDetalheCardAdmin(id) {
   const c = STATE.cardsAdmin.find((x) => x.id === id);
   if (!c) return;
   const etapaCfg = STATE.etapasAdmin.find((e) => e.id === c.etapa);
+  // cardAdmin não guarda clienteId direto — só o contrato que o originou.
+  const contratoVinculado = STATE.contratos.find((x) => x.id === c.contratoId);
+  const clienteId = contratoVinculado ? contratoVinculado.clienteId : null;
   abrirDetalhe({
     titulo: c.clienteNome,
     campos: [
@@ -2314,7 +2348,8 @@ function abrirDetalheCardAdmin(id) {
       ["Contrato vinculado", c.contratoId ? "Sim (veja em Contratos)" : "—"]
     ],
     onEditar: () => editarCardAdmin(id),
-    onExcluir: () => excluirCardAdmin(id)
+    onExcluir: () => excluirCardAdmin(id),
+    cliente: clienteId ? { nome: c.clienteNome, onClick: () => abrirDetalheCliente(clienteId, () => abrirDetalheCardAdmin(id)) } : null
   });
 }
 
@@ -2550,6 +2585,9 @@ async function excluirParcela(id) {
 function abrirDetalheParcela(id) {
   const p = STATE.parcelas.find((x) => x.id === id);
   if (!p) return;
+  // Parcela não guarda clienteId direto — vem do contrato que a gerou.
+  const contratoDaParcela = STATE.contratos.find((x) => x.id === p.contratoId);
+  const clienteId = contratoDaParcela ? contratoDaParcela.clienteId : null;
   abrirDetalhe({
     titulo: `${p.clienteNome} — ${p.numero === 0 ? "Entrada" : "Parcela " + p.numero}`,
     campos: [
@@ -2560,7 +2598,8 @@ function abrirDetalheParcela(id) {
         : ["Status", `Esperado <button class="btn-small" style="margin-left:8px;" onclick="window.__jm.abrirModalMarcarPago('parcela','${id}')">Marcar paga</button>`]
     ],
     onEditar: () => editarParcela(id),
-    onExcluir: () => excluirParcela(id)
+    onExcluir: () => excluirParcela(id),
+    cliente: clienteId ? { nome: p.clienteNome, onClick: () => abrirDetalheCliente(clienteId, () => abrirDetalheParcela(id)) } : null
   });
 }
 
@@ -3048,9 +3087,14 @@ async function excluirCliente(id) {
   try { await deleteDoc(doc(db, "clientes", id)); } catch (err) { mostrarErro(err.message); }
 }
 
-function abrirDetalheCliente(id) {
+// "aoFechar" (opcional) — quando a ficha do cliente é aberta "por cima" de
+// outro detalhe (parcela/contrato/card do funil, via o campo "Cliente"
+// clicável), reabre esse detalhe de origem quando a ficha é fechada por
+// qualquer caminho, simulando um "voltar" no mesmo modal reaproveitado.
+function abrirDetalheCliente(id, aoFechar) {
   const c = STATE.clientes.find((x) => x.id === id);
   if (!c) return;
+  pendingDetalheAoFechar = aoFechar || null;
   abrirDetalhe({
     titulo: c.nome,
     campos: [
