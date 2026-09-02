@@ -1,146 +1,259 @@
 rules_version = '2';
 
-// Regras de FORMATO, não de identidade — este projeto não usa Firebase Auth
-// (mesmo trade-off do padrão de referência, Financeiro Pamplona). Isso barra
-// gravações mal-formadas, mas não impede alguém tecnicamente hábil de abrir
-// o DevTools e escrever fora das regras de negócio do app.js. Trade-off
-// aceitável pra uso interno da equipe — como este sistema guarda dados
-// financeiros e de clientes, reavalie introduzir Firebase Auth se o número
-// de pessoas com acesso crescer.
+// Regras de IDENTIDADE + FORMATO.
+//
+// Até 2026-09-02 este arquivo validava só formato, com `allow read: if true`
+// em tudo. Isso valia enquanto era uma pessoa usando o sistema. Deixou de
+// valer quando entrou gente com nível de acesso diferente: a SDR trabalha o
+// funil, os clientes e os contratos, e não pode ver custo, despesa nem o
+// painel financeiro.
+//
+// Papéis (documento usuarios/{uid}, campo `papel`):
+//   admin    — tudo, mais gestão de contas de acesso e a planilha administrativa
+//   gerente  — tudo do negócio, inclusive financeiro; não mexe em contas nem planilha
+//   sdr      — funis, clientes e contratos; nunca despesas, entradas ou financeiro
+//
+// Esconder no navegador é conveniência. A segurança de verdade é este
+// arquivo: quem abrir o DevTools continua limitado ao que o papel permite.
+// A matriz de permissão está repetida em auth.js (AREAS_POR_PAPEL) porque um
+// lado é interface e o outro é servidor — ao mudar o escopo de um papel,
+// mudar os dois na mesma sessão.
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    match /clientes/{id} {
+    /* ══════════════ helpers ══════════════ */
+
+    function meuVinculo() {
+      return get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data;
+    }
+
+    // Chamadas repetidas ao mesmo documento dentro de uma avaliação são
+    // cacheadas pelo Firestore, então isso custa 1 leitura por requisição,
+    // não uma por helper.
+    function temPapel(papeis) {
+      return request.auth != null
+             && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
+             && meuVinculo().ativo == true
+             && meuVinculo().papel in papeis;
+    }
+
+    function equipe() { return temPapel(['admin', 'gerente', 'sdr']); }
+    function gestao() { return temPapel(['admin', 'gerente']); }
+    function ehAdmin() { return temPapel(['admin']); }
+
+    // Janela de criação do primeiro admin, fechada pra sempre pelo próprio
+    // fluxo de cadastro. Firestore rules não sabem "contar quantos admins
+    // existem"; este documento-bandeira substitui isso.
+    function bootstrapAberto() {
+      return !exists(/databases/$(database)/documents/config/bootstrap)
+             || get(/databases/$(database)/documents/config/bootstrap).data.adminCriado != true;
+    }
+
+    /* ══════════════ contas de acesso ══════════════ */
+
+    match /usuarios/{uid} {
+      // hasOnly fecha mass assignment: sem isso, um update legítimo poderia
+      // vir com campos extras não previstos junto na mesma escrita.
+      function camposValidos() {
+        return request.resource.data.keys().hasOnly(['nome', 'email', 'telefone', 'papel', 'ativo', 'precisaTrocarSenha', 'createdAt'])
+               && request.resource.data.papel in ['admin', 'gerente', 'sdr']
+               && request.resource.data.nome is string
+               && request.resource.data.nome.size() > 0
+               && request.resource.data.nome.size() < 120
+               && request.resource.data.email is string
+               && request.resource.data.email.size() < 200
+               && request.resource.data.ativo is bool;
+      }
+
+      // Cada um lê o próprio vínculo (é assim que o app descobre o papel de
+      // quem logou); só o admin lê a lista inteira, pra tela de Usuários.
+      allow read: if request.auth != null && (request.auth.uid == uid || ehAdmin());
+
+      allow create: if (ehAdmin() && camposValidos())
+                    || (bootstrapAberto()
+                        && request.auth != null
+                        && request.auth.uid == uid
+                        && request.resource.data.papel == 'admin'
+                        && camposValidos());
+
+      // O próprio usuário só consegue baixar a flag de troca de senha
+      // obrigatória. Qualquer outra mudança no próprio documento (a começar
+      // por `papel`) é exclusiva do admin — senão bastaria o DevTools pra se
+      // promover.
+      //
+      // E o admin não consegue se rebaixar nem se suspender: sem isso, o
+      // último admin fecha a porta com a chave do lado de fora e ninguém
+      // mais cria conta nenhuma (só sobraria mexer direto no console).
+      allow update: if (ehAdmin() && camposValidos()
+                        && (request.auth.uid != uid
+                            || (request.resource.data.papel == 'admin'
+                                && request.resource.data.ativo == true)))
+                    || (request.auth != null
+                        && request.auth.uid == uid
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['precisaTrocarSenha'])
+                        && request.resource.data.precisaTrocarSenha == false);
+
+      // Mesma razão do update: ninguém apaga o próprio vínculo.
+      allow delete: if ehAdmin() && request.auth.uid != uid;
+    }
+
+    /* ══════════════ configuração ══════════════ */
+
+    // Leitura pública e sem login de propósito: a tela precisa saber se
+    // mostra "criar primeiro admin" ANTES de existir qualquer conta. O que
+    // vaza aqui é um booleano.
+    match /config/bootstrap {
       allow read: if true;
-      allow create: if request.resource.data.keys().hasAll(['nome'])
+      allow write: if ehAdmin() || (bootstrapAberto() && request.auth != null);
+    }
+
+    // config/geral guarda o calendário do Google usado pelo funil de
+    // Agendamento, então a SDR precisa ler. Editar é da gestão.
+    //
+    // `id != 'bootstrap'` não é detalhe: as regras de dois `match` que casam
+    // com o mesmo documento são somadas (basta uma permitir). Sem essa
+    // exclusão, o gerente entraria aqui e poderia zerar o adminCriado,
+    // reabrindo a janela de bootstrap — e janela aberta é qualquer conta
+    // recém-criada se promovendo a admin, porque cadastro no Firebase Auth
+    // é aberto por natureza.
+    match /config/{id} {
+      allow read: if equipe();
+      allow write: if ehAdmin() || (gestao() && id != 'bootstrap');
+    }
+
+    /* ══════════════ vendas: funis, clientes e contratos ══════════════ */
+
+    match /clientes/{id} {
+      allow read: if equipe();
+      allow create: if equipe()
+                    && request.resource.data.keys().hasAll(['nome'])
                     && request.resource.data.nome is string
                     && request.resource.data.nome.size() > 0
                     && request.resource.data.nome.size() < 200;
-      allow update: if request.resource.data.nome is string
+      allow update: if equipe()
+                    && request.resource.data.nome is string
                     && request.resource.data.nome.size() < 200;
-      allow delete: if true;
+      allow delete: if equipe();
     }
 
     match /agendamentos/{id} {
-      allow read: if true;
-      allow create, update: if request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
+      allow read: if equipe();
+      allow create, update: if equipe()
+                    && request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
                     && request.resource.data.clienteNome is string
                     && request.resource.data.etapa is string;
-      allow delete: if true;
+      allow delete: if equipe();
 
       match /historico/{logId} {
-        allow read: if true;
-        allow create: if true;
-        // Nunca editar um evento já gravado (update: false — log é
-        // append-only de verdade), mas PRECISA permitir apagar: quando o
-        // card pai é excluído, o app.js apaga o histórico junto (exclusão
-        // em cascata) — sem isso, "Missing or insufficient permissions"
-        // ao excluir, e o histórico órfão fica pra sempre no banco.
+        allow read: if equipe();
+        allow create: if equipe();
+        // Nunca editar um evento já gravado (log append-only de verdade),
+        // mas PRECISA permitir apagar: quando o card pai é excluído, o
+        // app.js apaga o histórico junto (exclusão em cascata) — sem isso,
+        // "Missing or insufficient permissions" ao excluir, e o histórico
+        // órfão fica pra sempre no banco.
         allow update: if false;
-        allow delete: if true;
+        allow delete: if equipe();
       }
     }
 
     match /etapasAgendamentoConfig/{id} {
-      allow read: if true;
-      allow create, update: if request.resource.data.nome is string
+      allow read: if equipe();
+      allow create, update: if gestao()
+                    && request.resource.data.nome is string
                     && request.resource.data.ordem is number;
-      allow delete: if true;
+      allow delete: if gestao();
     }
 
     match /etapasVendaConfig/{id} {
-      allow read: if true;
-      allow create, update: if request.resource.data.nome is string
+      allow read: if equipe();
+      allow create, update: if gestao()
+                    && request.resource.data.nome is string
                     && request.resource.data.ordem is number;
-      allow delete: if true;
+      allow delete: if gestao();
     }
 
     match /oportunidades/{id} {
-      allow read: if true;
-      allow create, update: if request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
+      allow read: if equipe();
+      allow create, update: if equipe()
+                    && request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
                     && request.resource.data.clienteNome is string
                     && request.resource.data.etapa is string;
-      allow delete: if true;
+      allow delete: if equipe();
 
       match /historico/{logId} {
-        allow read: if true;
-        allow create: if true;
-        // Nunca editar um evento já gravado (update: false — log é
-        // append-only de verdade), mas PRECISA permitir apagar: quando o
-        // card pai é excluído, o app.js apaga o histórico junto (exclusão
-        // em cascata) — sem isso, "Missing or insufficient permissions"
-        // ao excluir, e o histórico órfão fica pra sempre no banco.
+        allow read: if equipe();
+        allow create: if equipe();
         allow update: if false;
-        allow delete: if true;
+        allow delete: if equipe();
       }
     }
 
     match /contratos/{id} {
-      allow read: if true;
-      allow create, update: if request.resource.data.keys().hasAll(['clienteNome', 'valorTotal'])
+      allow read: if equipe();
+      allow create, update: if equipe()
+                    && request.resource.data.keys().hasAll(['clienteNome', 'valorTotal'])
                     && request.resource.data.clienteNome is string
                     && request.resource.data.valorTotal is number;
-      allow delete: if true;
+      allow delete: if equipe();
     }
 
     match /parcelas/{id} {
-      allow read: if true;
-      allow create, update: if request.resource.data.keys().hasAll(['contratoId', 'valor', 'vencimento', 'status'])
+      allow read: if equipe();
+      allow create, update: if equipe()
+                    && request.resource.data.keys().hasAll(['contratoId', 'valor', 'vencimento', 'status'])
                     && request.resource.data.contratoId is string
                     && request.resource.data.valor is number
                     && request.resource.data.status is string;
-      allow delete: if true;
-    }
-
-    match /despesas/{id} {
-      allow read: if true;
-      allow create, update: if request.resource.data.keys().hasAll(['descricao', 'valor', 'tipo'])
-                    && request.resource.data.descricao is string
-                    && request.resource.data.valor is number
-                    && request.resource.data.tipo is string;
-      allow delete: if true;
-    }
-
-    match /entradas/{id} {
-      allow read: if true;
-      allow create, update: if request.resource.data.keys().hasAll(['descricao', 'valor', 'status'])
-                    && request.resource.data.descricao is string
-                    && request.resource.data.valor is number
-                    && request.resource.data.status is string;
-      allow delete: if true;
+      allow delete: if equipe();
     }
 
     match /etapasAdminConfig/{id} {
-      allow read: if true;
-      allow create, update: if request.resource.data.keys().hasAll(['nome', 'ordem'])
+      allow read: if equipe();
+      allow create, update: if gestao()
+                    && request.resource.data.keys().hasAll(['nome', 'ordem'])
                     && request.resource.data.nome is string
                     && request.resource.data.ordem is number;
-      allow delete: if true;
+      allow delete: if gestao();
     }
 
     match /cardsAdmin/{id} {
-      allow read: if true;
-      allow create, update: if request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
+      allow read: if equipe();
+      allow create, update: if equipe()
+                    && request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
                     && request.resource.data.clienteNome is string
                     && request.resource.data.etapa is string;
-      allow delete: if true;
+      allow delete: if equipe();
 
       match /historico/{logId} {
-        allow read: if true;
-        allow create: if true;
-        // Nunca editar um evento já gravado (update: false — log é
-        // append-only de verdade), mas PRECISA permitir apagar: quando o
-        // card pai é excluído, o app.js apaga o histórico junto (exclusão
-        // em cascata) — sem isso, "Missing or insufficient permissions"
-        // ao excluir, e o histórico órfão fica pra sempre no banco.
+        allow read: if equipe();
+        allow create: if equipe();
         allow update: if false;
-        allow delete: if true;
+        allow delete: if equipe();
       }
     }
 
-    match /config/{id} {
-      allow read: if true;
-      allow write: if true;
+    /* ══════════════ financeiro: fora do alcance da SDR ══════════════ */
+
+    match /despesas/{id} {
+      allow read: if gestao();
+      allow create, update: if gestao()
+                    && request.resource.data.keys().hasAll(['descricao', 'valor', 'tipo'])
+                    && request.resource.data.descricao is string
+                    && request.resource.data.valor is number
+                    && request.resource.data.tipo is string;
+      allow delete: if gestao();
+    }
+
+    match /entradas/{id} {
+      allow read: if gestao();
+      allow create, update: if gestao()
+                    && request.resource.data.keys().hasAll(['descricao', 'valor', 'status'])
+                    && request.resource.data.descricao is string
+                    && request.resource.data.valor is number
+                    && request.resource.data.status is string;
+      allow delete: if gestao();
     }
   }
 }

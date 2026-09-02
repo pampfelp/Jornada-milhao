@@ -21,6 +21,61 @@
 </head>
 <body>
 
+<!-- ═══ ACESSO ═══
+     Cobre a tela inteira até a sessão estar liberada. Nasce visível e o JS
+     esconde depois de resolver o login, e não o contrário: se o app.js
+     falhar em carregar, o padrão tem que ser "não entra", nunca "entra". -->
+<div class="acesso-overlay" id="acesso-overlay">
+  <div class="acesso-caixa">
+    <div class="acesso-marca">
+      <img src="logo_bussola.png" alt="Jornada do Milhão">
+      <div>
+        <div class="co-nome">JORNADA DO <span>M1LHÃO</span></div>
+        <div class="co-sub">Mentoria Exclusiva</div>
+      </div>
+    </div>
+
+    <div id="acesso-carregando" class="acesso-passo">
+      <p class="hint">Carregando…</p>
+    </div>
+
+    <form id="acesso-login" class="acesso-passo hidden" autocomplete="on">
+      <h2>Entrar</h2>
+      <div class="field"><label>E-mail</label><input type="email" id="login-email" autocomplete="username" required></div>
+      <div class="field"><label>Senha</label><input type="password" id="login-senha" autocomplete="current-password" required></div>
+      <p class="acesso-erro hidden" id="login-erro"></p>
+      <button class="btn btn-primary acesso-btn" type="submit" id="btn-entrar">Entrar</button>
+      <button class="link-btn acesso-link" type="button" id="btn-esqueci-senha">Esqueci minha senha</button>
+    </form>
+
+    <form id="acesso-primeiro-admin" class="acesso-passo hidden">
+      <h2>Criar o primeiro acesso</h2>
+      <p class="hint">Nenhuma conta existe ainda. Esta primeira conta nasce como administrador, e depois dela esta tela não aparece mais.</p>
+      <div class="field"><label>Nome</label><input type="text" id="pa-nome" required></div>
+      <div class="field"><label>E-mail</label><input type="email" id="pa-email" autocomplete="username" required></div>
+      <div class="field"><label>Senha</label><input type="password" id="pa-senha" autocomplete="new-password" minlength="6" required></div>
+      <p class="acesso-erro hidden" id="pa-erro"></p>
+      <button class="btn btn-primary acesso-btn" type="submit" id="btn-criar-primeiro-admin">Criar administrador</button>
+    </form>
+
+    <form id="acesso-trocar-senha" class="acesso-passo hidden">
+      <h2>Crie sua senha</h2>
+      <p class="hint">Sua conta foi criada com uma senha temporária. Escolha uma senha só sua antes de continuar.</p>
+      <div class="field"><label>Nova senha</label><input type="password" id="ts-senha" autocomplete="new-password" minlength="6" required></div>
+      <div class="field"><label>Repita a nova senha</label><input type="password" id="ts-senha2" autocomplete="new-password" minlength="6" required></div>
+      <p class="acesso-erro hidden" id="ts-erro"></p>
+      <button class="btn btn-primary acesso-btn" type="submit" id="btn-trocar-senha">Salvar e entrar</button>
+      <button class="link-btn acesso-link" type="button" id="btn-sair-troca">Sair</button>
+    </form>
+
+    <div id="acesso-sem-permissao" class="acesso-passo hidden">
+      <h2>Acesso não liberado</h2>
+      <p class="hint" id="sem-permissao-msg">Sua conta existe, mas ainda não tem acesso liberado neste sistema. Peça para o administrador liberar.</p>
+      <button class="btn acesso-btn" type="button" id="btn-sair-sem-permissao">Sair</button>
+    </div>
+  </div>
+</div>
+
 <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
 <div class="mobile-topbar">
   <button class="hamburger" id="btn-abrir-menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
@@ -61,6 +116,13 @@
     <a data-view="clientes"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>Clientes</a>
     <a data-view="config"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>Configurações</a>
   </nav>
+  <div class="sessao">
+    <div class="sessao-quem">
+      <div class="sessao-nome" id="sessao-nome">—</div>
+      <div class="sessao-papel" id="sessao-papel">—</div>
+    </div>
+    <button class="btn-small" id="btn-sair" title="Sair"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:-2px;"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
+  </div>
 </aside>
 
 <main class="app">
@@ -386,6 +448,26 @@
         <button class="btn btn-primary" id="btn-salvar-calendario">Salvar calendário</button>
       </div>
       <p class="hint" id="cfg-calendario-atual"></p>
+    </div>
+
+    <div class="card" id="card-usuarios">
+      <div class="section-head">
+        <h2>Contas de <span>acesso</span></h2>
+        <div class="hint">quem entra no sistema e o que cada um enxerga</div>
+      </div>
+      <div class="kpi-grid" id="usuarios-kpis" style="margin-bottom:18px;"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Nome</th><th>E-mail</th><th>Telefone</th><th>Papel</th><th>Situação</th><th></th></tr></thead>
+          <tbody id="tabela-usuarios"></tbody>
+        </table>
+      </div>
+      <p class="hint" style="margin-top:12px;">
+        <strong>Administrador</strong> vê tudo, cria contas e abre a planilha administrativa.
+        <strong>Gerente</strong> vê tudo do negócio, inclusive o financeiro, mas não mexe em contas nem na planilha.
+        <strong>SDR</strong> trabalha funis, clientes e contratos, e não vê Painel Financeiro, Entradas nem Despesas.
+      </p>
+      <p class="hint"><button class="btn-small" id="btn-novo-usuario">+ Conta de acesso</button></p>
     </div>
 
     <div class="card">
@@ -859,6 +941,55 @@
     <div class="modal-actions">
       <button class="btn" data-fechar-modal="modal-cardadmin">Cancelar</button>
       <button class="btn btn-primary" id="btn-salvar-cardadmin">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: CONTA DE ACESSO ═══ -->
+<div class="modal-overlay" id="modal-usuario">
+  <div class="modal-box">
+    <div id="mu-form">
+      <h2 id="modal-usuario-titulo">Nova conta de acesso</h2>
+      <div class="field"><label>Nome</label><input type="text" id="mu-nome"></div>
+      <div class="field" id="mu-bloco-email">
+        <label>E-mail</label>
+        <input type="email" id="mu-email" autocomplete="off">
+        <p class="hint" style="margin-top:4px;">É com esse e-mail que a pessoa entra no sistema. Não dá pra trocar depois.</p>
+      </div>
+      <div class="field"><label>Telefone</label><input type="text" inputmode="numeric" maxlength="15" id="mu-telefone" placeholder="(00) 00000-0000"></div>
+      <div class="field">
+        <label>Papel</label>
+        <select id="mu-papel">
+          <option value="sdr">SDR — funis, clientes e contratos</option>
+          <option value="gerente">Gerente — tudo do negócio, inclusive financeiro</option>
+          <option value="admin">Administrador — tudo, mais contas e planilha</option>
+        </select>
+      </div>
+      <div class="field" id="mu-bloco-ativo" style="display:none;">
+        <label>Situação</label>
+        <select id="mu-ativo">
+          <option value="sim">Ativa — pode entrar</option>
+          <option value="nao">Suspensa — não entra, mas o histórico fica</option>
+        </select>
+      </div>
+      <p class="hint" id="mu-aviso-senha">A conta de login é criada na hora, com a senha de primeiro acesso do sistema. No primeiro login a pessoa é obrigada a criar a senha dela.</p>
+      <div class="modal-actions">
+        <button class="btn" data-fechar-modal="modal-usuario">Cancelar</button>
+        <button class="btn btn-primary" id="btn-salvar-usuario">Salvar</button>
+      </div>
+    </div>
+
+    <div id="mu-sucesso" class="hidden">
+      <h2>Conta criada</h2>
+      <p class="hint" id="mu-sucesso-texto" style="color:var(--ink);font-size:14px;margin:14px 0;"></p>
+      <div style="background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;text-align:center;margin-bottom:16px;">
+        <div style="font-size:11px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Senha de primeiro acesso</div>
+        <div id="mu-sucesso-senha" class="mono-select" style="font-size:18px;font-weight:700;color:var(--ink);"></div>
+      </div>
+      <p class="hint">Repasse essa senha pra pessoa. No primeiro login o sistema já pede pra ela criar a própria senha.</p>
+      <div class="modal-actions">
+        <button class="btn btn-primary" data-fechar-modal="modal-usuario">Entendi</button>
+      </div>
     </div>
   </div>
 </div>

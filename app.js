@@ -7,6 +7,12 @@ import {
   collection, addDoc, updateDoc, deleteDoc, doc, setDoc, getDocs, getDocsFromServer,
   onSnapshot, query, orderBy, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+import {
+  AUTH, PAPEIS, SENHA_PRIMEIRO_ACESSO, iniciarAuth, mensagemErroAuth, podeVer, isAdmin, papelAtual, sessaoLiberada,
+  login, logout, enviarResetSenha, alterarMinhaSenha,
+  bootstrapNecessario, criarPrimeiroAdmin, garantirBootstrapFechado,
+  assinarUsuarios, criarUsuario, atualizarUsuario, removerVinculoUsuario,
+} from "./auth.js";
 
 const STATE = {
   clientes: [],
@@ -20,6 +26,7 @@ const STATE = {
   entradas: [],
   etapasAdmin: [],
   cardsAdmin: [],
+  usuarios: [],
   config: {},
   periodoFinanceiro: new Date().toISOString().slice(0, 7),
   periodoDespesasDe: primeiroDiaMes(),
@@ -567,6 +574,7 @@ function wireMascaraTelefone(inputId) {
 }
 wireMascaraTelefone("mc-telefone");
 wireMascaraTelefone("mct-telefone");
+wireMascaraTelefone("mu-telefone");
 
 // Mostra os campos de representante legal só quando o CPF/CNPJ digitado
 // tiver mais de 11 dígitos (ou seja, é um CNPJ) — cliente pessoa física
@@ -2693,6 +2701,11 @@ function abrirDetalheParcela(id) {
 }
 
 function renderFinanceiro() {
+  // Chamado pelos listeners de contratos e parcelas, que a SDR também tem.
+  // Sem esta guarda, o painel seria montado com despesas e entradas vazias
+  // (as coleções que ela não lê) e mostraria lucro e saldo errados — numa
+  // view escondida, mas errados. Melhor não calcular do que calcular torto.
+  if (!podeVer("financeiro")) return;
   const periodo = STATE.periodoFinanceiro;
 
   const faturamentoPeriodo = STATE.contratos
@@ -3595,11 +3608,17 @@ document.addEventListener("click", (e) => {
 });
 
 async function iniciarListeners() {
-  await Promise.all([
-    seedEtapasSeVazio_("etapasAgendamentoConfig", DEFAULT_ETAPAS_AGENDAMENTO),
-    seedEtapasSeVazio_("etapasVendaConfig", DEFAULT_ETAPAS_VENDA),
-    seedEtapasSeVazio_("etapasAdminConfig", DEFAULT_ETAPAS_ADMIN)
-  ]);
+  // O seed das etapas padrão é escrita em coleção de configuração, que só a
+  // gestão pode fazer. Numa base já em uso ele não escreve nada de qualquer
+  // jeito (checa se está vazia antes), mas deixar uma SDR tentar seria pedir
+  // erro de permissão à toa no primeiro carregamento dela.
+  if (podeVer("config")) {
+    await Promise.all([
+      seedEtapasSeVazio_("etapasAgendamentoConfig", DEFAULT_ETAPAS_AGENDAMENTO),
+      seedEtapasSeVazio_("etapasVendaConfig", DEFAULT_ETAPAS_VENDA),
+      seedEtapasSeVazio_("etapasAdminConfig", DEFAULT_ETAPAS_ADMIN)
+    ]);
+  }
 
   onSnapshot(doc(db, "config", "geral"), { includeMetadataChanges: true }, (snap) => {
     STATE.config = snap.exists() ? snap.data() : {};
@@ -3655,20 +3674,27 @@ async function iniciarListeners() {
     rastrearSincronizacao("parcelas", snap);
   }, (err) => mostrarErro("Erro de conexão (parcelas): " + err.message));
 
-  onSnapshot(query(collection(db, "despesas"), orderBy("createdAt", "desc")), { includeMetadataChanges: true }, (snap) => {
-    STATE.despesas = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    renderTabelaDespesas();
-    renderFinanceiro();
-    lancarRecorrentesPendentes();
-    rastrearSincronizacao("despesas", snap);
-  }, (err) => mostrarErro("Erro de conexão (despesas): " + err.message));
+  // Despesas e entradas são o que a SDR não pode ver. As regras já barram do
+  // lado do servidor; não abrir a escuta aqui evita o erro de permissão em
+  // loop e economiza leitura de quota pra quem não usa esses dados.
+  if (podeVer("despesas")) {
+    onSnapshot(query(collection(db, "despesas"), orderBy("createdAt", "desc")), { includeMetadataChanges: true }, (snap) => {
+      STATE.despesas = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      renderTabelaDespesas();
+      renderFinanceiro();
+      lancarRecorrentesPendentes();
+      rastrearSincronizacao("despesas", snap);
+    }, (err) => mostrarErro("Erro de conexão (despesas): " + err.message));
+  }
 
-  onSnapshot(query(collection(db, "entradas"), orderBy("createdAt", "desc")), { includeMetadataChanges: true }, (snap) => {
-    STATE.entradas = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    renderTabelaEntradas();
-    renderFinanceiro();
-    rastrearSincronizacao("entradas", snap);
-  }, (err) => mostrarErro("Erro de conexão (entradas): " + err.message));
+  if (podeVer("entradas")) {
+    onSnapshot(query(collection(db, "entradas"), orderBy("createdAt", "desc")), { includeMetadataChanges: true }, (snap) => {
+      STATE.entradas = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      renderTabelaEntradas();
+      renderFinanceiro();
+      rastrearSincronizacao("entradas", snap);
+    }, (err) => mostrarErro("Erro de conexão (entradas): " + err.message));
+  }
 
   onSnapshot(query(collection(db, "etapasAdminConfig"), orderBy("ordem")), { includeMetadataChanges: true }, (snap) => {
     STATE.etapasAdmin = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -3691,10 +3717,343 @@ window.__jm = {
   abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela, abrirDetalheEntrada,
   abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin,
   gerarPdfContratoExistente, enviarContratoParaAssinatura,
-  abrirListaKpi, onCardClick
+  abrirListaKpi, onCardClick,
+  abrirDetalheUsuario, alternarSituacaoUsuario
 };
 
-iniciarListeners();
+/* ══════════════ CONTAS DE ACESSO (só admin) ══════════════ */
+
+let pendingUsuarioId = null;
+
+function iniciarListenerUsuarios() {
+  assinarUsuarios(
+    (lista) => { STATE.usuarios = lista; renderTabelaUsuarios(); },
+    (err) => mostrarErro("Erro de conexão (contas de acesso): " + err.message)
+  );
+}
+
+function renderTabelaUsuarios() {
+  const lista = STATE.usuarios;
+  const ativos = lista.filter((u) => u.ativo !== false);
+  const aguardando = ativos.filter((u) => u.precisaTrocarSenha);
+
+  document.getElementById("usuarios-kpis").innerHTML = `
+    <div class="kpi-card positive"><div class="label">Contas ativas</div><div class="value">${ativos.length}</div><div class="sub">de ${lista.length} cadastradas</div></div>
+    <div class="kpi-card"><div class="label">Aguardando 1º acesso</div><div class="value">${aguardando.length}</div><div class="sub">ainda com a senha temporária</div></div>
+    <div class="kpi-card negative"><div class="label">Suspensas</div><div class="value">${lista.length - ativos.length}</div><div class="sub">não entram, histórico preservado</div></div>
+  `;
+
+  document.getElementById("tabela-usuarios").innerHTML = lista.map((u) => {
+    const suspensa = u.ativo === false;
+    const situacao = suspensa
+      ? `<span class="stamp vencido">Suspensa</span>`
+      : u.precisaTrocarSenha
+        ? `<span class="stamp esperado">Aguardando 1º acesso</span>`
+        : `<span class="stamp realizado">Ativa</span>`;
+    const souEu = u.id === AUTH.user?.uid;
+    return `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheUsuario('${u.id}')">
+      <td>${esc(u.nome || "—")}${souEu ? ' <span class="sublabel">(você)</span>' : ""}</td>
+      <td>${esc(u.email || "—")}</td>
+      <td>${esc(u.telefone || "—")}</td>
+      <td>${esc(PAPEIS[u.papel] || u.papel || "—")}</td>
+      <td>${situacao}</td>
+      <td>${souEu ? "" : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.alternarSituacaoUsuario('${u.id}')">${suspensa ? "Reativar" : "Suspender"}</button>`}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma conta cadastrada.</div></td></tr>`;
+}
+
+function abrirDetalheUsuario(uid) {
+  const u = STATE.usuarios.find((x) => x.id === uid);
+  if (!u) return;
+  const souEu = uid === AUTH.user?.uid;
+  abrirDetalhe({
+    titulo: u.nome || u.email,
+    campos: [
+      ["E-mail", esc(u.email || "—")],
+      ["Telefone", esc(u.telefone || "—")],
+      ["Papel", esc(PAPEIS[u.papel] || u.papel || "—")],
+      ["Situação", u.ativo === false ? "Suspensa" : "Ativa"],
+      ["Primeiro acesso", u.precisaTrocarSenha ? "Ainda não trocou a senha temporária" : "Concluído"],
+      ["Criada em", esc(fmtDataHora(u.createdAt))],
+      ...(souEu ? [["Observação", "Esta é a sua própria conta: o papel e a situação dela não podem ser alterados aqui."]] : []),
+    ],
+    onEditar: () => editarUsuario(uid),
+    // Excluir só remove o vínculo; a conta segue no Firebase Auth (apagar
+    // conta de outra pessoa exigiria Admin SDK). Sem vínculo, ela loga e cai
+    // em "acesso não liberado".
+    onExcluir: souEu ? null : () => excluirUsuario(uid),
+  });
+}
+
+function abrirModalUsuario() {
+  pendingUsuarioId = null;
+  document.getElementById("mu-form").classList.remove("hidden");
+  document.getElementById("mu-sucesso").classList.add("hidden");
+  document.getElementById("modal-usuario-titulo").textContent = "Nova conta de acesso";
+  document.getElementById("mu-nome").value = "";
+  document.getElementById("mu-email").value = "";
+  document.getElementById("mu-email").disabled = false;
+  document.getElementById("mu-telefone").value = "";
+  document.getElementById("mu-papel").value = "sdr";
+  document.getElementById("mu-papel").disabled = false;
+  document.getElementById("mu-bloco-ativo").style.display = "none";
+  document.getElementById("mu-aviso-senha").classList.remove("hidden");
+  abrirModal("modal-usuario");
+}
+document.getElementById("btn-novo-usuario").addEventListener("click", abrirModalUsuario);
+
+function editarUsuario(uid) {
+  const u = STATE.usuarios.find((x) => x.id === uid);
+  if (!u) return;
+  const souEu = uid === AUTH.user?.uid;
+  pendingUsuarioId = uid;
+  document.getElementById("mu-form").classList.remove("hidden");
+  document.getElementById("mu-sucesso").classList.add("hidden");
+  document.getElementById("modal-usuario-titulo").textContent = `Editar — ${u.nome || u.email}`;
+  document.getElementById("mu-nome").value = u.nome || "";
+  document.getElementById("mu-email").value = u.email || "";
+  document.getElementById("mu-email").disabled = true;
+  document.getElementById("mu-telefone").value = u.telefone || "";
+  document.getElementById("mu-papel").value = u.papel || "sdr";
+  document.getElementById("mu-aviso-senha").classList.add("hidden");
+  document.getElementById("mu-bloco-ativo").style.display = "";
+  document.getElementById("mu-ativo").value = u.ativo === false ? "nao" : "sim";
+  // Bloqueio por estado, não por papel: aqui vale a regra de desabilitar com
+  // aviso em vez de esconder, pra ficar claro por que não dá.
+  document.getElementById("mu-papel").disabled = souEu;
+  document.getElementById("mu-ativo").disabled = souEu;
+  document.getElementById("mu-papel").title = souEu ? "Você não pode mudar o próprio papel" : "";
+  document.getElementById("mu-ativo").title = souEu ? "Você não pode suspender a própria conta" : "";
+  abrirModal("modal-usuario");
+}
+
+document.getElementById("btn-salvar-usuario").addEventListener("click", async () => {
+  const nome = document.getElementById("mu-nome").value.trim();
+  const telefone = document.getElementById("mu-telefone").value.trim();
+  const papel = document.getElementById("mu-papel").value;
+  if (!nome) { mostrarErro("Informe o nome."); return; }
+
+  const btn = document.getElementById("btn-salvar-usuario");
+  btn.disabled = true;
+  try {
+    if (pendingUsuarioId) {
+      await atualizarUsuario(pendingUsuarioId, {
+        nome, telefone, papel, ativo: document.getElementById("mu-ativo").value !== "nao",
+      });
+      mostrarToast("Conta atualizada.");
+      fecharModal("modal-usuario");
+      pendingUsuarioId = null;
+    } else {
+      const email = document.getElementById("mu-email").value.trim();
+      if (!email) { mostrarErro("Informe o e-mail."); return; }
+      await criarUsuario({ nome, email, telefone, papel });
+      // Mostra a senha de primeiro acesso em vez de fechar o modal: quem
+      // cadastrou precisa repassar essa senha, e é aqui que ela aparece.
+      document.getElementById("mu-sucesso-texto").textContent = `${nome} já pode entrar no sistema.`;
+      document.getElementById("mu-sucesso-senha").textContent = SENHA_PRIMEIRO_ACESSO;
+      document.getElementById("mu-form").classList.add("hidden");
+      document.getElementById("mu-sucesso").classList.remove("hidden");
+    }
+  } catch (err) {
+    mostrarErro(mensagemErroAuth(err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+async function alternarSituacaoUsuario(uid) {
+  const u = STATE.usuarios.find((x) => x.id === uid);
+  if (!u) return;
+  const suspendendo = u.ativo !== false;
+  const ok = await confirmarAcao(
+    suspendendo
+      ? `Suspender o acesso de ${u.nome}? Ela não consegue mais entrar, e o histórico dela fica.`
+      : `Reativar o acesso de ${u.nome}?`,
+    { textoConfirmar: suspendendo ? "Suspender" : "Reativar", destrutivo: suspendendo }
+  );
+  if (!ok) return;
+  try {
+    await atualizarUsuario(uid, { nome: u.nome, papel: u.papel, ativo: !suspendendo });
+    mostrarToast(suspendendo ? "Acesso suspenso." : "Acesso reativado.");
+  } catch (err) { mostrarErro(mensagemErroAuth(err)); }
+}
+
+async function excluirUsuario(uid) {
+  const u = STATE.usuarios.find((x) => x.id === uid);
+  if (!u) return;
+  const ok = await confirmarAcao(
+    `Excluir a conta de ${u.nome}? O login dela continua existindo no Firebase, mas sem acesso a nada aqui. Pra manter o histórico de quem era, prefira suspender.`
+  );
+  if (!ok) return;
+  try {
+    await removerVinculoUsuario(uid);
+    mostrarToast("Conta removida.");
+  } catch (err) { mostrarErro(mensagemErroAuth(err)); }
+}
+
+/* ══════════════ ACESSO (login, papéis e primeiro admin) ══════════════
+   O app não abre nenhuma escuta antes de saber quem está logado e qual o
+   papel. Isso não é só estética: com as regras novas, um listener de
+   `despesas` aberto por uma SDR só produziria erro de permissão em loop. */
+
+let listenersIniciados = false;
+let listenerUsuariosIniciado = false;
+let papelDosListeners = null;
+
+function mostrarPassoAcesso(id) {
+  document.querySelectorAll("#acesso-overlay .acesso-passo").forEach((p) => p.classList.add("hidden"));
+  if (id) document.getElementById(id).classList.remove("hidden");
+  document.getElementById("acesso-overlay").classList.toggle("hidden", !id);
+}
+
+function mostrarErroAcesso(id, texto) {
+  const el = document.getElementById(id);
+  el.textContent = texto;
+  el.classList.toggle("hidden", !texto);
+}
+
+/**
+ * Esconde do menu e das views tudo que o papel não alcança.
+ *
+ * A crença 16 pede botão desabilitado com aviso em vez de escondido, mas ela
+ * fala de ação bloqueada por ESTADO (falta um dado pra concluir). Pra
+ * permissão, o Felipe decidiu em 2026-09-02 esconder: a SDR não precisa
+ * saber que existe um Painel Financeiro que ela não abre.
+ */
+function aplicarPermissoes() {
+  document.querySelectorAll(".sidebar a[data-view]").forEach((a) => {
+    a.classList.toggle("hidden", !podeVer(a.dataset.view));
+  });
+  document.getElementById("card-usuarios").classList.toggle("hidden", !podeVer("usuarios"));
+
+  // Se a view ativa virou proibida (troca de papel com a sessão aberta),
+  // manda pra primeira permitida em vez de deixar a tela em branco.
+  const ativa = document.querySelector(".view.active");
+  if (!ativa || !podeVer(ativa.id.replace("view-", ""))) {
+    const primeiro = document.querySelector(".sidebar a[data-view]:not(.hidden)");
+    if (primeiro) primeiro.click();
+  }
+
+  document.getElementById("sessao-nome").textContent = AUTH.usuario?.nome || "";
+  document.getElementById("sessao-papel").textContent = PAPEIS[papelAtual()] || "";
+}
+
+iniciarAuth(async (estado) => {
+  if (!estado.pronto) return;
+
+  if (!estado.user) {
+    mostrarPassoAcesso(await bootstrapNecessario() ? "acesso-primeiro-admin" : "acesso-login");
+    return;
+  }
+  if (!estado.usuario) {
+    mostrarPassoAcesso("acesso-sem-permissao");
+    return;
+  }
+  if (estado.usuario.ativo === false) {
+    document.getElementById("sem-permissao-msg").textContent =
+      "Esta conta está suspensa. Fale com o administrador para reativar.";
+    mostrarPassoAcesso("acesso-sem-permissao");
+    return;
+  }
+  if (estado.usuario.precisaTrocarSenha) {
+    mostrarPassoAcesso("acesso-trocar-senha");
+    return;
+  }
+
+  // Papel trocado com a sessão aberta (o admin rebaixou alguém enquanto a
+  // pessoa usava o sistema): as escutas já abertas passariam a bater em
+  // regra que não permite mais, então recomeça do zero em vez de tentar
+  // desmontar escuta por escuta.
+  if (listenersIniciados && papelDosListeners !== papelAtual()) {
+    location.reload();
+    return;
+  }
+
+  aplicarPermissoes();
+  mostrarPassoAcesso(null);
+  if (isAdmin()) garantirBootstrapFechado();
+  if (!listenersIniciados) {
+    listenersIniciados = true;
+    papelDosListeners = papelAtual();
+    iniciarListeners();
+  }
+  if (podeVer("usuarios") && !listenerUsuariosIniciado) {
+    listenerUsuariosIniciado = true;
+    iniciarListenerUsuarios();
+  }
+});
+
+document.getElementById("acesso-login").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById("btn-entrar");
+  btn.disabled = true;
+  mostrarErroAcesso("login-erro", "");
+  try {
+    await login(document.getElementById("login-email").value, document.getElementById("login-senha").value);
+    document.getElementById("login-senha").value = "";
+  } catch (err) {
+    mostrarErroAcesso("login-erro", mensagemErroAuth(err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("btn-esqueci-senha").addEventListener("click", async () => {
+  const email = document.getElementById("login-email").value.trim();
+  if (!email) { mostrarErroAcesso("login-erro", "Escreva seu e-mail no campo acima primeiro."); return; }
+  try {
+    await enviarResetSenha(email);
+    mostrarErroAcesso("login-erro", "Enviamos um link de redefinição para " + email + ". Confira também o spam.");
+  } catch (err) {
+    mostrarErroAcesso("login-erro", mensagemErroAuth(err));
+  }
+});
+
+document.getElementById("acesso-primeiro-admin").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById("btn-criar-primeiro-admin");
+  btn.disabled = true;
+  mostrarErroAcesso("pa-erro", "");
+  try {
+    await criarPrimeiroAdmin({
+      nome: document.getElementById("pa-nome").value.trim(),
+      email: document.getElementById("pa-email").value,
+      senha: document.getElementById("pa-senha").value,
+    });
+  } catch (err) {
+    mostrarErroAcesso("pa-erro", mensagemErroAuth(err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("acesso-trocar-senha").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const senha = document.getElementById("ts-senha").value;
+  const senha2 = document.getElementById("ts-senha2").value;
+  if (senha !== senha2) { mostrarErroAcesso("ts-erro", "As duas senhas não são iguais."); return; }
+  const btn = document.getElementById("btn-trocar-senha");
+  btn.disabled = true;
+  mostrarErroAcesso("ts-erro", "");
+  try {
+    await alterarMinhaSenha(senha);
+  } catch (err) {
+    mostrarErroAcesso("ts-erro", mensagemErroAuth(err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Sair recarrega a página de propósito: com listeners abertos, a sessão que
+// some faz cada um deles começar a devolver erro de permissão. Recarregar é
+// mais simples e mais confiável do que desmontar doze escutas na mão.
+async function sairDoSistema() {
+  await logout().catch(() => {});
+  location.reload();
+}
+document.getElementById("btn-sair").addEventListener("click", sairDoSistema);
+document.getElementById("btn-sair-troca").addEventListener("click", sairDoSistema);
+document.getElementById("btn-sair-sem-permissao").addEventListener("click", sairDoSistema);
 
 // As cores do badge de SLA (verde/amarelo/vermelho) dependem só do relógio
 // — sem isso, um card ficaria "verde" pra sempre até a próxima escrita no

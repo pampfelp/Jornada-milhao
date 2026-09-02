@@ -16,18 +16,21 @@ um único funil (Agendamento → Vendas → Administrativo) que alimenta
 automaticamente o Painel Financeiro, com o Gerador de Contrato como a ponte
 entre Vendas e Administrativo.
 
-## ⚠️ Ação necessária: republicar as regras do Firestore
+## ⚠️ Ação necessária: ligar o login e republicar as regras
 
-As `firestore.rules` deste pacote mudaram (o Funil de Agendamento passou a
-usar `etapa` em vez de `status`, entre outras mudanças). **Enquanto as
-regras publicadas no seu projeto Firebase não forem atualizadas, criar ou
-mover agendamentos vai falhar com "permission-denied"** — o resto do
-sistema (Vendas, Administrativo, Financeiro) continua funcionando
-normalmente, já que essas coleções não mudaram de forma incompatível.
+Desde 2026-09-02 o sistema exige login e separa o que cada pessoa vê (veja
+a seção 3). Dois passos manuais no console do Firebase, **nesta ordem, e
+só depois que a versão nova do site já estiver no ar**:
 
-Pra corrigir: **Firestore Database → Regras** no console do Firebase →
-apague o conteúdo → cole o de [`firestore.rules`](firestore.rules) →
-**Publicar**.
+1. **Authentication → Começar** → habilite o provedor **E-mail/senha**.
+   Sem isso, qualquer tentativa de login devolve
+   `auth/configuration-not-found`.
+2. **Firestore Database → Regras** → apague o conteúdo → cole o de
+   [`firestore.rules`](firestore.rules) → **Publicar**.
+
+A ordem importa: as regras novas exigem usuário autenticado, e a versão
+antiga do site não sabe autenticar. Publicando as regras antes do código,
+o sistema para de carregar dado até a versão nova chegar.
 
 ## 1. Criar o projeto Firebase
 
@@ -214,7 +217,64 @@ qualquer outro lead incompleto criado manualmente.
   de um jeito muito diferente podem não ser reconhecidas, mas a resposta
   continua salva (só cai em "observações" em vez do campo certo).
 
-## 3. Planilha administrativa
+## 3. Acesso e papéis (Firebase Auth)
+
+O sistema exige login desde 2026-09-02. Antes disso qualquer pessoa com a
+URL lia e escrevia tudo, o que valia enquanto era uma pessoa só usando, e
+deixou de valer quando entrou gente com nível de acesso diferente.
+
+São três papéis, guardados em `usuarios/{uid}.papel`:
+
+| | Administrador | Gerente | SDR |
+|---|---|---|---|
+| Funis, Clientes, Contratos | sim | sim | sim |
+| Painel Financeiro, Entradas, Despesas | sim | sim | **não** |
+| Configurações (etapas, calendário) | sim | sim | não |
+| Contas de acesso | sim | não | não |
+| Planilha administrativa | sim | não | não |
+
+A SDR não vê os itens bloqueados no menu: some da tela em vez de aparecer
+desabilitado. Isso é exceção declarada à regra de "ação bloqueada é botão
+desabilitado, nunca escondido", que vale pra ação travada por falta de
+dado, não por papel.
+
+Esconder no navegador é conveniência. Quem manda é o
+[`firestore.rules`](firestore.rules), que repete a mesma matriz do lado do
+servidor — **ao mudar o escopo de um papel, mude os dois na mesma sessão**,
+senão a tela e o banco discordam em silêncio.
+
+### Primeiro acesso do sistema
+
+1. No [console do Firebase](https://console.firebase.google.com/), abra
+   **Authentication → Começar** e habilite o provedor **E-mail/senha**.
+   Sem isso qualquer login devolve `auth/configuration-not-found`.
+2. Publique o `firestore.rules` deste repositório em **Firestore Database →
+   Regras → Publicar**.
+3. Abra o sistema. Como ainda não existe conta nenhuma, ele mostra "Criar o
+   primeiro acesso"; a conta criada ali nasce administradora e essa tela
+   nunca mais aparece.
+4. Em **Configurações → Contas de acesso**, cadastre as outras pessoas
+   (nome, e-mail, telefone e papel). A conta de login é criada no Firebase
+   Auth na hora, com a senha de primeiro acesso `Jornada@2026`
+   (`SENHA_PRIMEIRO_ACESSO`, em [`auth.js`](auth.js)), a mesma pra todo
+   mundo. Ninguém segue com ela: `precisaTrocarSenha` obriga a criar uma
+   senha própria no primeiro login. Mesmo padrão do SolarGreen-ERP.
+
+### Detalhes que valem saber
+
+- **Suspender é melhor que excluir.** Suspender bloqueia o login e mantém o
+  histórico de quem era. Excluir remove só o vínculo; a conta continua
+  existindo no Firebase Auth (apagar conta de outra pessoa exigiria o Admin
+  SDK, que este projeto não usa), mas sem vínculo ela não acessa nada.
+- **Ninguém rebaixa, suspende ou apaga a própria conta.** Isso está travado
+  na tela e nas regras, pra o último administrador não fechar a porta com a
+  chave do lado de fora.
+- **Cadastro no Firebase Auth é aberto por natureza:** qualquer pessoa pode
+  criar uma conta com a chave pública do projeto. Isso não dá acesso a
+  nada — sem um documento `usuarios/{uid}` criado por um administrador, a
+  pessoa só vê "acesso não liberado".
+
+## 4. Planilha administrativa
 
 Este projeto inclui [`planilha.html`](planilha.html) — uma página que
 funciona como uma planilha (abas por coleção, células editáveis,
@@ -223,13 +283,11 @@ apagar registros sem precisar entrar no console do Firebase. **Não há link
 pra ela em nenhum menu do app** — o acesso é direto pela URL
 `.../planilha.html` da hospedagem.
 
-A senha atual da planilha é `jornada123` (veja "Trocar a senha da
-planilha administrativa" abaixo pra trocar de novo). Ela é só
-um cadeado contra acesso acidental, **não é segurança de verdade** —
-qualquer pessoa com conhecimento técnico consegue escrever direto no
-Firestore ignorando essa senha.
+Ela usa o mesmo login do sistema e só abre para administrador. Até
+2026-09-02 tinha senha própria, com o hash no código de um repositório
+público, e liberava a base inteira pra quem soubesse a URL.
 
-## 4. Rodar o app
+## 5. Rodar o app
 
 O app é 100% estático — todos os arquivos ficam juntos, sem subpastas
 (`index.html`, `style.css`, `app.js`, `firebase-init.js`, `Code.gs`,

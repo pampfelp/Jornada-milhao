@@ -1,9 +1,10 @@
-const CACHE_NAME = "jm-v4";
+const CACHE_NAME = "jm-v5";
 const CORE_ASSETS = [
   "./",
   "./index.html",
   "./style.css",
   "./app.js",
+  "./auth.js",
   "./firebase-init.js",
   "./manifest.json",
   "./icon-192.png",

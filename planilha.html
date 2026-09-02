@@ -103,6 +103,7 @@ td.check-col .celula{padding:8px;}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script type="module">
 import { db } from "./firebase-init.js";
+import { AUTH, iniciarAuth, isAdmin } from "./auth.js";
 import {
   collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
@@ -123,11 +124,6 @@ const COLECOES = [
   { nome: "config", label: "Configurações", campos: ["calendarioAgendaId", "calendarioAgendaNome"] }
 ];
 
-// Hash SHA-256 da senha "jornada123" — troque assim que puder (veja o
-// README, seção "Trocar a senha da planilha administrativa").
-const SENHA_HASH = "f3921cf7eec8cf78383ddd957972081978fb3f65e4956fe6b6b486a51eeefaaa";
-const CHAVE_LOCALSTORAGE = "jm_planilha_ok";
-
 // ══════════════ ESTADO ══════════════
 
 const STATE = {
@@ -138,31 +134,37 @@ const STATE = {
 };
 let cancelarListener = null;
 
-// ══════════════ SENHA (cadeado simples, não é segurança real) ══════════════
+// ══════════════ ACESSO ══════════════
+//
+// Até 2026-09-02 esta página tinha senha própria, com o hash no código de um
+// repositório público, e liberava a base inteira pra quem soubesse a URL.
+// Agora ela usa o mesmo login do sistema e exige papel de administrador.
+// Quem não for admin não passa daqui, e as regras do Firestore barram de
+// novo do lado do servidor mesmo que alguém force a tela.
 
-async function sha256Hex(texto) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(texto));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+let acessoResolvido = false;
+
+function bloquearComMensagem(texto, comLinkLogin) {
+  const tela = document.getElementById("tela-bloqueada");
+  tela.innerHTML = esc(texto) + (comLinkLogin
+    ? '<br><br><a href="./index.html" style="color:var(--accent);">Ir para a tela de login</a>'
+    : "");
+  tela.classList.remove("hidden");
 }
 
-async function checarAcesso() {
-  if (localStorage.getItem(CHAVE_LOCALSTORAGE) === "1") { desbloquear(); return; }
-  const tentativa = prompt("Senha da planilha administrativa:");
-  if (tentativa === null) return;
-  const hash = await sha256Hex(tentativa);
-  if (hash === SENHA_HASH) {
-    localStorage.setItem(CHAVE_LOCALSTORAGE, "1");
-    desbloquear();
-  } else {
-    alert("Senha incorreta.");
-    checarAcesso();
+iniciarAuth(() => {
+  if (!AUTH.pronto) return;
+  if (!AUTH.user) {
+    bloquearComMensagem("Entre no sistema antes de abrir a planilha administrativa.", true);
+    return;
   }
-}
-
-function desbloquear() {
+  if (!isAdmin() || AUTH.usuario?.ativo === false) {
+    bloquearComMensagem("Esta página é só para administradores.", true);
+    return;
+  }
   document.getElementById("tela-bloqueada").classList.add("hidden");
-  iniciar();
-}
+  if (!acessoResolvido) { acessoResolvido = true; iniciar(); }
+});
 
 // ══════════════ ABAS ══════════════
 
@@ -382,8 +384,6 @@ function iniciar() {
   renderAbas();
   ouvirColecaoAtiva();
 }
-
-checarAcesso();
 </script>
 </body>
 </html>

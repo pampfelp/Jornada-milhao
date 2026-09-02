@@ -7,6 +7,7 @@
 // banco de dados. Veja o README para o passo a passo de implantação do
 // Code.gs.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
+import { getAuth } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
 import {
   getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
@@ -15,7 +16,7 @@ import {
 // projeto > seus apps > app Web > "Config"). Essas chaves são públicas por
 // design no Firebase Web — a segurança vem das regras (firestore.rules),
 // não de esconder essa config.
-const firebaseConfig = {
+export const firebaseConfig = {
   apiKey: "AIzaSyD2ud5FQsbZeWp8Yh9tIN4W1Nlr60je3dQ",
   authDomain: "financeirojornadamilhao.firebaseapp.com",
   projectId: "financeirojornadamilhao",
@@ -25,6 +26,11 @@ const firebaseConfig = {
 };
 
 export const firebaseApp = initializeApp(firebaseConfig);
+
+// Firebase Auth — o sistema deixou de ser "uso interno de uma pessoa" quando
+// entrou gente com nível de acesso diferente (SDR não vê custo nem
+// financeiro). Ver auth.js e firestore.rules.
+export const auth = getAuth(firebaseApp);
 
 // Cache local persistente (IndexedDB) — dados já sincronizados continuam
 // disponíveis mesmo se a internet cair no meio do uso, e escritas feitas

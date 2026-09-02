@@ -8,14 +8,24 @@ Este pacote tem estes arquivos:
 - `planilha.html` → uma página separada pra você editar ou apagar dados direto, como se fosse uma planilha (veja o Passo 4 abaixo)
 - `manifest.json`, `service-worker.js`, ícones (`.png`/`.ico`) → deixam o sistema instalável como aplicativo. **Precisam ficar na mesma pasta que o `index.html`**, sempre que for hospedar — não são opcionais.
 
-## ⚠️ Já tem o sistema rodando? Republique as regras primeiro
+## ⚠️ Já tem o sistema rodando? Duas coisas antes de tudo
 
-Se você já tinha esse sistema no ar antes, **as regras do Firestore
-mudaram** (o Funil de Agendamento agora usa "etapa" em vez de "status").
-Vá direto em **Firestore Database → Regras** no console do Firebase →
-apague o conteúdo → cole o de `firestore.rules` → **Publicar**. Sem isso,
-criar ou mover um agendamento vai dar erro — o resto do sistema continua
-funcionando normal.
+O sistema passou a exigir login (2026-09-02). Antes disso, qualquer pessoa
+com o link conseguia ler e alterar tudo, inclusive o financeiro. Pra ligar
+o login, na ordem:
+
+1. **Ligar o login.** No [console do Firebase](https://console.firebase.google.com),
+   menu **Authentication → Começar** → habilite **E-mail/senha** → salvar.
+   Sem esse passo, nenhum login funciona.
+2. **Publicar as regras.** **Firestore Database → Regras** → apague o
+   conteúdo → cole o de `firestore.rules` → **Publicar**.
+3. Abra o sistema. Ele vai pedir pra **criar o primeiro acesso**: essa
+   conta nasce administradora, e essa tela não aparece nunca mais.
+4. Em **Configurações → Contas de acesso**, cadastre as outras pessoas.
+
+Faça o passo 2 depois que a versão nova do site já estiver no ar. Se as
+regras subirem antes do código, o sistema antigo (que ainda não sabe fazer
+login) para de carregar dado até a versão nova chegar.
 
 ## Passo 1 — Criar o banco de dados (Firebase)
 
@@ -112,28 +122,46 @@ Se você quiser corrigir um dado, apagar um registro de teste, cadastrar as
 etapas reais do funil administrativo, ou colar uma lista inteira de uma
 vez, **não precisa entrar no site do Firebase**. Abra o link do seu site
 com `/planilha.html` no final (ex: `https://seusite.github.io/planilha.html`).
-Essa página pede uma senha e depois funciona como uma planilha: abas por
-tipo de dado, você edita a célula e ela salva sozinha, seleciona várias
-linhas e apaga de uma vez, e tem botões pra exportar em CSV/Excel ou
-importar um arquivo CSV/Excel de uma vez.
+Ela funciona como uma planilha: abas por tipo de dado, você edita a célula
+e ela salva sozinha, seleciona várias linhas e apaga de uma vez, e tem
+botões pra exportar em CSV/Excel ou importar um arquivo CSV/Excel de uma
+vez.
 
-A senha atual é **`jornada123`**. Troque quando quiser — veja abaixo.
+**Só administrador entra nessa página**, com o mesmo login do sistema. Ela
+edita o banco direto, sem nenhuma trava de negócio: dá pra apagar um
+contrato, mudar um valor pago, zerar uma parcela. Use com calma.
 
-**Guarde o link e a senha dessa página em um lugar seguro** — quem tiver
-os dois consegue editar ou apagar qualquer dado do sistema, incluindo o
-financeiro.
+## Quem entra no sistema, e o que cada um vê
 
-## Trocar a senha da planilha administrativa
+Cada pessoa tem a própria conta, com um papel:
 
-1. Escolha a senha nova.
-2. Peça pra alguém calcular o hash SHA-256 dela (ou, se tiver Python
-   instalado, rode no terminal):
-   ```
-   python -c "import hashlib; print(hashlib.sha256(b'SUA_SENHA_NOVA').hexdigest())"
-   ```
-3. Abra `planilha.html`, ache a linha `const SENHA_HASH = "..."` e troque
-   pelo resultado (64 caracteres).
-4. Suba o arquivo atualizado pra hospedagem.
+- **Administrador** — vê tudo, cria as contas das outras pessoas e é o
+  único que abre a planilha administrativa.
+- **Gerente** — vê tudo do negócio, inclusive Painel Financeiro, Entradas e
+  Despesas. Não mexe em contas nem na planilha.
+- **SDR** — trabalha os funis, os clientes e os contratos. Não vê Painel
+  Financeiro, Entradas nem Despesas: esses itens nem aparecem no menu dela.
+
+### Criar a conta de alguém
+
+Em **Configurações → Contas de acesso**, clique em "+ Conta de acesso" e
+preencha nome, e-mail, telefone e o papel. Ao salvar, a conta de login é
+criada na hora (você não precisa entrar no site do Firebase) e a tela mostra
+a **senha de primeiro acesso**, que é a mesma pra todo mundo:
+`Jornada@2026`.
+
+Repasse essa senha pra pessoa. No primeiro login ela cai direto numa tela
+"Crie sua senha" e só entra depois de escolher uma senha própria — é isso
+que faz a senha compartilhada ser descartável. O e-mail não pode ser trocado
+depois.
+
+Pra tirar o acesso de alguém que saiu, prefira **suspender** em vez de
+excluir: o acesso é bloqueado na hora e o histórico de quem era continua
+lá.
+
+Você não consegue mudar o próprio papel nem suspender a própria conta. É de
+propósito: se o único administrador se rebaixasse por engano, ninguém mais
+conseguiria criar conta nenhuma.
 
 ## Sempre que atualizar o Code.gs
 
