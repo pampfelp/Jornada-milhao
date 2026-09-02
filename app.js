@@ -3612,12 +3612,22 @@ async function iniciarListeners() {
   // gestão pode fazer. Numa base já em uso ele não escreve nada de qualquer
   // jeito (checa se está vazia antes), mas deixar uma SDR tentar seria pedir
   // erro de permissão à toa no primeiro carregamento dela.
+  //
+  // O try/catch não é decoração. Sem ele, um erro aqui derruba a função
+  // inteira e NENHUM listener chega a ser registrado: a tela abre vazia, sem
+  // erro visível, só um "uncaught" no console. Aconteceu de verdade em
+  // 2026-09-02, no primeiro teste depois de ligar o Auth. O seed é um
+  // conforto de primeira execução, nunca pré-requisito pra ler dado.
   if (podeVer("config")) {
-    await Promise.all([
-      seedEtapasSeVazio_("etapasAgendamentoConfig", DEFAULT_ETAPAS_AGENDAMENTO),
-      seedEtapasSeVazio_("etapasVendaConfig", DEFAULT_ETAPAS_VENDA),
-      seedEtapasSeVazio_("etapasAdminConfig", DEFAULT_ETAPAS_ADMIN)
-    ]);
+    try {
+      await Promise.all([
+        seedEtapasSeVazio_("etapasAgendamentoConfig", DEFAULT_ETAPAS_AGENDAMENTO),
+        seedEtapasSeVazio_("etapasVendaConfig", DEFAULT_ETAPAS_VENDA),
+        seedEtapasSeVazio_("etapasAdminConfig", DEFAULT_ETAPAS_ADMIN)
+      ]);
+    } catch (err) {
+      console.warn("[etapas] seed padrão não rodou:", err.message);
+    }
   }
 
   onSnapshot(doc(db, "config", "geral"), { includeMetadataChanges: true }, (snap) => {
@@ -4020,6 +4030,14 @@ document.getElementById("acesso-primeiro-admin").addEventListener("submit", asyn
       email: document.getElementById("pa-email").value,
       senha: document.getElementById("pa-senha").value,
     });
+    // Recarrega em vez de seguir direto. A sessão já tinha começado no
+    // instante em que a conta nasceu no Auth, ou seja, ANTES do vínculo
+    // usuarios/{uid} existir no servidor — e as regras leem esse vínculo pra
+    // liberar qualquer coleção. Escuta negada no Firestore não tenta de novo
+    // sozinha, então a tela abriria vazia pra sempre. Isso acontece uma vez
+    // na vida do sistema, e recarregar resolve de forma determinística.
+    location.reload();
+    return;
   } catch (err) {
     mostrarErroAcesso("pa-erro", mensagemErroAuth(err));
   } finally {
