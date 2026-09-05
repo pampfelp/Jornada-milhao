@@ -860,9 +860,15 @@ function normalizarBusca(texto) {
 }
 
 /**
- * Período + busca, na mesma passada. As duas visões (Kanban e Lista) leem
- * daqui, então o que a busca esconde some das duas — sem isso, o número da
- * coluna do Kanban discordaria da lista logo ao lado.
+ * Período + busca, na mesma passada, devolvendo os DOIS recortes de
+ * propósito:
+ *
+ * - "visiveis" (período + busca) alimenta Kanban e Lista juntos, senão o
+ *   contador da coluna do Kanban discordaria da lista logo ao lado.
+ * - "doPeriodo" (só período) alimenta os KPIs, porque KPI mostra o total
+ *   real do recorte e busca é procura passageira — se o KPI caísse pra 1
+ *   enquanto se digita o nome de um lead, ele não serviria pra nada
+ *   (design-system regra 7).
  *
  * "textoDoCard" é a única parte que cada funil precisa dizer: o resto do
  * filtro é igual pros três.
@@ -870,12 +876,13 @@ function normalizarBusca(texto) {
 function filtrarCardsFunil(cards, funil, etapasRaw, textoDoCard) {
   const doPeriodo = filtrarCardsPorPeriodoFunil(cards, funil);
   const termo = normalizarBusca(STATE.buscaFunil[funil]).trim();
-  if (!termo) return doPeriodo;
-  return doPeriodo.filter((c) => {
+  if (!termo) return { doPeriodo, visiveis: doPeriodo };
+  const visiveis = doPeriodo.filter((c) => {
     const etapaCfg = etapasRaw.find((e) => e.id === c.etapa);
     const alvo = [textoDoCard(c), etapaCfg ? etapaCfg.nome : "", fmtData(dataLocalDeTimestamp(c.createdAt))].join(" ");
     return normalizarBusca(alvo).includes(termo);
   });
+  return { doPeriodo, visiveis };
 }
 
 /**
@@ -1079,15 +1086,15 @@ function colunasAgendamento() {
 }
 
 function renderKanbanAgendamento() {
-  const cards = filtrarCardsFunil(STATE.agendamentos, "agendamento", STATE.etapasAgendamento,
+  const { doPeriodo, visiveis } = filtrarCardsFunil(STATE.agendamentos, "agendamento", STATE.etapasAgendamento,
     (a) => [a.clienteNome, a.telefone, a.email, a.instagram, a.observacoes, a.motivoPerda].join(" "));
-  renderKanban("kanban-agendamento", "agendamento", colunasAgendamento(), cards, (a) => a.etapa, renderCardAgendamento);
-  renderListaFunil("agendamento", cards, STATE.etapasAgendamento, (a) => a.etapa,
+  renderKanban("kanban-agendamento", "agendamento", colunasAgendamento(), visiveis, (a) => a.etapa, renderCardAgendamento);
+  renderListaFunil("agendamento", visiveis, STATE.etapasAgendamento, (a) => a.etapa,
     (a) => `${telefoneCopiavel(a.telefone)}${a.data ? ` · ${fmtData(a.data)} ${esc(a.hora || "")}` : ""}`);
 
-  const comAgenda = cards.filter((a) => !!a.data).length;
-  document.getElementById("agendamento-kpis").innerHTML = kpisFunil(cards, STATE.etapasAgendamento, [
-    { tag: "Leads no recorte", num: String(cards.length), sub: "período e busca aplicados" },
+  const comAgenda = doPeriodo.filter((a) => !!a.data).length;
+  document.getElementById("agendamento-kpis").innerHTML = kpisFunil(doPeriodo, STATE.etapasAgendamento, [
+    { tag: "Leads no período", num: String(doPeriodo.length), sub: "sem contar a busca" },
     { tag: "Com data marcada", num: String(comAgenda), sub: "reunião já agendada" }
   ]);
 }
@@ -1453,15 +1460,15 @@ function renderCardOportunidade(o) {
 }
 
 function renderKanbanVendas() {
-  const cards = filtrarCardsFunil(STATE.oportunidades, "vendas", STATE.etapasVenda,
+  const { doPeriodo, visiveis } = filtrarCardsFunil(STATE.oportunidades, "vendas", STATE.etapasVenda,
     (o) => [o.clienteNome, o.telefone, o.email, o.instagram, o.observacoes, o.motivoPerda].join(" "));
-  renderKanban("kanban-vendas", "vendas", colunasVendas(), cards, (o) => o.etapa, renderCardOportunidade);
-  renderListaFunil("vendas", cards, STATE.etapasVenda, (o) => o.etapa,
+  renderKanban("kanban-vendas", "vendas", colunasVendas(), visiveis, (o) => o.etapa, renderCardOportunidade);
+  renderListaFunil("vendas", visiveis, STATE.etapasVenda, (o) => o.etapa,
     (o) => `${fmtMoeda(o.valorProposto)} · ${telefoneCopiavel(o.telefone)}`);
 
-  const ativas = cards.filter((o) => !o.perdida);
+  const ativas = doPeriodo.filter((o) => !o.perdida);
   const valorTotal = ativas.reduce((s, o) => s + (Number(o.valorProposto) || 0), 0);
-  document.getElementById("vendas-kpis").innerHTML = kpisFunil(cards, STATE.etapasVenda, [
+  document.getElementById("vendas-kpis").innerHTML = kpisFunil(doPeriodo, STATE.etapasVenda, [
     { tag: "Oportunidades ativas", num: String(ativas.length), sub: "sem contar as perdidas" },
     { tag: "Valor em negociação", num: fmtMoeda(valorTotal), sub: "soma das ativas" }
   ]);
@@ -2534,14 +2541,14 @@ function renderCardAdmin(c) {
 
 function renderKanbanAdministrativo() {
   const colunas = [...STATE.etapasAdmin].sort((a, b) => a.ordem - b.ordem).map((e) => ({ id: e.id, nome: e.nome }));
-  const cards = filtrarCardsFunil(STATE.cardsAdmin, "administrativo", STATE.etapasAdmin,
+  const { doPeriodo, visiveis } = filtrarCardsFunil(STATE.cardsAdmin, "administrativo", STATE.etapasAdmin,
     (c) => [c.clienteNome, String(c.valorTotal || "")].join(" "));
-  renderKanban("kanban-administrativo", "administrativo", colunas, cards, (c) => c.etapa, renderCardAdmin);
-  renderListaFunil("administrativo", cards, STATE.etapasAdmin, (c) => c.etapa, (c) => fmtMoeda(c.valorTotal));
+  renderKanban("kanban-administrativo", "administrativo", colunas, visiveis, (c) => c.etapa, renderCardAdmin);
+  renderListaFunil("administrativo", visiveis, STATE.etapasAdmin, (c) => c.etapa, (c) => fmtMoeda(c.valorTotal));
 
-  const valorTotal = cards.reduce((s, c) => s + (Number(c.valorTotal) || 0), 0);
-  document.getElementById("administrativo-kpis").innerHTML = kpisFunil(cards, STATE.etapasAdmin, [
-    { tag: "Contratos em execução", num: String(cards.length), sub: "período e busca aplicados" },
+  const valorTotal = doPeriodo.reduce((s, c) => s + (Number(c.valorTotal) || 0), 0);
+  document.getElementById("administrativo-kpis").innerHTML = kpisFunil(doPeriodo, STATE.etapasAdmin, [
+    { tag: "Contratos em execução", num: String(doPeriodo.length), sub: "sem contar a busca" },
     { tag: "Valor total", num: fmtMoeda(valorTotal), sub: "soma dos contratos" }
   ]);
 }
