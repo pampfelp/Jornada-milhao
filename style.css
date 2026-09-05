@@ -185,6 +185,30 @@ tbody tr.linha-clicavel{cursor:pointer;}
 .link-btn{background:none;border:none;padding:0;font:inherit;color:var(--dourado);text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px;cursor:pointer;}
 .link-btn:hover{color:var(--dourado-deep);}
 
+/* Genérico pra qualquer número que abre a lista de quem está por trás dele
+   (KPI de Contratos/Despesas/Entradas/Clientes e, agora, do relatório do
+   funil) — um lugar só em vez de repetir cursor+sublinhado em cada tela
+   nova que precisar disso. */
+.clicavel{cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px;}
+.clicavel:hover{color:var(--dourado);}
+
+/* Seção extra dentro do modal de detalhe (hoje só Atividades) — depois dos
+   campos de sempre, com uma linha separando do resto. */
+.detalhe-secao{padding-top:13px;border-top:1px solid var(--line);}
+.detalhe-secao-head{display:flex;justify-content:space-between;align-items:center;gap:10px;}
+.detalhe-secao-head h3{font-family:var(--display);font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-soft);}
+
+/* Seletor de etapa que troca a etapa NA HORA, sem abrir o formulário de
+   edição (design-system regra 6). Duas variações: dentro do modal de
+   detalhe (mais chamativo, dourado) e na linha da Lista (discreto, só
+   ganha contorno ao passar o mouse/focar, pra não competir com o resto da
+   linha). */
+.etapa-rapida{font-family:var(--sans);font-size:13px;font-weight:700;border:1.5px solid var(--line);border-radius:20px;padding:6px 12px;background:var(--panel-2);color:var(--dourado);cursor:pointer;}
+.etapa-rapida:hover{border-color:var(--dourado);}
+.etapa-rapida-linha{font-family:var(--sans);font-size:13px;font-weight:600;border:1px solid transparent;border-radius:7px;padding:4px 6px;margin:-4px -6px;background:transparent;color:var(--ink);cursor:pointer;max-width:100%;}
+.etapa-rapida-linha:hover{border-color:var(--line);background:var(--panel-2);}
+.etapa-rapida-linha:focus{border-color:var(--dourado);background:var(--panel-2);outline:none;}
+
 /* Tela de acesso — cobre tudo até a sessão estar liberada. z-index acima de
    todo o resto (toast é 900) de propósito: nada do sistema pode aparecer
    por cima dela. */

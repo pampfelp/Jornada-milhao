@@ -5,7 +5,7 @@
 import { db, APPS_SCRIPT_PROXY_URL } from "./firebase-init.js";
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, setDoc, getDocs, getDocsFromServer,
-  onSnapshot, query, orderBy, serverTimestamp
+  onSnapshot, query, orderBy, serverTimestamp, Timestamp
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import {
   AUTH, PAPEIS, SENHA_PRIMEIRO_ACESSO, iniciarAuth, mensagemErroAuth, podeVer, isAdmin, papelAtual, sessaoLiberada,
@@ -316,20 +316,49 @@ function abrirListaKpi(chave) {
 // aparece como primeiro campo, "Cliente", com o nome clicável (mesmo
 // mecanismo de closure de onEditar/onExcluir, não string de onclick, pra
 // não precisar serializar a função).
+//
+// "etapaSelect" (opcional) — { atual, opcoes: [{id,nome}], onMudar(novaEtapa) }
+// — troca a etapa direto no painel, sem precisar do formulário de edição
+// (design-system regra 6: ação de uso frequente vive fora do modal de
+// edição). Some fora dos 3 funis, onde não faz sentido.
+//
+// "atividades" (opcional) — { itens: array|null, onNova() } — seção de
+// Conversa/Ligação registrada sem mudar de etapa (funil-crm regra 3).
+// itens null = ainda carregando (a busca é assíncrona; abre o modal na
+// hora com os campos síncronos e preenche isto depois, sem re-esperar
+// pela rede pra mostrar o resto).
 let detalheAtual = null;
-function abrirDetalhe({ titulo, campos, onEditar, onExcluir, cliente }) {
+// Incrementado a cada abrirDetalheX(id) — invalida a busca assíncrona de
+// atividades de um detalhe que já foi trocado por outro antes dela voltar
+// (sem isso, o detalhe errado podia "pipocar" por cima do que está aberto
+// agora, com dado de um card que não é mais o que está na tela).
+let detalheTicket = 0;
+function abrirDetalhe({ titulo, campos, onEditar, onExcluir, cliente, etapaSelect, atividades }) {
   document.getElementById("mdt-titulo").textContent = titulo;
   const camposHtml = campos.map(([label, valor]) => (
     `<div class="detalhe-campo"><span class="detalhe-label">${esc(label)}</span><span class="detalhe-valor">${valor}</span></div>`
   ));
+  if (etapaSelect) {
+    const opcoesHtml = etapaSelect.opcoes.map((o) => `<option value="${esc(o.id)}" ${o.id === etapaSelect.atual ? "selected" : ""}>${esc(o.nome)}</option>`).join("");
+    camposHtml.unshift(`<div class="detalhe-campo"><span class="detalhe-label">Etapa</span><span class="detalhe-valor"><select id="mdt-etapa-select" class="etapa-rapida">${opcoesHtml}</select></span></div>`);
+  }
   if (cliente) {
     camposHtml.unshift(`<div class="detalhe-campo"><span class="detalhe-label">Cliente</span><span class="detalhe-valor"><button type="button" class="link-btn" id="mdt-cliente-link">${esc(cliente.nome || "Ver cliente")}</button></span></div>`);
   }
-  document.getElementById("mdt-corpo").innerHTML = camposHtml.join("");
+  let corpoHtml = camposHtml.join("");
+  if (atividades) {
+    corpoHtml += `<div class="detalhe-secao">
+      <div class="detalhe-secao-head"><h3>Atividades</h3><button type="button" class="btn-small" id="mdt-btn-atividade">+ Registrar</button></div>
+      ${renderListaAtividades(atividades.itens)}
+    </div>`;
+  }
+  document.getElementById("mdt-corpo").innerHTML = corpoHtml;
   detalheAtual = { onEditar, onExcluir };
   document.getElementById("mdt-btn-editar").style.display = onEditar ? "" : "none";
   document.getElementById("mdt-btn-excluir").style.display = onExcluir ? "" : "none";
   if (cliente) document.getElementById("mdt-cliente-link").addEventListener("click", cliente.onClick);
+  if (etapaSelect) document.getElementById("mdt-etapa-select").addEventListener("change", (e) => etapaSelect.onMudar(e.target.value));
+  if (atividades) document.getElementById("mdt-btn-atividade").addEventListener("click", atividades.onNova);
   abrirModal("modal-detalhe");
 }
 document.getElementById("mdt-btn-editar").addEventListener("click", () => {
@@ -942,6 +971,19 @@ function ordenarLinhasFunil(cards, funil, etapasRaw) {
   });
 }
 
+// Seletor de etapa direto na linha — design-system regra 6 (ação de uso
+// frequente vive fora do modal) e crença 16: no Kanban, arrastar já é o
+// controle direto; na Lista não existia NENHUM jeito de mover um card, e
+// esta é a lacuna que ele fecha. Chama a MESMA onMoveCard do arrastar, de
+// propósito: as automações (Agendado → Google Agenda, fechamento →
+// contrato, perda → motivo) moram lá dentro, e um caminho paralelo as
+// pularia caladas.
+function etapaSelecionavel(funil, cardId, etapaAtualId, etapasRaw) {
+  const opcoes = [...etapasRaw].sort((a, b) => a.ordem - b.ordem)
+    .map((e) => `<option value="${esc(e.id)}" ${e.id === etapaAtualId ? "selected" : ""}>${esc(e.nome)}</option>`).join("");
+  return `<select class="etapa-rapida-linha" onclick="event.stopPropagation();" onchange="event.stopPropagation();window.__jm.onMoveCard('${funil}','${esc(cardId)}',this.value)">${opcoes}</select>`;
+}
+
 function renderListaFunil(funil, cards, etapasRaw, getEtapaFn, detalheFn) {
   const linhas = ordenarLinhasFunil(cards, funil, etapasRaw);
   const { campo, desc } = STATE.ordemLista[funil];
@@ -954,7 +996,7 @@ function renderListaFunil(funil, cards, etapasRaw, getEtapaFn, detalheFn) {
     const etapaCfg = etapasRaw.find((e) => e.id === getEtapaFn(c));
     return `<tr class="linha-clicavel" onclick="window.__jm.onCardClick('${funil}','${esc(c.id)}')">
       <td>${esc(c.clienteNome || "—")}</td>
-      <td>${esc(etapaCfg ? etapaCfg.nome : "—")}</td>
+      <td>${etapaSelecionavel(funil, c.id, getEtapaFn(c), etapasRaw)}</td>
       <td>${detalheFn(c)}</td>
       <td>${renderBadgeSla(c.dataEntrouEtapa, etapaCfg) || "—"}</td>
       <td>${fmtData(dataLocalDeTimestamp(c.createdAt))}</td>
@@ -1145,6 +1187,11 @@ async function moverAgendamento(id, novaEtapa) {
     pendingPerda = { colecao: "agendamentos", id };
     document.getElementById("mp-motivo").value = "";
     abrirModal("modal-perda");
+    // Desfaz visualmente uma troca ainda não confirmada (ex: o seletor da
+    // Lista já mudou de valor antes de saber que isto ia abrir um modal em
+    // vez de mover direto) — se confirmar, o onSnapshot corrige de novo
+    // com o valor real assim que a escrita voltar.
+    renderKanbanAgendamento();
     return;
   }
 
@@ -1159,14 +1206,17 @@ async function moverAgendamento(id, novaEtapa) {
     mostrarErro(`Pra mover pra "${etapaCfg.nome}", ainda falta: ${faltando.join(", ")}.`);
     pendingAgendamentoMoveEtapa = novaEtapa;
     editarAgendamento(id, { confirmarAgendamento: !!etapaCfg.exigeContato, viaGateMovimento: true });
+    renderKanbanAgendamento();
     return;
   }
 
   try {
-    await updateDoc(doc(db, "agendamentos", id), { etapa: novaEtapa, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp() });
-    await addDoc(collection(db, "agendamentos", id, "historico"), { tipo: "mudanca_etapa", de: ag.etapa, para: novaEtapa, timestamp: serverTimestamp() });
+    const { etapasPassadas, transicoes } = await proximaTransicao("agendamentos", ag, novaEtapa);
+    await updateDoc(doc(db, "agendamentos", id), {
+      etapa: novaEtapa, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp(), etapasPassadas, transicoes
+    });
     if (etapaCfg && etapaCfg.entraFunilVendas) await processarAgendamentoAgendado(id, { ...ag, etapa: novaEtapa });
-  } catch (err) { mostrarErro("Não foi possível mover: " + err.message); }
+  } catch (err) { mostrarErro("Não foi possível mover: " + err.message); renderKanbanAgendamento(); }
 }
 
 // Mostra o contato do cliente selecionado no lead (só leitura — editar
@@ -1205,7 +1255,8 @@ async function processarAgendamentoAgendado(agendamentoId, dados) {
           data: dados.data || "", hora: dados.hora || "",
           agendamentoId, etapa: primeiraEtapaVenda.id, valorProposto: 0, observacoes: dados.observacoes || "",
           perdida: false, motivoPerda: "", fechada: false,
-          dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+          dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+          etapasPassadas: [primeiraEtapaVenda.id], transicoes: [{ etapa: primeiraEtapaVenda.id, em: Timestamp.now() }]
         });
         await updateDoc(doc(db, "agendamentos", agendamentoId), { convertido: true });
       } catch (err) { mostrarErro("Não foi possível criar a oportunidade: " + err.message); }
@@ -1228,14 +1279,139 @@ async function processarAgendamentoAgendado(agendamentoId, dados) {
   }
 }
 
-// Exclusão em cascata do histórico — sem isso, o subdocumento fica órfão
-// no Firestore pra sempre (as regras já permitem apagar `historico`
-// especificamente por causa disso). Compartilhada pelos 3 funis.
+// Exclusão em cascata do histórico E das atividades — sem isso, os
+// subdocumentos ficam órfãos no Firestore pra sempre (as regras já
+// permitem apagar as duas subcoleções especificamente por causa disso).
+// Compartilhada pelos 3 funis.
 async function excluirComHistorico(colecao, id) {
-  const historicoSnap = await getDocs(collection(db, colecao, id, "historico"));
+  const [historicoSnap, atividadesSnap] = await Promise.all([
+    getDocs(collection(db, colecao, id, "historico")),
+    getDocs(collection(db, colecao, id, "atividades"))
+  ]);
   for (const d of historicoSnap.docs) await deleteDoc(d.ref);
+  for (const d of atividadesSnap.docs) await deleteDoc(d.ref);
   await deleteDoc(doc(db, colecao, id));
 }
+
+/**
+ * Transição de etapa vira DOIS ARRAYS no próprio documento do card —
+ * `etapasPassadas` (idempotente, só "passou aqui? sim") e `transicoes`
+ * (timestamp de CADA transição real, nunca deduplicado) — em vez de um
+ * evento na subcoleção `historico`. Funil-crm regra 4: "última
+ * movimentação" tem que ler daqui, nunca de um log separado; regra 1: o
+ * relatório usa `transicoes` pra calcular o tempo médio REAL de cada
+ * etapa (ver calcularAnaliseFunil), em vez de reabrir N subcoleções a
+ * cada abertura do relatório.
+ *
+ * `historico` continua existindo só como o log antigo, escrito até esta
+ * mudança — não se escreve mais nele daqui pra frente (evitaria o mesmo
+ * dado em dois lugares, antecipação C1). Ele só é lido de novo, uma única
+ * vez por card, por `migrarTransicoesDoHistorico` abaixo.
+ */
+
+// Só LEITURA + cálculo — reconstrói os arrays novos a partir do histórico
+// antigo, sem inventar nada que não esteja lá (antecipação F5). Quem
+// chama decide se e quando grava de volta.
+async function migrarTransicoesDoHistorico(colecaoNome, card) {
+  try {
+    const snap = await getDocs(collection(db, colecaoNome, card.id, "historico"));
+    const eventos = snap.docs.map((d) => d.data())
+      .filter((h) => h.tipo === "mudanca_etapa" && h.para)
+      .sort((a, b) => (a.timestamp?.toMillis?.() || 0) - (b.timestamp?.toMillis?.() || 0));
+    // A etapa em que o card NASCEU nunca teve um evento de mudança próprio
+    // (só as mudanças seguintes foram gravadas) — sem isso, o tempo médio
+    // da 1ª etapa de todo card antigo ficaria sempre vazio, não por não
+    // existir, mas por a migração não saber de onde começar. createdAt é
+    // dado real, não inventado.
+    const etapaInicial = eventos.length ? eventos[0].de : card.etapa;
+    const transicoes = [];
+    if (etapaInicial && card.createdAt) transicoes.push({ etapa: etapaInicial, em: card.createdAt });
+    eventos.forEach((h) => transicoes.push({ etapa: h.para, em: h.timestamp, ...(h.motivoPerda ? { motivo: h.motivoPerda } : {}) }));
+    const vistos = new Set([card.etapa, ...(etapaInicial ? [etapaInicial] : [])]);
+    eventos.forEach((h) => vistos.add(h.para));
+    return { etapasPassadas: [...vistos], transicoes };
+  } catch (err) {
+    console.warn(`[funil] não foi possível ler o histórico de ${colecaoNome}/${card.id}:`, err.message);
+    return { etapasPassadas: [card.etapa], transicoes: [] };
+  }
+}
+
+// Os arrays do card já existem? Usa direto. Se não, migra (só leitura).
+async function transicoesAtuais(colecaoNome, card) {
+  return Array.isArray(card.transicoes)
+    ? { etapasPassadas: card.etapasPassadas || [card.etapa], transicoes: card.transicoes }
+    : migrarTransicoesDoHistorico(colecaoNome, card);
+}
+
+// Usado pelo RELATÓRIO: além de calcular, grava a migração de volta no
+// card (fire-and-forget — o relatório não trava esperando a escrita),
+// pra próxima abertura não pagar a leitura do historico de novo.
+async function garantirTransicoes(colecaoNome, card) {
+  const dados = await transicoesAtuais(colecaoNome, card);
+  if (!Array.isArray(card.transicoes)) {
+    updateDoc(doc(db, colecaoNome, card.id), dados).catch((err) =>
+      console.warn(`[funil] não foi possível gravar a migração de ${colecaoNome}/${card.id}:`, err.message));
+  }
+  return dados;
+}
+
+// Usado ao MOVER: junta a migração (se precisar) com o registro da nova
+// transição, pro chamador escrever tudo numa única updateDoc.
+async function proximaTransicao(colecaoNome, card, novaEtapa, extra) {
+  const base = await transicoesAtuais(colecaoNome, card);
+  const etapasPassadas = base.etapasPassadas.includes(novaEtapa) ? base.etapasPassadas : [...base.etapasPassadas, novaEtapa];
+  const transicoes = [...base.transicoes, { etapa: novaEtapa, em: Timestamp.now(), ...(extra || {}) }];
+  return { etapasPassadas, transicoes };
+}
+
+// Conversa/ligação registrada sem mudar de etapa (funil-crm regra 3).
+// Nunca conta como transição — vive na própria subcoleção `atividades`.
+const TIPOS_ATIVIDADE = ["Conversa no WhatsApp", "Ligação"];
+async function registrarAtividade(colecaoNome, cardId, tipo, nota) {
+  await addDoc(collection(db, colecaoNome, cardId, "atividades"), { tipo, nota: nota || "", criadoEm: serverTimestamp() });
+}
+async function buscarAtividades(colecaoNome, cardId) {
+  try {
+    const snap = await getDocs(collection(db, colecaoNome, cardId, "atividades"));
+    return snap.docs.map((d) => d.data()).sort((a, b) => (b.criadoEm?.toMillis?.() || 0) - (a.criadoEm?.toMillis?.() || 0));
+  } catch (err) { return []; }
+}
+function renderListaAtividades(atividades) {
+  if (atividades === null) return `<p class="hint" style="margin-top:8px;">Carregando…</p>`;
+  if (!atividades.length) return `<p class="hint" style="margin-top:8px;">Nenhuma atividade registrada ainda.</p>`;
+  return `<div style="margin-top:8px;">${atividades.map((a) => `
+    <div style="padding:8px 0;border-bottom:1px solid var(--line);">
+      <div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;">
+        <strong>${esc(a.tipo)}</strong>
+        <span style="color:var(--ink-faint);white-space:nowrap;">${esc(fmtDataHora(a.criadoEm))}</span>
+      </div>
+      ${a.nota ? `<div style="font-size:12.5px;color:var(--ink-soft);margin-top:3px;">${esc(a.nota)}</div>` : ""}
+    </div>`).join("")}</div>`;
+}
+
+// Modal compartilhado pelos 3 funis pra registrar a atividade — quem abre
+// passa a coleção/id do card e o que fazer depois de salvar (normalmente,
+// reabrir o mesmo detalhe pra a lista de atividades aparecer atualizada).
+let pendingAtividade = null;
+function abrirModalAtividade(colecaoNome, cardId, aoSalvar) {
+  document.getElementById("mat-tipo").value = TIPOS_ATIVIDADE[0];
+  document.getElementById("mat-nota").value = "";
+  pendingAtividade = { colecaoNome, cardId, aoSalvar };
+  abrirModal("modal-atividade");
+}
+document.getElementById("btn-salvar-atividade").addEventListener("click", async () => {
+  if (!pendingAtividade) return;
+  const { colecaoNome, cardId, aoSalvar } = pendingAtividade;
+  const tipo = document.getElementById("mat-tipo").value;
+  const nota = document.getElementById("mat-nota").value.trim();
+  try {
+    await registrarAtividade(colecaoNome, cardId, tipo, nota);
+    fecharModal("modal-atividade");
+    pendingAtividade = null;
+    mostrarToast("Atividade registrada.");
+    if (aoSalvar) aoSalvar();
+  } catch (err) { mostrarErro(err.message); }
+});
 
 async function excluirAgendamento(id) {
   if (!(await confirmarAcao("Excluir este agendamento?"))) return;
@@ -1401,7 +1577,10 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
     observacoes: document.getElementById("ma-obs").value.trim()
   };
   try {
-    const ref = await addDoc(collection(db, "agendamentos"), { ...dados, dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    const ref = await addDoc(collection(db, "agendamentos"), {
+      ...dados, dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      etapasPassadas: [primeiraEtapa.id], transicoes: [{ etapa: primeiraEtapa.id, em: Timestamp.now() }]
+    });
     fecharModal("modal-agendamento");
     mostrarToast("Lead criado.");
     if (primeiraEtapa.entraFunilVendas) await processarAgendamentoAgendado(ref.id, dados);
@@ -1411,33 +1590,42 @@ document.getElementById("btn-salvar-agendamento").addEventListener("click", asyn
 function abrirDetalheAgendamento(id) {
   const a = STATE.agendamentos.find((x) => x.id === id);
   if (!a) return;
-  const etapaCfg = STATE.etapasAgendamento.find((e) => e.id === a.etapa);
   const clienteDoLead = STATE.clientes.find((c) => c.id === a.clienteId);
-  abrirDetalhe({
-    titulo: a.clienteNome,
-    campos: [
-      ["Origem do lead", esc((clienteDoLead && clienteDoLead.origem) || "—")],
-      ["Telefone", esc(a.telefone || "—")],
-      ["E-mail", esc(a.email || "—")],
-      ["Instagram da empresa", esc(a.instagram || "—")],
-      ["Estabelecimento", esc(LABEL_ESTABELECIMENTO[a.estabelecimento] || "—")],
-      ["Time comercial", esc(LABEL_TIME_COMERCIAL[a.timeComercial] || "—")],
-      ["Faturamento (últimos 6 meses)", esc(LABEL_FATURAMENTO[a.faturamento6meses] || "—")],
-      ["Onde a empresa trava", (a.ondeTrava && a.ondeTrava.length) ? esc(a.ondeTrava.join("; ")) : "—"],
-      ["Comprometimento (0 a 10)", a.comprometimento != null ? `${a.comprometimento}/10` : "—"],
-      ["Nível de interesse", esc(labelNivelInteresse(a.nivelInteresse))],
-      ["Data", esc(fmtData(a.data))],
-      ["Hora", esc(a.hora || "—")],
-      ["Etapa", esc(etapaCfg ? etapaCfg.nome : "—")],
-      ["Observações", esc(a.observacoes || "—")],
-      ["Já virou oportunidade?", a.convertido ? "Sim" : "Não"],
-      ["Evento criado na Agenda?", a.enviadoAgenda ? "Sim" : "Não"],
-      ...(a.motivoPerda ? [["Motivo da perda", esc(a.motivoPerda)]] : [])
-    ],
-    onEditar: () => editarAgendamento(id),
-    onExcluir: () => excluirAgendamento(id),
-    cliente: a.clienteId ? { nome: a.clienteNome, onClick: () => abrirDetalheCliente(a.clienteId, () => abrirDetalheAgendamento(id)) } : null
-  });
+  const meuTicket = ++detalheTicket;
+  const render = (atividades) => {
+    if (meuTicket !== detalheTicket) return; // outro detalhe foi aberto enquanto isto carregava
+    abrirDetalhe({
+      titulo: a.clienteNome,
+      etapaSelect: {
+        atual: a.etapa, opcoes: colunasAgendamento(),
+        onMudar: (novaEtapa) => { fecharModal("modal-detalhe"); onMoveCard("agendamento", id, novaEtapa); }
+      },
+      campos: [
+        ["Origem do lead", esc((clienteDoLead && clienteDoLead.origem) || "—")],
+        ["Telefone", esc(a.telefone || "—")],
+        ["E-mail", esc(a.email || "—")],
+        ["Instagram da empresa", esc(a.instagram || "—")],
+        ["Estabelecimento", esc(LABEL_ESTABELECIMENTO[a.estabelecimento] || "—")],
+        ["Time comercial", esc(LABEL_TIME_COMERCIAL[a.timeComercial] || "—")],
+        ["Faturamento (últimos 6 meses)", esc(LABEL_FATURAMENTO[a.faturamento6meses] || "—")],
+        ["Onde a empresa trava", (a.ondeTrava && a.ondeTrava.length) ? esc(a.ondeTrava.join("; ")) : "—"],
+        ["Comprometimento (0 a 10)", a.comprometimento != null ? `${a.comprometimento}/10` : "—"],
+        ["Nível de interesse", esc(labelNivelInteresse(a.nivelInteresse))],
+        ["Data", esc(fmtData(a.data))],
+        ["Hora", esc(a.hora || "—")],
+        ["Observações", esc(a.observacoes || "—")],
+        ["Já virou oportunidade?", a.convertido ? "Sim" : "Não"],
+        ["Evento criado na Agenda?", a.enviadoAgenda ? "Sim" : "Não"],
+        ...(a.motivoPerda ? [["Motivo da perda", esc(a.motivoPerda)]] : [])
+      ],
+      onEditar: () => editarAgendamento(id),
+      onExcluir: () => excluirAgendamento(id),
+      cliente: a.clienteId ? { nome: a.clienteNome, onClick: () => abrirDetalheCliente(a.clienteId, () => abrirDetalheAgendamento(id)) } : null,
+      atividades: { itens: atividades, onNova: () => abrirModalAtividade("agendamentos", id, () => abrirDetalheAgendamento(id)) }
+    });
+  };
+  render(null); // abre na hora com o que já está em STATE; atividades chegam depois
+  buscarAtividades("agendamentos", id).then(render);
 }
 
 /* ══════════════ FUNIL DE VENDAS ══════════════ */
@@ -1484,6 +1672,7 @@ async function moverOportunidade(id, novaEtapa) {
     pendingPerda = { colecao: "oportunidades", id };
     document.getElementById("mp-motivo").value = "";
     abrirModal("modal-perda");
+    renderKanbanVendas(); // ver comentário equivalente em moverAgendamento
     return;
   }
 
@@ -1507,13 +1696,16 @@ async function moverOportunidade(id, novaEtapa) {
     document.getElementById("mct-linha-parcelamento").style.display = "none";
     atualizarPreviewParcelas();
     abrirModal("modal-contrato");
+    renderKanbanVendas();
     return;
   }
 
   try {
-    await updateDoc(doc(db, "oportunidades", id), { etapa: novaEtapa, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp() });
-    await addDoc(collection(db, "oportunidades", id, "historico"), { tipo: "mudanca_etapa", de: op.etapa, para: novaEtapa, timestamp: serverTimestamp() });
-  } catch (err) { mostrarErro("Não foi possível mover: " + err.message); }
+    const { etapasPassadas, transicoes } = await proximaTransicao("oportunidades", op, novaEtapa);
+    await updateDoc(doc(db, "oportunidades", id), {
+      etapa: novaEtapa, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp(), etapasPassadas, transicoes
+    });
+  } catch (err) { mostrarErro("Não foi possível mover: " + err.message); renderKanbanVendas(); }
 }
 
 async function excluirOportunidade(id) {
@@ -1528,18 +1720,16 @@ document.getElementById("btn-confirmar-perda").addEventListener("click", async (
   if (!pendingPerda) return;
   const { colecao, id } = pendingPerda;
   const motivo = document.getElementById("mp-motivo").value.trim();
-  const etapaAtual = (colecao === "agendamentos" ? STATE.agendamentos : STATE.oportunidades).find((x) => x.id === id);
+  const cardAtual = (colecao === "agendamentos" ? STATE.agendamentos : STATE.oportunidades).find((x) => x.id === id);
   const novaEtapa = colecao === "agendamentos"
     ? STATE.etapasAgendamento.find((e) => e.perda)
     : STATE.etapasVenda.find((e) => e.perda);
-  if (!novaEtapa) { mostrarErro("Etapa de perda não encontrada."); return; }
+  if (!novaEtapa || !cardAtual) { mostrarErro("Etapa de perda não encontrada."); return; }
   try {
-    const patch = { etapa: novaEtapa.id, motivoPerda: motivo, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp() };
+    const { etapasPassadas, transicoes } = await proximaTransicao(colecao, cardAtual, novaEtapa.id, motivo ? { motivo } : null);
+    const patch = { etapa: novaEtapa.id, motivoPerda: motivo, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp(), etapasPassadas, transicoes };
     if (colecao === "oportunidades") patch.perdida = true;
     await updateDoc(doc(db, colecao, id), patch);
-    await addDoc(collection(db, colecao, id, "historico"), {
-      tipo: "mudanca_etapa", de: etapaAtual ? etapaAtual.etapa : null, para: novaEtapa.id, motivoPerda: motivo, timestamp: serverTimestamp()
-    });
     fecharModal("modal-perda");
     pendingPerda = null;
   } catch (err) { mostrarErro(err.message); }
@@ -1629,7 +1819,8 @@ document.getElementById("btn-salvar-oportunidade").addEventListener("click", asy
       hora: document.getElementById("mo-hora").value || "",
       observacoes: document.getElementById("mo-obs").value.trim(),
       perdida: false, motivoPerda: "", fechada: false,
-      dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+      dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      etapasPassadas: [primeiraEtapa.id], transicoes: [{ etapa: primeiraEtapa.id, em: Timestamp.now() }]
     });
     fecharModal("modal-oportunidade");
     mostrarToast("Oportunidade criada.");
@@ -1639,9 +1830,15 @@ document.getElementById("btn-salvar-oportunidade").addEventListener("click", asy
 function abrirDetalheOportunidade(id) {
   const o = STATE.oportunidades.find((x) => x.id === id);
   if (!o) return;
-  const etapaCfg = STATE.etapasVenda.find((e) => e.id === o.etapa);
-  abrirDetalhe({
+  const meuTicket = ++detalheTicket;
+  const render = (atividades) => {
+    if (meuTicket !== detalheTicket) return;
+    abrirDetalhe({
     titulo: o.clienteNome,
+    etapaSelect: {
+      atual: o.etapa, opcoes: colunasVendas(),
+      onMudar: (novaEtapa) => { fecharModal("modal-detalhe"); onMoveCard("vendas", id, novaEtapa); }
+    },
     campos: [
       ["Telefone", esc(o.telefone || "—")],
       ["E-mail", esc(o.email || "—")],
@@ -1655,15 +1852,18 @@ function abrirDetalheOportunidade(id) {
       ["Data do agendamento", esc(fmtData(o.data))],
       ["Hora do agendamento", esc(o.hora || "—")],
       ["Valor proposto", esc(fmtMoeda(o.valorProposto))],
-      ["Etapa", esc(etapaCfg ? etapaCfg.nome : "—")],
       ["Observações", esc(o.observacoes || "—")],
       ["Fechada?", o.fechada ? "Sim" : "Não"],
       ...(o.motivoPerda ? [["Motivo da perda", esc(o.motivoPerda)]] : [])
     ],
     onEditar: () => editarOportunidade(id),
     onExcluir: () => excluirOportunidade(id),
-    cliente: o.clienteId ? { nome: o.clienteNome, onClick: () => abrirDetalheCliente(o.clienteId, () => abrirDetalheOportunidade(id)) } : null
-  });
+    cliente: o.clienteId ? { nome: o.clienteNome, onClick: () => abrirDetalheCliente(o.clienteId, () => abrirDetalheOportunidade(id)) } : null,
+    atividades: { itens: atividades, onNova: () => abrirModalAtividade("oportunidades", id, () => abrirDetalheOportunidade(id)) }
+    });
+  };
+  render(null);
+  buscarAtividades("oportunidades", id).then(render);
 }
 
 /* ══════════════ GERADOR DE CONTRATO ══════════════ */
@@ -2264,17 +2464,18 @@ async function gerarContrato() {
       await addDoc(collection(db, "cardsAdmin"), {
         contratoId: contratoRef.id, clienteId: cliente.id, clienteNome: cliente.nome,
         valorTotal: f.valorTotal, etapa: primeiraEtapaAdmin.id,
-        dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+        dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+        etapasPassadas: [primeiraEtapaAdmin.id], transicoes: [{ etapa: primeiraEtapaAdmin.id, em: Timestamp.now() }]
       });
     }
 
     if (pendingContratoOportunidadeId) {
       const opOrigem = STATE.oportunidades.find((o) => o.id === pendingContratoOportunidadeId);
+      const { etapasPassadas, transicoes } = await proximaTransicao("oportunidades",
+        opOrigem || { id: pendingContratoOportunidadeId, etapa: null }, pendingContratoEtapaFechamentoId);
       await updateDoc(doc(db, "oportunidades", pendingContratoOportunidadeId), {
-        etapa: pendingContratoEtapaFechamentoId, dataEntrouEtapa: serverTimestamp(), fechada: true, contratoId: contratoRef.id, updatedAt: serverTimestamp()
-      });
-      await addDoc(collection(db, "oportunidades", pendingContratoOportunidadeId, "historico"), {
-        tipo: "mudanca_etapa", de: opOrigem ? opOrigem.etapa : null, para: pendingContratoEtapaFechamentoId, timestamp: serverTimestamp()
+        etapa: pendingContratoEtapaFechamentoId, dataEntrouEtapa: serverTimestamp(), fechada: true, contratoId: contratoRef.id, updatedAt: serverTimestamp(),
+        etapasPassadas, transicoes
       });
     }
 
@@ -2539,11 +2740,14 @@ function renderCardAdmin(c) {
   `;
 }
 
+function colunasAdmin() {
+  return [...STATE.etapasAdmin].sort((a, b) => a.ordem - b.ordem).map((e) => ({ id: e.id, nome: e.nome }));
+}
+
 function renderKanbanAdministrativo() {
-  const colunas = [...STATE.etapasAdmin].sort((a, b) => a.ordem - b.ordem).map((e) => ({ id: e.id, nome: e.nome }));
   const { doPeriodo, visiveis } = filtrarCardsFunil(STATE.cardsAdmin, "administrativo", STATE.etapasAdmin,
     (c) => [c.clienteNome, String(c.valorTotal || "")].join(" "));
-  renderKanban("kanban-administrativo", "administrativo", colunas, visiveis, (c) => c.etapa, renderCardAdmin);
+  renderKanban("kanban-administrativo", "administrativo", colunasAdmin(), visiveis, (c) => c.etapa, renderCardAdmin);
   renderListaFunil("administrativo", visiveis, STATE.etapasAdmin, (c) => c.etapa, (c) => fmtMoeda(c.valorTotal));
 
   const valorTotal = doPeriodo.reduce((s, c) => s + (Number(c.valorTotal) || 0), 0);
@@ -2558,11 +2762,11 @@ async function moverCardAdmin(id, novaEtapa) {
   const card = STATE.cardsAdmin.find((c) => c.id === id);
   if (!card || card.etapa === novaEtapa) return;
   try {
+    const { etapasPassadas, transicoes } = await proximaTransicao("cardsAdmin", card, novaEtapa);
     await updateDoc(doc(db, "cardsAdmin", id), {
-      etapa: novaEtapa, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp()
+      etapa: novaEtapa, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp(), etapasPassadas, transicoes
     });
-    await addDoc(collection(db, "cardsAdmin", id, "historico"), { tipo: "mudanca_etapa", de: card.etapa, para: novaEtapa, timestamp: serverTimestamp() });
-  } catch (err) { mostrarErro("Não foi possível mover: " + err.message); }
+  } catch (err) { mostrarErro("Não foi possível mover: " + err.message); renderKanbanAdministrativo(); }
 }
 
 function editarCardAdmin(id) {
@@ -2591,28 +2795,39 @@ async function excluirCardAdmin(id) {
 function abrirDetalheCardAdmin(id) {
   const c = STATE.cardsAdmin.find((x) => x.id === id);
   if (!c) return;
-  const etapaCfg = STATE.etapasAdmin.find((e) => e.id === c.etapa);
   // cardAdmin não guarda clienteId direto — só o contrato que o originou.
   const contratoVinculado = STATE.contratos.find((x) => x.id === c.contratoId);
   const clienteId = contratoVinculado ? contratoVinculado.clienteId : null;
-  abrirDetalhe({
-    titulo: c.clienteNome,
-    campos: [
-      ["Valor total", esc(fmtMoeda(c.valorTotal))],
-      ["Etapa", esc(etapaCfg ? etapaCfg.nome : "—")],
-      ["Contrato vinculado", c.contratoId ? "Sim (veja em Contratos)" : "—"]
-    ],
-    onEditar: () => editarCardAdmin(id),
-    onExcluir: () => excluirCardAdmin(id),
-    cliente: clienteId ? { nome: c.clienteNome, onClick: () => abrirDetalheCliente(clienteId, () => abrirDetalheCardAdmin(id)) } : null
-  });
+  const meuTicket = ++detalheTicket;
+  const render = (atividades) => {
+    if (meuTicket !== detalheTicket) return;
+    abrirDetalhe({
+      titulo: c.clienteNome,
+      etapaSelect: {
+        atual: c.etapa, opcoes: colunasAdmin(),
+        onMudar: (novaEtapa) => { fecharModal("modal-detalhe"); onMoveCard("administrativo", id, novaEtapa); }
+      },
+      campos: [
+        ["Valor total", esc(fmtMoeda(c.valorTotal))],
+        ["Contrato vinculado", c.contratoId ? "Sim (veja em Contratos)" : "—"]
+      ],
+      onEditar: () => editarCardAdmin(id),
+      onExcluir: () => excluirCardAdmin(id),
+      cliente: clienteId ? { nome: c.clienteNome, onClick: () => abrirDetalheCliente(clienteId, () => abrirDetalheCardAdmin(id)) } : null,
+      atividades: { itens: atividades, onNova: () => abrirModalAtividade("cardsAdmin", id, () => abrirDetalheCardAdmin(id)) }
+    });
+  };
+  render(null);
+  buscarAtividades("cardsAdmin", id).then(render);
 }
 
 /* ══════════════ RELATÓRIO DE FUNIL (conversão + tempo em cada etapa) ══════════════
-   Sob demanda (só ao clicar em "Relatório", não fica recalculando o
-   tempo todo): busca o histórico de cada card do funil (poucas dezenas de
-   documentos, tranquilo em paralelo) e reconstrói o conjunto de etapas que
-   cada card já visitou (posição atual + todo "para" já registrado). A
+   Sob demanda (só ao clicar em "Relatório", não fica recalculando o tempo
+   todo): usa os arrays `etapasPassadas`/`transicoes` já gravados em CADA
+   card (ver proximaTransicao/garantirTransicoes) — nunca mais um getDocs
+   por card a cada abertura. Card antigo, que ainda só tem o `historico`
+   de antes desta mudança, é migrado na hora (1 leitura, uma única vez por
+   card — ver garantirTransicoes) e depois nunca mais paga esse custo. A
    conversão entre etapas consecutivas é (quantos já chegaram na etapa N+1)
    / (quantos já chegaram na etapa N) — como o funil é de trânsito livre,
    isso é uma aproximação padrão de mercado (a mesma lógica que o funil do
@@ -2626,27 +2841,36 @@ function fmtDuracao(ms) {
 }
 
 async function calcularAnaliseFunil(cards, etapasSorted, colecaoNome) {
-  const historicos = await Promise.all(cards.map(async (c) => {
-    try {
-      const snap = await getDocs(collection(db, colecaoNome, c.id, "historico"));
-      return snap.docs.map((d) => d.data());
-    } catch (err) { return []; }
-  }));
+  const dados = await Promise.all(cards.map((c) => garantirTransicoes(colecaoNome, c)));
 
   const alcancaram = {};
   etapasSorted.forEach((e) => (alcancaram[e.id] = new Set()));
   cards.forEach((c, i) => {
-    if (alcancaram[c.etapa]) alcancaram[c.etapa].add(c.id);
-    historicos[i].forEach((h) => { if (h.para && alcancaram[h.para]) alcancaram[h.para].add(c.id); });
+    (dados[i].etapasPassadas || []).forEach((etId) => { if (alcancaram[etId]) alcancaram[etId].add(c.id); });
+    if (alcancaram[c.etapa]) alcancaram[c.etapa].add(c.id); // cobre card cujo array ainda não sabe da etapa atual
   });
 
+  // Tempo médio REAL (funil-crm regra 1): ordena as transições de cada
+  // card por data, pareia cada uma com a seguinte, e credita a DURAÇÃO à
+  // etapa de ORIGEM daquele par — a transição mais recente de cada card
+  // usa "agora" como fim, por estar em aberto. Isto troca "quanto tempo os
+  // cards ATUAIS estão parados" (o que existia antes) por "quanto tempo,
+  // em média, um card fica ali" de verdade — os dois números podem
+  // divergir bastante numa etapa por onde já passou muita gente mas que
+  // está vazia hoje.
   const agora = Date.now();
-  const temposAtuais = {};
-  etapasSorted.forEach((e) => (temposAtuais[e.id] = []));
-  cards.forEach((c) => {
-    if (!c.dataEntrouEtapa || !temposAtuais[c.etapa]) return;
-    const d = c.dataEntrouEtapa.toDate ? c.dataEntrouEtapa.toDate() : new Date(c.dataEntrouEtapa);
-    if (!isNaN(d.getTime())) temposAtuais[c.etapa].push(agora - d.getTime());
+  const duracoesPorEtapa = {};
+  etapasSorted.forEach((e) => (duracoesPorEtapa[e.id] = []));
+  cards.forEach((c, i) => {
+    const transicoes = (dados[i].transicoes || []).slice()
+      .sort((a, b) => (a.em?.toMillis?.() || 0) - (b.em?.toMillis?.() || 0));
+    transicoes.forEach((t, j) => {
+      const inicio = t.em?.toMillis ? t.em.toMillis() : null;
+      if (inicio == null || !duracoesPorEtapa[t.etapa]) return;
+      const proximo = transicoes[j + 1];
+      const fim = proximo?.em?.toMillis ? proximo.em.toMillis() : agora;
+      duracoesPorEtapa[t.etapa].push(Math.max(0, fim - inicio));
+    });
   });
 
   // A 1ª etapa conta por TOTAL de cards existentes, nunca por
@@ -2662,10 +2886,26 @@ async function calcularAnaliseFunil(cards, etapasSorted, colecaoNome) {
     const jaPassaram = jaPassaramPorEtapa[i];
     const anterior = i > 0 ? jaPassaramPorEtapa[i - 1] : jaPassaram;
     const conversao = i === 0 ? (jaPassaram > 0 ? 100 : 0) : (anterior > 0 ? (jaPassaram / anterior) * 100 : 0);
-    const tempos = temposAtuais[e.id];
-    const tempoMedioMs = tempos.length ? tempos.reduce((s, v) => s + v, 0) / tempos.length : null;
-    return { etapa: e, cardsAgora: cards.filter((c) => c.etapa === e.id).length, jaPassaram, conversao, tempoMedioMs };
+    const duracoes = duracoesPorEtapa[e.id];
+    const tempoMedioMs = duracoes.length ? duracoes.reduce((s, v) => s + v, 0) / duracoes.length : null;
+    const cardsAgoraLista = cards.filter((c) => c.etapa === e.id);
+    // Mesmo raciocínio do "jaPassaramPorEtapa": na 1ª etapa a lista É todo
+    // mundo, nunca só quem o array já sabe que passou por ali.
+    const jaPassaramLista = i === 0 ? cards : cards.filter((c) => alcancaram[e.id].has(c.id));
+    return { etapa: e, cardsAgora: cardsAgoraLista.length, jaPassaram, conversao, tempoMedioMs, cardsAgoraLista, jaPassaramLista };
   });
+}
+
+// Uma linha de "quem está por trás" de um número do relatório do funil —
+// mesma coluna base nos 3 funis (cliente/etapa atual/quando entrou), com
+// UM campo de detalhe que muda por funil (telefone no Agendamento, valor
+// proposto em Vendas, valor total no Administrativo).
+function linhaListaCardFunil(colecaoNome, c, etapasRaw) {
+  const etapaCfg = etapasRaw.find((e) => e.id === c.etapa);
+  const detalhe = colecaoNome === "oportunidades" ? fmtMoeda(c.valorProposto)
+    : colecaoNome === "cardsAdmin" ? fmtMoeda(c.valorTotal)
+    : (c.telefone || "—");
+  return [esc(c.clienteNome || "—"), esc(etapaCfg ? etapaCfg.nome : "—"), esc(detalhe), fmtData(dataLocalDeTimestamp(c.createdAt))];
 }
 
 // Filtro De/Até por relatório (um estado por funil — os 3 relatórios podem
@@ -2681,8 +2921,24 @@ const filtrosRelatorioFunil = {
   cardsAdmin: { de: "", ate: "" }
 };
 
-function renderRelatorioFunil(containerId, linhas, colecaoNome) {
+function renderRelatorioFunil(containerId, linhas, colecaoNome, etapasRaw) {
   const filtro = filtrosRelatorioFunil[colecaoNome];
+  // "Agora" e "Já passaram" viram números clicáveis (crença 17/pendência de
+  // drill-down) — mesmo mecanismo de CACHE_LISTA_KPI que Contratos,
+  // Despesas, Entradas e Clientes já usam, só que a chave carrega a etapa
+  // junto porque aqui tem uma tabela inteira de números, não 2 ou 3 KPIs.
+  linhas.forEach((l) => {
+    CACHE_LISTA_KPI[`funil_${colecaoNome}_${l.etapa.id}_agora`] = {
+      titulo: `${l.etapa.nome} — agora`, subtitulo: `${l.cardsAgoraLista.length} registro(s)`,
+      colunas: ["Cliente", "Etapa atual", "Detalhe", "Criado em"],
+      linhas: l.cardsAgoraLista.map((c) => linhaListaCardFunil(colecaoNome, c, etapasRaw))
+    };
+    CACHE_LISTA_KPI[`funil_${colecaoNome}_${l.etapa.id}_passaram`] = {
+      titulo: `${l.etapa.nome} — já passaram`, subtitulo: `${l.jaPassaramLista.length} registro(s)`,
+      colunas: ["Cliente", "Etapa atual", "Detalhe", "Criado em"],
+      linhas: l.jaPassaramLista.map((c) => linhaListaCardFunil(colecaoNome, c, etapasRaw))
+    };
+  });
   document.getElementById(containerId).innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
       <h2 style="margin:0;">Relatório do <span>funil</span></h2>
@@ -2694,19 +2950,19 @@ function renderRelatorioFunil(containerId, linhas, colecaoNome) {
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Etapa</th><th>Agora</th><th>Já passaram</th><th>Conversão</th><th>Tempo médio atual</th></tr></thead>
+        <thead><tr><th>Etapa</th><th>Agora</th><th>Já passaram</th><th>Conversão</th><th>Tempo médio</th></tr></thead>
         <tbody>
           ${linhas.map((l) => `<tr>
             <td>${esc(l.etapa.nome)}</td>
-            <td class="num">${l.cardsAgora}</td>
-            <td class="num">${l.jaPassaram}</td>
+            <td class="num clicavel" onclick="window.__jm.abrirListaKpi('funil_${colecaoNome}_${esc(l.etapa.id)}_agora')">${l.cardsAgora}</td>
+            <td class="num clicavel" onclick="window.__jm.abrirListaKpi('funil_${colecaoNome}_${esc(l.etapa.id)}_passaram')">${l.jaPassaram}</td>
             <td class="num">${l.conversao.toFixed(0)}%</td>
             <td class="num">${fmtDuracao(l.tempoMedioMs)}</td>
           </tr>`).join("")}
         </tbody>
       </table>
     </div>
-    <p class="hint" style="margin-top:10px;">"Já passaram" conta cada card que já esteve nessa etapa em algum momento (posição atual ou pelo histórico). Como o funil é de trânsito livre (arrastar pra qualquer etapa), a conversão é aproximada — não assume ordem estritamente sequencial. ${filtro.de || filtro.ate ? "Com período ativo, a tabela considera só os cards criados nesse recorte — \"Já passaram\"/tempo médio somam o histórico inteiro desses cards, não só o que aconteceu dentro do período." : "Sem período selecionado, mostra todos os cards de sempre."}</p>
+    <p class="hint" style="margin-top:10px;">"Já passaram" conta cada card que já esteve nessa etapa em algum momento (posição atual ou pelo histórico). "Tempo médio" é a duração real de cada passagem pela etapa (não quanto tempo os cards de HOJE estão parados) — clique nos números de "Agora"/"Já passaram" pra ver quem está por trás. Como o funil é de trânsito livre (arrastar pra qualquer etapa), a conversão é aproximada — não assume ordem estritamente sequencial. ${filtro.de || filtro.ate ? "Com período ativo, a tabela considera só os cards criados nesse recorte — \"Já passaram\"/tempo médio somam o histórico inteiro desses cards, não só o que aconteceu dentro do período." : "Sem período selecionado, mostra todos os cards de sempre."}</p>
   `;
 }
 
@@ -2722,8 +2978,9 @@ function configurarBotaoRelatorio(btnId, blocoId, getCards, getEtapas, colecaoNo
         const dataCriacao = dataLocalDeTimestamp(c.createdAt);
         return (!filtro.de || dataCriacao >= filtro.de) && (!filtro.ate || dataCriacao <= filtro.ate);
       });
-      const linhas = await calcularAnaliseFunil(cardsFiltrados, getEtapas(), colecaoNome);
-      renderRelatorioFunil(blocoId, linhas, colecaoNome);
+      const etapasRaw = getEtapas();
+      const linhas = await calcularAnaliseFunil(cardsFiltrados, etapasRaw, colecaoNome);
+      renderRelatorioFunil(blocoId, linhas, colecaoNome, etapasRaw);
       bloco.querySelector(".rf-de").addEventListener("change", (e) => { filtrosRelatorioFunil[colecaoNome].de = e.target.value; recalcular(); });
       bloco.querySelector(".rf-ate").addEventListener("change", (e) => { filtrosRelatorioFunil[colecaoNome].ate = e.target.value; recalcular(); });
       bloco.querySelector(".rf-limpar").addEventListener("click", () => {
@@ -3948,7 +4205,7 @@ window.__jm = {
   abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela, abrirDetalheEntrada,
   abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin,
   gerarPdfContratoExistente, enviarContratoParaAssinatura,
-  abrirListaKpi, onCardClick, copiarTelefone,
+  abrirListaKpi, onCardClick, onMoveCard, copiarTelefone,
   abrirDetalheUsuario, alternarSituacaoUsuario
 };
 

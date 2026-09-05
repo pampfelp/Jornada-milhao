@@ -156,6 +156,16 @@ service cloud.firestore {
         allow update: if false;
         allow delete: if equipe();
       }
+
+      // Conversa/ligação registrada sem mudar de etapa (funil-crm regra 3).
+      // Mesmo formato de historico: append-only, apagado em cascata junto
+      // com o card pai.
+      match /atividades/{atId} {
+        allow read: if equipe();
+        allow create: if equipe();
+        allow update: if false;
+        allow delete: if equipe();
+      }
     }
 
     match /etapasAgendamentoConfig/{id} {
@@ -183,6 +193,13 @@ service cloud.firestore {
       allow delete: if equipe();
 
       match /historico/{logId} {
+        allow read: if equipe();
+        allow create: if equipe();
+        allow update: if false;
+        allow delete: if equipe();
+      }
+
+      match /atividades/{atId} {
         allow read: if equipe();
         allow create: if equipe();
         allow update: if false;
@@ -227,6 +244,13 @@ service cloud.firestore {
       allow delete: if equipe();
 
       match /historico/{logId} {
+        allow read: if equipe();
+        allow create: if equipe();
+        allow update: if false;
+        allow delete: if equipe();
+      }
+
+      match /atividades/{atId} {
         allow read: if equipe();
         allow create: if equipe();
         allow update: if false;

@@ -689,6 +689,25 @@
   </div>
 </div>
 
+<!-- ═══ MODAL: REGISTRAR ATIVIDADE (conversa/ligação, sem mudar de etapa) ═══ -->
+<div class="modal-overlay" id="modal-atividade">
+  <div class="modal-box modal-compacto">
+    <h2>Registrar atividade</h2>
+    <div class="field">
+      <label>Tipo</label>
+      <select id="mat-tipo">
+        <option value="Conversa no WhatsApp">Conversa no WhatsApp</option>
+        <option value="Ligação">Ligação</option>
+      </select>
+    </div>
+    <div class="field"><label>Nota (opcional)</label><textarea id="mat-nota" placeholder="O que foi conversado?"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-atividade">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-atividade">Salvar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ MODAL: GERADOR DE CONTRATO ═══ -->
 <div class="modal-overlay" id="modal-contrato">
   <div class="modal-box modal-wide">
