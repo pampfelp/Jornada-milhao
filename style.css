@@ -255,6 +255,25 @@ tbody tr.linha-clicavel{cursor:pointer;}
 .funil-kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;}
 .funil-kpi .tag{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-faint);font-weight:600;}
 .funil-kpi .num{font-family:var(--display);font-size:22px;font-weight:700;margin-top:8px;color:var(--ink);}
+.funil-kpi .sub{font-size:11.5px;color:var(--ink-faint);margin-top:5px;}
+
+/* Busca dos funis — cresce pra ocupar a sobra da barra de controles, mas
+   sem espremer os botões de período quando a linha fica apertada. */
+.busca-funil{flex:1;min-width:200px;}
+.busca-funil input{width:100%;}
+
+/* Cabeçalho ordenável: a seta só aparece na coluna ativa, e gira quando a
+   ordem inverte — nunca troca o conteúdo do elemento por outro caractere
+   (o JS reescreveria por cima no primeiro clique). */
+th[data-ordenar]{cursor:pointer;user-select:none;white-space:nowrap;}
+th[data-ordenar]:hover{color:var(--ink);}
+th[data-ordenar].ordenado{color:var(--dourado);}
+th[data-ordenar].ordenado::after{content:"";display:inline-block;margin-left:6px;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid currentColor;vertical-align:middle;transition:transform .15s ease;}
+th[data-ordenar].ordenado.ordenado-asc::after{transform:rotate(180deg);}
+
+.tel-copiar{cursor:pointer;border-bottom:1px dotted var(--ink-faint);}
+.tel-copiar:hover{color:var(--dourado);border-bottom-color:var(--dourado);}
+.tel-copiar.copiado{color:var(--credit);border-bottom-color:var(--credit);}
 
 @media (max-width:640px){
   .app{padding:16px 14px 80px;}

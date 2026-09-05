@@ -207,6 +207,7 @@
         </div>
       </div>
       <p class="hint" style="margin-bottom:14px;">Funil comum — arraste o card livremente entre as etapas. A única automação é a etapa "Agendado": ao chegar nela, o sistema pede telefone e data/hora do agendamento, cria o evento na Google Agenda e o card já entra como novo lead no Funil de Vendas.</p>
+      <div class="funil-kpis" id="agendamento-kpis"></div>
       <div class="card" id="relatorio-agendamento" style="display:none;"></div>
       <div class="row" style="margin-bottom:14px;align-items:flex-start;flex-wrap:wrap;gap:10px;">
         <div class="view-toggle" id="view-toggle-agendamento">
@@ -225,11 +226,12 @@
           <div class="field"><label>De</label><input type="date" class="pf-de"></div>
           <div class="field"><label>Até</label><input type="date" class="pf-ate"></div>
         </div>
+        <div class="field busca-funil"><input type="text" id="busca-agendamento" placeholder="Buscar lead, telefone, e-mail, etapa…"></div>
       </div>
       <div class="kanban-wrap" id="kanban-agendamento"></div>
       <div class="table-wrap lista-funil" id="lista-agendamento" style="display:none;">
         <table>
-          <thead><tr><th>Cliente</th><th>Etapa</th><th>Detalhe</th><th>SLA</th><th>Criado em</th></tr></thead>
+          <thead><tr><th data-ordenar="cliente">Cliente</th><th data-ordenar="etapa">Etapa</th><th>Detalhe</th><th data-ordenar="sla">SLA</th><th data-ordenar="createdAt">Criado em</th></tr></thead>
           <tbody id="lista-agendamento-corpo"></tbody>
         </table>
       </div>
@@ -263,11 +265,12 @@
           <div class="field"><label>De</label><input type="date" class="pf-de"></div>
           <div class="field"><label>Até</label><input type="date" class="pf-ate"></div>
         </div>
+        <div class="field busca-funil"><input type="text" id="busca-vendas" placeholder="Buscar cliente, telefone, e-mail, etapa…"></div>
       </div>
       <div class="kanban-wrap" id="kanban-vendas"></div>
       <div class="table-wrap lista-funil" id="lista-vendas" style="display:none;">
         <table>
-          <thead><tr><th>Cliente</th><th>Etapa</th><th>Detalhe</th><th>SLA</th><th>Criado em</th></tr></thead>
+          <thead><tr><th data-ordenar="cliente">Cliente</th><th data-ordenar="etapa">Etapa</th><th>Detalhe</th><th data-ordenar="sla">SLA</th><th data-ordenar="createdAt">Criado em</th></tr></thead>
           <tbody id="lista-vendas-corpo"></tbody>
         </table>
       </div>
@@ -279,6 +282,7 @@
         <div class="top-actions"><button class="btn" id="btn-relatorio-administrativo"><svg class="ico-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Relatório</button></div>
       </div>
       <p class="hint" style="margin-bottom:14px;">Pós-venda: prazos, grupo, recebimento, execução. O topo é alimentado automaticamente pela geração do contrato.</p>
+      <div class="funil-kpis" id="administrativo-kpis"></div>
       <div class="card" id="relatorio-administrativo" style="display:none;"></div>
       <div class="row" style="margin-bottom:14px;align-items:flex-start;flex-wrap:wrap;gap:10px;">
         <div class="view-toggle" id="view-toggle-administrativo">
@@ -297,11 +301,12 @@
           <div class="field"><label>De</label><input type="date" class="pf-de"></div>
           <div class="field"><label>Até</label><input type="date" class="pf-ate"></div>
         </div>
+        <div class="field busca-funil"><input type="text" id="busca-administrativo" placeholder="Buscar cliente, valor, etapa…"></div>
       </div>
       <div class="kanban-wrap" id="kanban-administrativo"></div>
       <div class="table-wrap lista-funil" id="lista-administrativo" style="display:none;">
         <table>
-          <thead><tr><th>Cliente</th><th>Etapa</th><th>Detalhe</th><th>SLA</th><th>Criado em</th></tr></thead>
+          <thead><tr><th data-ordenar="cliente">Cliente</th><th data-ordenar="etapa">Etapa</th><th>Detalhe</th><th data-ordenar="sla">SLA</th><th data-ordenar="createdAt">Criado em</th></tr></thead>
           <tbody id="lista-administrativo-corpo"></tbody>
         </table>
       </div>

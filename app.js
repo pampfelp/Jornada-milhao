@@ -42,6 +42,17 @@ const STATE = {
   funilPeriodoPreset: { agendamento: "tudo", vendas: "tudo", administrativo: "tudo" },
   funilPeriodoCustom: {
     agendamento: { de: "", ate: "" }, vendas: { de: "", ate: "" }, administrativo: { de: "", ate: "" }
+  },
+  // Busca por funil, no mesmo padrão de Contratos/Clientes/Despesas. Filtra
+  // as DUAS visões ao mesmo tempo (Kanban e Lista) porque as duas saem do
+  // mesmo array de cards — ver filtrarCardsFunil.
+  buscaFunil: { agendamento: "", vendas: "", administrativo: "" },
+  // Ordenação da visão em Lista, por funil. "campo" é a coluna e "desc" a
+  // direção. O padrão (criado em, mais recente primeiro) é o de sempre.
+  ordemLista: {
+    agendamento: { campo: "createdAt", desc: true },
+    vendas: { campo: "createdAt", desc: true },
+    administrativo: { campo: "createdAt", desc: true }
   }
 };
 
@@ -841,8 +852,97 @@ function filtrarCardsPorPeriodoFunil(cards, funil) {
     return (!de || data >= de) && (!ate || data <= ate);
   });
 }
+
+// Busca sem acento e sem caixa: quem digita "joao" acha "João", que é o
+// caso real de quem procura um lead com o telefone tocando.
+function normalizarBusca(texto) {
+  return String(texto || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+/**
+ * Período + busca, na mesma passada. As duas visões (Kanban e Lista) leem
+ * daqui, então o que a busca esconde some das duas — sem isso, o número da
+ * coluna do Kanban discordaria da lista logo ao lado.
+ *
+ * "textoDoCard" é a única parte que cada funil precisa dizer: o resto do
+ * filtro é igual pros três.
+ */
+function filtrarCardsFunil(cards, funil, etapasRaw, textoDoCard) {
+  const doPeriodo = filtrarCardsPorPeriodoFunil(cards, funil);
+  const termo = normalizarBusca(STATE.buscaFunil[funil]).trim();
+  if (!termo) return doPeriodo;
+  return doPeriodo.filter((c) => {
+    const etapaCfg = etapasRaw.find((e) => e.id === c.etapa);
+    const alvo = [textoDoCard(c), etapaCfg ? etapaCfg.nome : "", fmtData(dataLocalDeTimestamp(c.createdAt))].join(" ");
+    return normalizarBusca(alvo).includes(termo);
+  });
+}
+
+/**
+ * KPIs de topo dos funis (crença 17: toda tela de listagem mostra os
+ * próprios números). Os três funis usam esta função pra que "atrasados"
+ * signifique a MESMA coisa nos três — SLA vermelho, calculado pela mesma
+ * função que pinta a bolinha do card, nunca uma segunda régua.
+ */
+function kpisFunil(cards, etapasRaw, extras) {
+  const atrasados = cards.filter((c) => {
+    const sla = calcularStatusSla(c.dataEntrouEtapa, etapasRaw.find((e) => e.id === c.etapa));
+    return sla && sla.cor === "vermelho";
+  }).length;
+  return [...extras, { tag: "Atrasados", num: String(atrasados), sub: "no vermelho do SLA" }]
+    .map((k) => `<div class="funil-kpi"><div class="tag">${esc(k.tag)}</div><div class="num">${k.num}</div>${k.sub ? `<div class="sub">${esc(k.sub)}</div>` : ""}</div>`)
+    .join("");
+}
+/**
+ * Ordena a lista pelo campo escolhido no cabeçalho. Só os campos que a
+ * tabela mostra, e sempre com um critério de desempate estável (data de
+ * criação), senão duas linhas iguais trocam de lugar a cada render e a
+ * tela "pisca" sozinha.
+ */
+function ordenarLinhasFunil(cards, funil, etapasRaw) {
+  const { campo, desc } = STATE.ordemLista[funil];
+  const criadoEm = (c) => c.createdAt?.seconds || 0;
+  // Card sem data de entrada na etapa não tem SLA nenhum (a coluna mostra
+  // "—"). Ele vai pro fim nas DUAS direções: sem isso, o primeiro clique em
+  // SLA, que deveria trazer o mais atrasado, traria justamente as linhas que
+  // não têm atraso pra mostrar.
+  const semDado = (c) => campo === "sla" && !(c.dataEntrouEtapa?.toDate ? c.dataEntrouEtapa.toDate() : null);
+  const chave = (c) => {
+    if (campo === "cliente") return normalizarBusca(c.clienteNome || "");
+    if (campo === "etapa") {
+      const e = etapasRaw.find((x) => x.id === c.etapa);
+      // Por ORDEM da etapa, não por nome: o funil tem uma sequência, e
+      // ordenar alfabeticamente embaralharia essa sequência.
+      return e ? e.ordem : 9999;
+    }
+    if (campo === "sla") {
+      // Tempo PARADO na etapa, não a data de entrada. Assim "maior primeiro"
+      // (que é o primeiro clique) quer dizer "mais atrasado primeiro", que é
+      // o que se espera de uma coluna de SLA.
+      const d = c.dataEntrouEtapa.toDate ? c.dataEntrouEtapa.toDate() : new Date(c.dataEntrouEtapa);
+      return Date.now() - d.getTime();
+    }
+    return criadoEm(c);
+  };
+  return cards.slice().sort((a, b) => {
+    const va = semDado(a), vb = semDado(b);
+    if (va !== vb) return va ? 1 : -1;
+    if (va && vb) return criadoEm(b) - criadoEm(a);
+    const ka = chave(a), kb = chave(b);
+    if (ka < kb) return desc ? 1 : -1;
+    if (ka > kb) return desc ? -1 : 1;
+    return criadoEm(b) - criadoEm(a);
+  });
+}
+
 function renderListaFunil(funil, cards, etapasRaw, getEtapaFn, detalheFn) {
-  const linhas = cards.slice().sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  const linhas = ordenarLinhasFunil(cards, funil, etapasRaw);
+  const { campo, desc } = STATE.ordemLista[funil];
+  document.querySelectorAll(`#lista-${funil} th[data-ordenar]`).forEach((th) => {
+    const ativo = th.dataset.ordenar === campo;
+    th.classList.toggle("ordenado", ativo);
+    th.classList.toggle("ordenado-asc", ativo && !desc);
+  });
   document.getElementById(`lista-${funil}-corpo`).innerHTML = linhas.length ? linhas.map((c) => {
     const etapaCfg = etapasRaw.find((e) => e.id === getEtapaFn(c));
     return `<tr class="linha-clicavel" onclick="window.__jm.onCardClick('${funil}','${esc(c.id)}')">
@@ -853,6 +953,22 @@ function renderListaFunil(funil, cards, etapasRaw, getEtapaFn, detalheFn) {
       <td>${fmtData(dataLocalDeTimestamp(c.createdAt))}</td>
     </tr>`;
   }).join("") : `<tr><td colspan="5"><div class="empty">Nenhum card nesse recorte.</div></td></tr>`;
+}
+
+/**
+ * Telefone com um clique pra copiar. O stopPropagation não é detalhe: o
+ * telefone vive dentro de uma linha/card que abre o detalhe ao ser clicado,
+ * e sem isso copiar o número abriria o cadastro por cima.
+ */
+function telefoneCopiavel(telefone) {
+  if (!telefone) return "—";
+  return `<span class="tel-copiar" title="Clique para copiar" onclick="event.stopPropagation();window.__jm.copiarTelefone('${esc(telefone)}',this)">${esc(telefone)}</span>`;
+}
+function copiarTelefone(telefone, el) {
+  navigator.clipboard.writeText(telefone).then(() => {
+    mostrarToast("Telefone copiado.");
+    if (el) { el.classList.add("copiado"); setTimeout(() => el.classList.remove("copiado"), 900); }
+  }).catch(() => mostrarErro("Não foi possível copiar. Copie manualmente: " + telefone));
 }
 // Liga o par de botões Kanban/Lista e o grupo de período pra um funil —
 // chamado uma vez por funil, na carga do módulo (os elementos já existem
@@ -888,6 +1004,23 @@ function wireToggleFunil(funil, aoMudar) {
   custom.querySelector(".pf-ate").addEventListener("change", (e) => {
     STATE.funilPeriodoCustom[funil].ate = e.target.value || "";
     aoMudar();
+  });
+
+  document.getElementById(`busca-${funil}`).addEventListener("input", (e) => {
+    STATE.buscaFunil[funil] = e.target.value || "";
+    aoMudar();
+  });
+
+  document.querySelectorAll(`#lista-${funil} th[data-ordenar]`).forEach((th) => {
+    th.addEventListener("click", () => {
+      const atual = STATE.ordemLista[funil];
+      // Clicar de novo na mesma coluna inverte; coluna nova começa
+      // decrescente, que é o que quase sempre se quer ver primeiro.
+      STATE.ordemLista[funil] = atual.campo === th.dataset.ordenar
+        ? { campo: atual.campo, desc: !atual.desc }
+        : { campo: th.dataset.ordenar, desc: true };
+      aoMudar();
+    });
   });
 }
 
@@ -946,9 +1079,17 @@ function colunasAgendamento() {
 }
 
 function renderKanbanAgendamento() {
-  const cards = filtrarCardsPorPeriodoFunil(STATE.agendamentos, "agendamento");
+  const cards = filtrarCardsFunil(STATE.agendamentos, "agendamento", STATE.etapasAgendamento,
+    (a) => [a.clienteNome, a.telefone, a.email, a.instagram, a.observacoes, a.motivoPerda].join(" "));
   renderKanban("kanban-agendamento", "agendamento", colunasAgendamento(), cards, (a) => a.etapa, renderCardAgendamento);
-  renderListaFunil("agendamento", cards, STATE.etapasAgendamento, (a) => a.etapa, (a) => `${esc(a.telefone || "—")}${a.data ? ` · ${fmtData(a.data)} ${esc(a.hora || "")}` : ""}`);
+  renderListaFunil("agendamento", cards, STATE.etapasAgendamento, (a) => a.etapa,
+    (a) => `${telefoneCopiavel(a.telefone)}${a.data ? ` · ${fmtData(a.data)} ${esc(a.hora || "")}` : ""}`);
+
+  const comAgenda = cards.filter((a) => !!a.data).length;
+  document.getElementById("agendamento-kpis").innerHTML = kpisFunil(cards, STATE.etapasAgendamento, [
+    { tag: "Leads no recorte", num: String(cards.length), sub: "período e busca aplicados" },
+    { tag: "Com data marcada", num: String(comAgenda), sub: "reunião já agendada" }
+  ]);
 }
 wireToggleFunil("agendamento", renderKanbanAgendamento);
 
@@ -1312,15 +1453,18 @@ function renderCardOportunidade(o) {
 }
 
 function renderKanbanVendas() {
-  const cards = filtrarCardsPorPeriodoFunil(STATE.oportunidades, "vendas");
+  const cards = filtrarCardsFunil(STATE.oportunidades, "vendas", STATE.etapasVenda,
+    (o) => [o.clienteNome, o.telefone, o.email, o.instagram, o.observacoes, o.motivoPerda].join(" "));
   renderKanban("kanban-vendas", "vendas", colunasVendas(), cards, (o) => o.etapa, renderCardOportunidade);
-  renderListaFunil("vendas", cards, STATE.etapasVenda, (o) => o.etapa, (o) => `${fmtMoeda(o.valorProposto)} · ${esc(o.telefone || "—")}`);
+  renderListaFunil("vendas", cards, STATE.etapasVenda, (o) => o.etapa,
+    (o) => `${fmtMoeda(o.valorProposto)} · ${telefoneCopiavel(o.telefone)}`);
+
   const ativas = cards.filter((o) => !o.perdida);
   const valorTotal = ativas.reduce((s, o) => s + (Number(o.valorProposto) || 0), 0);
-  document.getElementById("vendas-kpis").innerHTML = `
-    <div class="funil-kpi"><div class="tag">Oportunidades ativas</div><div class="num">${ativas.length}</div></div>
-    <div class="funil-kpi"><div class="tag">Valor em negociação</div><div class="num">${fmtMoeda(valorTotal)}</div></div>
-  `;
+  document.getElementById("vendas-kpis").innerHTML = kpisFunil(cards, STATE.etapasVenda, [
+    { tag: "Oportunidades ativas", num: String(ativas.length), sub: "sem contar as perdidas" },
+    { tag: "Valor em negociação", num: fmtMoeda(valorTotal), sub: "soma das ativas" }
+  ]);
 }
 wireToggleFunil("vendas", renderKanbanVendas);
 
@@ -2390,9 +2534,16 @@ function renderCardAdmin(c) {
 
 function renderKanbanAdministrativo() {
   const colunas = [...STATE.etapasAdmin].sort((a, b) => a.ordem - b.ordem).map((e) => ({ id: e.id, nome: e.nome }));
-  const cards = filtrarCardsPorPeriodoFunil(STATE.cardsAdmin, "administrativo");
+  const cards = filtrarCardsFunil(STATE.cardsAdmin, "administrativo", STATE.etapasAdmin,
+    (c) => [c.clienteNome, String(c.valorTotal || "")].join(" "));
   renderKanban("kanban-administrativo", "administrativo", colunas, cards, (c) => c.etapa, renderCardAdmin);
   renderListaFunil("administrativo", cards, STATE.etapasAdmin, (c) => c.etapa, (c) => fmtMoeda(c.valorTotal));
+
+  const valorTotal = cards.reduce((s, c) => s + (Number(c.valorTotal) || 0), 0);
+  document.getElementById("administrativo-kpis").innerHTML = kpisFunil(cards, STATE.etapasAdmin, [
+    { tag: "Contratos em execução", num: String(cards.length), sub: "período e busca aplicados" },
+    { tag: "Valor total", num: fmtMoeda(valorTotal), sub: "soma dos contratos" }
+  ]);
 }
 wireToggleFunil("administrativo", renderKanbanAdministrativo);
 
@@ -3790,7 +3941,7 @@ window.__jm = {
   abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela, abrirDetalheEntrada,
   abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin,
   gerarPdfContratoExistente, enviarContratoParaAssinatura,
-  abrirListaKpi, onCardClick,
+  abrirListaKpi, onCardClick, copiarTelefone,
   abrirDetalheUsuario, alternarSituacaoUsuario
 };
 
