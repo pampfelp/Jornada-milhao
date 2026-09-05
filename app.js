@@ -2729,11 +2729,22 @@ function renderFinanceiro() {
   // Despesa não paga não some quando o mês vira: ela vaza pro período seguinte
   // (e pros depois dele, enquanto continuar pendente) e soma junto no KPI,
   // até ser marcada como paga. Pedido dele em 2026-09-05.
+  //
+  // Adiantamento é diferente: ele abate o total de outra despesa, então tem
+  // que continuar abatendo mesmo depois de marcado como pago — senão marcar
+  // "pago" no adiantamento faz a despesa do mês SUBIR (o abatimento some
+  // junto), quando na real nada mudou sobre quanto ainda falta. Achado dele
+  // em 2026-09-05, testando o caso do adiantamento do Igor Costa.
   const despesasVencidas = STATE.despesas
     .filter((d) => d.tipo === "despesa" && statusDespesa(d) === "esperado" && (d.data || "").slice(0, 7) < periodo)
     .sort((a, b) => (a.data || "").localeCompare(b.data || ""));
-  const despesasMes = STATE.despesas.filter((d) => d.tipo === "despesa" && (d.data || "").slice(0, 7) === periodo).reduce((s, d) => s + valorComSinal(d), 0)
-    + despesasVencidas.reduce((s, d) => s + valorComSinal(d), 0);
+  const despesasQueContam = STATE.despesas.filter((d) => {
+    if (d.tipo !== "despesa") return false;
+    const mes = (d.data || "").slice(0, 7);
+    if (mes === periodo) return true;
+    return mes < periodo && (ehAdiantamento(d) || statusDespesa(d) === "esperado");
+  });
+  const despesasMes = despesasQueContam.reduce((s, d) => s + valorComSinal(d), 0);
   const outrosCustos = STATE.despesas.filter((d) => d.tipo === "outro_custo" && (d.data || "").slice(0, 7) === periodo).reduce((s, d) => s + valorComSinal(d), 0);
   const lucroOperacional = fluxoRealizado - despesasMes;
   const saldoEstimado = lucroOperacional - outrosCustos;
@@ -2965,20 +2976,33 @@ function renderTabelaDespesas() {
     return alvo.includes(termoBusca);
   });
 
-  const pendentes = linhasVisiveis.filter((d) => statusDespesa(d) === "esperado");
-  const pagas = linhasVisiveis.filter((d) => statusDespesa(d) === "realizado");
+  // Adiantamento abate o total pendente esteja pago ou não — é crédito contra
+  // outra despesa, não uma despesa nova. Só vira "pago" de verdade (soma
+  // positivo em Total pago) quando ele mesmo é confirmado. Sem separar assim,
+  // marcar "pago" no adiantamento fazia o Total pendente SUBIR (o abatimento
+  // sumia da conta) e o Total pago ficar negativo. Achado dele em 2026-09-05,
+  // testando com o adiantamento do Igor Costa.
+  const naoAdiantamento = linhasVisiveis.filter((d) => !ehAdiantamento(d));
+  const adiantamentos = linhasVisiveis.filter((d) => ehAdiantamento(d));
+  const adiantamentosPagos = adiantamentos.filter((d) => statusDespesa(d) === "realizado");
+  const pendentes = naoAdiantamento.filter((d) => statusDespesa(d) === "esperado");
+  const pagas = naoAdiantamento.filter((d) => statusDespesa(d) === "realizado");
   const aPagarAteHoje = pendentes.filter((d) => (d.data || "") <= hoje);
-  const somar = (lista) => lista.reduce((s, d) => s + valorComSinal(d), 0);
+  const somarBruto = (lista) => lista.reduce((s, d) => s + Math.abs(Number(d.valor) || 0), 0);
+  const totalAdiantamentos = somarBruto(adiantamentos);
+  const totalAPagarAteHoje = somarBruto(aPagarAteHoje) - totalAdiantamentos;
+  const totalPendente = somarBruto(pendentes) - totalAdiantamentos;
+  const totalPago = somarBruto(pagas) + somarBruto(adiantamentosPagos);
 
   const linhaLista = (d) => [esc(d.descricao) + (ehAdiantamento(d) ? " (adiantamento)" : ""), esc(d.categoria || "—"), fmtMoeda(Math.abs(Number(d.valor) || 0)), fmtData(d.data)];
-  CACHE_LISTA_KPI.despesasAPagarHoje = { titulo: "A pagar até hoje", subtitulo: `${aPagarAteHoje.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: aPagarAteHoje.map(linhaLista) };
-  CACHE_LISTA_KPI.despesasPendentes = { titulo: "Total pendente", subtitulo: `${pendentes.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: pendentes.map(linhaLista) };
-  CACHE_LISTA_KPI.despesasPagas = { titulo: "Total pago", subtitulo: `${pagas.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: pagas.map(linhaLista) };
+  CACHE_LISTA_KPI.despesasAPagarHoje = { titulo: "A pagar até hoje", subtitulo: `${aPagarAteHoje.length + adiantamentos.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: aPagarAteHoje.concat(adiantamentos).map(linhaLista) };
+  CACHE_LISTA_KPI.despesasPendentes = { titulo: "Total pendente", subtitulo: `${pendentes.length + adiantamentos.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: pendentes.concat(adiantamentos).map(linhaLista) };
+  CACHE_LISTA_KPI.despesasPagas = { titulo: "Total pago", subtitulo: `${pagas.length + adiantamentosPagos.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: pagas.concat(adiantamentosPagos).map(linhaLista) };
 
   document.getElementById("despesas-kpis").innerHTML = `
-    <div class="kpi-card negative"><div class="label">A pagar até hoje</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('despesasAPagarHoje')">${fmtMoeda(somar(aPagarAteHoje))}</div><div class="sub">pendentes com data de hoje ou anterior</div></div>
-    <div class="kpi-card"><div class="label">Total pendente</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('despesasPendentes')">${fmtMoeda(somar(pendentes))}</div><div class="sub">todas as não pagas do período (inclusive futuras)</div></div>
-    <div class="kpi-card positive"><div class="label">Total pago</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('despesasPagas')">${fmtMoeda(somar(pagas))}</div><div class="sub">todas as pagas do período</div></div>
+    <div class="kpi-card negative"><div class="label">A pagar até hoje</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('despesasAPagarHoje')">${fmtMoeda(totalAPagarAteHoje)}</div><div class="sub">pendentes com data de hoje ou anterior</div></div>
+    <div class="kpi-card"><div class="label">Total pendente</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('despesasPendentes')">${fmtMoeda(totalPendente)}</div><div class="sub">todas as não pagas do período (inclusive futuras)</div></div>
+    <div class="kpi-card positive"><div class="label">Total pago</div><div class="value clicavel" onclick="window.__jm.abrirListaKpi('despesasPagas')">${fmtMoeda(totalPago)}</div><div class="sub">todas as pagas do período</div></div>
   `;
 
   document.getElementById("tabela-despesas").innerHTML = linhasVisiveis
