@@ -2784,14 +2784,23 @@ function renderFinanceiro() {
     <td><button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('despesa','${d.id}')">Marcar pago</button></td>
   </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma despesa vencida em aberto.</div></td></tr>`;
 
+  const hoje = hojeStr();
   const despesasDoPeriodo = STATE.despesas
     .filter((d) => (d.data || "").slice(0, 7) === periodo)
     .sort((a, b) => (a.data || "").localeCompare(b.data || ""));
-  document.getElementById("tabela-despesas-periodo").innerHTML = despesasDoPeriodo.map((d) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheDespesa('${d.id}')">
+  document.getElementById("tabela-despesas-periodo").innerHTML = despesasDoPeriodo.map((d) => {
+    const status = statusDespesa(d);
+    const vencida = status === "esperado" && (d.data || "") <= hoje;
+    return `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheDespesa('${d.id}')">
     <td>${esc(d.descricao)}${seloAdiantamento(d)}</td><td>${esc(d.categoria || "—")}</td>
     <td>${d.tipo === "despesa" ? "Despesa" : "Outro custo"}</td>
     <td class="num">${fmtMoeda(Math.abs(Number(d.valor) || 0))}</td><td>${fmtData(d.data)}</td>
-  </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma despesa lançada neste período.</div></td></tr>`;
+    <td><span class="stamp ${status === "realizado" ? "realizado" : vencida ? "vencido" : "esperado"}">${status === "realizado" ? "Pago" : vencida ? "A pagar" : "Pendente"}</span></td>
+    <td>${status === "realizado"
+      ? `<button class="btn-small" onclick="event.stopPropagation();window.__jm.desmarcarPago('despesa','${d.id}')">Desfazer</button>`
+      : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('despesa','${d.id}')">Marcar pago</button>`}</td>
+  </tr>`;
+  }).join("") || `<tr><td colspan="7"><div class="empty">Nenhuma despesa lançada neste período.</div></td></tr>`;
 }
 
 /* ══════════════ DESPESAS & CUSTOS ══════════════ */
