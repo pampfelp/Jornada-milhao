@@ -163,6 +163,16 @@
     </div>
 
     <div class="card">
+      <h2>Despesas vencidas e não pagas <span style="color:var(--ink-faint);font-weight:500;font-size:12px;">— de meses anteriores, ainda contando no mês atual</span></h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Descrição</th><th>Categoria</th><th>Vencimento</th><th>Valor</th><th></th></tr></thead>
+          <tbody id="tabela-despesas-vencidas"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>Despesas &amp; custos do período</h2>
       <div class="table-wrap">
         <table>
@@ -805,6 +815,7 @@
     </div>
     <div class="field"><label>Chave PIX</label><input type="text" id="md-chavepix" placeholder="CPF/CNPJ, e-mail, telefone ou chave aleatória"></div>
     <label class="checkbox-field"><input type="checkbox" id="md-recorrente"> Despesa recorrente (relança sozinha todo mês)</label>
+    <label class="checkbox-field"><input type="checkbox" id="md-adiantamento"> É um adiantamento (abate outra despesa — entra como crédito no total, valor digitado normalmente positivo)</label>
     <div class="modal-actions">
       <button class="btn" data-fechar-modal="modal-despesa">Cancelar</button>
       <button class="btn btn-primary" id="btn-salvar-despesa">Salvar</button>

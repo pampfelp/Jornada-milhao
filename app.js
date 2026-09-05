@@ -2726,8 +2726,15 @@ function renderFinanceiro() {
       .filter((e) => e.status === "realizado" && (e.dataPagamento || "").slice(0, 7) === periodo)
       .reduce((s, e) => s + (Number(e.valor) || 0), 0);
 
-  const despesasMes = STATE.despesas.filter((d) => d.tipo === "despesa" && (d.data || "").slice(0, 7) === periodo).reduce((s, d) => s + (Number(d.valor) || 0), 0);
-  const outrosCustos = STATE.despesas.filter((d) => d.tipo === "outro_custo" && (d.data || "").slice(0, 7) === periodo).reduce((s, d) => s + (Number(d.valor) || 0), 0);
+  // Despesa não paga não some quando o mês vira: ela vaza pro período seguinte
+  // (e pros depois dele, enquanto continuar pendente) e soma junto no KPI,
+  // até ser marcada como paga. Pedido dele em 2026-09-05.
+  const despesasVencidas = STATE.despesas
+    .filter((d) => d.tipo === "despesa" && statusDespesa(d) === "esperado" && (d.data || "").slice(0, 7) < periodo)
+    .sort((a, b) => (a.data || "").localeCompare(b.data || ""));
+  const despesasMes = STATE.despesas.filter((d) => d.tipo === "despesa" && (d.data || "").slice(0, 7) === periodo).reduce((s, d) => s + valorComSinal(d), 0)
+    + despesasVencidas.reduce((s, d) => s + valorComSinal(d), 0);
+  const outrosCustos = STATE.despesas.filter((d) => d.tipo === "outro_custo" && (d.data || "").slice(0, 7) === periodo).reduce((s, d) => s + valorComSinal(d), 0);
   const lucroOperacional = fluxoRealizado - despesasMes;
   const saldoEstimado = lucroOperacional - outrosCustos;
 
@@ -2759,13 +2766,20 @@ function renderFinanceiro() {
         : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.desmarcarPago('parcela','${p.id}')">Desfazer</button>`}</td>
     </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma parcela neste período.</div></td></tr>`;
 
+  const seloAdiantamento = (d) => ehAdiantamento(d) ? ' <span class="stamp andamento">Adiantamento</span>' : "";
+  document.getElementById("tabela-despesas-vencidas").innerHTML = despesasVencidas.map((d) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheDespesa('${d.id}')">
+    <td>${esc(d.descricao)}${seloAdiantamento(d)}</td><td>${esc(d.categoria || "—")}</td>
+    <td>${fmtData(d.data)}</td><td class="num">${fmtMoeda(Math.abs(Number(d.valor) || 0))}</td>
+    <td><button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('despesa','${d.id}')">Marcar pago</button></td>
+  </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma despesa vencida em aberto.</div></td></tr>`;
+
   const despesasDoPeriodo = STATE.despesas
     .filter((d) => (d.data || "").slice(0, 7) === periodo)
     .sort((a, b) => (a.data || "").localeCompare(b.data || ""));
   document.getElementById("tabela-despesas-periodo").innerHTML = despesasDoPeriodo.map((d) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheDespesa('${d.id}')">
-    <td>${esc(d.descricao)}</td><td>${esc(d.categoria || "—")}</td>
+    <td>${esc(d.descricao)}${seloAdiantamento(d)}</td><td>${esc(d.categoria || "—")}</td>
     <td>${d.tipo === "despesa" ? "Despesa" : "Outro custo"}</td>
-    <td class="num">${fmtMoeda(d.valor)}</td><td>${fmtData(d.data)}</td>
+    <td class="num">${fmtMoeda(Math.abs(Number(d.valor) || 0))}</td><td>${fmtData(d.data)}</td>
   </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma despesa lançada neste período.</div></td></tr>`;
 }
 
@@ -2781,6 +2795,7 @@ function abrirModalDespesa() {
   document.getElementById("md-chavepix").value = "";
   document.getElementById("md-tipo").value = "despesa";
   document.getElementById("md-recorrente").checked = false;
+  document.getElementById("md-adiantamento").checked = false;
   abrirModal("modal-despesa");
 }
 document.getElementById("btn-nova-despesa").addEventListener("click", abrirModalDespesa);
@@ -2798,6 +2813,7 @@ function editarDespesa(id) {
   document.getElementById("md-chavepix").value = d.chavePix || "";
   document.getElementById("md-tipo").value = d.tipo || "despesa";
   document.getElementById("md-recorrente").checked = !!d.recorrente;
+  document.getElementById("md-adiantamento").checked = !!d.adiantamento;
   abrirModal("modal-despesa");
 }
 document.getElementById("btn-salvar-despesa").addEventListener("click", async () => {
@@ -2807,11 +2823,17 @@ document.getElementById("btn-salvar-despesa").addEventListener("click", async ()
   if (!descricao) { mostrarErro("Informe a descrição."); return; }
   if (!valor) { mostrarErro("Informe o valor."); return; }
   const recorrente = document.getElementById("md-recorrente").checked;
+  const adiantamento = document.getElementById("md-adiantamento").checked;
   const dados = {
     descricao, categoria: document.getElementById("md-categoria").value.trim(),
-    tipo: document.getElementById("md-tipo").value, valor, data,
+    // Adiantamento é digitado positivo e abate outra despesa; o sinal é
+    // aplicado só na hora de somar (valorComSinal), nunca guardado no dado.
+    // Só força positivo quando a chave está marcada, pra não inverter em
+    // silêncio o valor de um lançamento antigo que já usava sinal negativo.
+    tipo: document.getElementById("md-tipo").value, valor: adiantamento ? Math.abs(valor) : valor, data,
     chavePix: document.getElementById("md-chavepix").value.trim(),
-    recorrente, diaVencimento: recorrente ? parseInt(data.split("-")[2], 10) : null
+    recorrente, diaVencimento: recorrente ? parseInt(data.split("-")[2], 10) : null,
+    adiantamento
   };
   try {
     if (pendingDespesaId) {
@@ -2841,7 +2863,8 @@ function abrirDetalheDespesa(id) {
     campos: [
       ["Categoria", esc(d.categoria || "—")],
       ["Tipo", d.tipo === "despesa" ? "Despesa" : "Outro custo"],
-      ["Valor", esc(fmtMoeda(d.valor))],
+      ["Valor", esc(fmtMoeda(Math.abs(Number(d.valor) || 0)))],
+      ["Adiantamento", ehAdiantamento(d) ? "Sim — abate outra despesa" : "—"],
       ["Data", esc(fmtData(d.data))],
       ["Chave PIX", esc(d.chavePix || "—")],
       ["Recorrente", d.recorrente ? `Sim (dia ${d.diaVencimento})` : "—"],
@@ -2912,6 +2935,12 @@ document.getElementById("desp-busca").addEventListener("input", (e) => {
 // já que nunca foi registrado se foram pagas.
 function statusDespesa(d) { return d.status === "realizado" ? "realizado" : "esperado"; }
 
+// Adiantamento abate outra despesa em vez de somar — digitado positivo, o
+// crédito é aplicado só na hora de somar. Cobre também lançamento antigo que
+// já usava valor negativo pra representar a mesma ideia (sem o campo).
+function ehAdiantamento(d) { return !!d.adiantamento || Number(d.valor) < 0; }
+function valorComSinal(d) { return ehAdiantamento(d) ? -Math.abs(Number(d.valor) || 0) : (Number(d.valor) || 0); }
+
 function renderTabelaDespesas() {
   const de = STATE.periodoDespesasDe, ate = STATE.periodoDespesasAte;
   const despesasDoPeriodo = STATE.despesas.filter((d) => {
@@ -2930,6 +2959,7 @@ function renderTabelaDespesas() {
     const statusLabel = status === "realizado" ? "pago" : vencida ? "a pagar" : "pendente";
     const alvo = [
       d.descricao, d.categoria, d.tipo === "despesa" ? "despesa" : "outro custo",
+      ehAdiantamento(d) ? "adiantamento" : "",
       String(d.valor || ""), fmtMoeda(d.valor), fmtData(d.data), statusLabel, d.chavePix
     ].join(" ").toLowerCase();
     return alvo.includes(termoBusca);
@@ -2938,9 +2968,9 @@ function renderTabelaDespesas() {
   const pendentes = linhasVisiveis.filter((d) => statusDespesa(d) === "esperado");
   const pagas = linhasVisiveis.filter((d) => statusDespesa(d) === "realizado");
   const aPagarAteHoje = pendentes.filter((d) => (d.data || "") <= hoje);
-  const somar = (lista) => lista.reduce((s, d) => s + (Number(d.valor) || 0), 0);
+  const somar = (lista) => lista.reduce((s, d) => s + valorComSinal(d), 0);
 
-  const linhaLista = (d) => [esc(d.descricao), esc(d.categoria || "—"), fmtMoeda(d.valor), fmtData(d.data)];
+  const linhaLista = (d) => [esc(d.descricao) + (ehAdiantamento(d) ? " (adiantamento)" : ""), esc(d.categoria || "—"), fmtMoeda(Math.abs(Number(d.valor) || 0)), fmtData(d.data)];
   CACHE_LISTA_KPI.despesasAPagarHoje = { titulo: "A pagar até hoje", subtitulo: `${aPagarAteHoje.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: aPagarAteHoje.map(linhaLista) };
   CACHE_LISTA_KPI.despesasPendentes = { titulo: "Total pendente", subtitulo: `${pendentes.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: pendentes.map(linhaLista) };
   CACHE_LISTA_KPI.despesasPagas = { titulo: "Total pago", subtitulo: `${pagas.length} lançamento(s)`, colunas: ["Descrição", "Categoria", "Valor", "Data"], linhas: pagas.map(linhaLista) };
@@ -2957,9 +2987,9 @@ function renderTabelaDespesas() {
       const status = statusDespesa(d);
       const vencida = status === "esperado" && (d.data || "") <= hoje;
       return `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheDespesa('${d.id}')">
-      <td>${esc(d.descricao)}</td><td>${esc(d.categoria || "—")}</td>
+      <td>${esc(d.descricao)}${ehAdiantamento(d) ? ' <span class="stamp andamento">Adiantamento</span>' : ""}</td><td>${esc(d.categoria || "—")}</td>
       <td>${d.tipo === "despesa" ? "Despesa" : "Outro custo"}</td>
-      <td class="num">${fmtMoeda(d.valor)}</td><td>${fmtData(d.data)}</td>
+      <td class="num">${fmtMoeda(Math.abs(Number(d.valor) || 0))}</td><td>${fmtData(d.data)}</td>
       <td class="mono-select">${esc(d.chavePix || "—")}</td>
       <td>${d.recorrente ? "Sim (dia " + d.diaVencimento + ")" : "—"}</td>
       <td><span class="stamp ${status === "realizado" ? "realizado" : vencida ? "vencido" : "esperado"}">${status === "realizado" ? "Pago" : vencida ? "A pagar" : "Pendente"}</span></td>
