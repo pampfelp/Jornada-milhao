@@ -191,13 +191,22 @@ function diasNoMes(ano, mes) {
 // configurado, o card fica sempre "verde" (sem badge de alerta).
 function calcularStatusSla(dataEntrouEtapa, etapaCfg) {
   if (!etapaCfg || !dataEntrouEtapa) return null;
+
+  // Etapas de perda ou fechamento não têm prazo/SLA
+  if (etapaCfg.perda || etapaCfg.fechamento) return null;
+
+  // Se ambos os limites estão zerados/nulos, não há SLA a ser cobrado
+  if (!etapaCfg.slaVermelho && !etapaCfg.slaAmarelo) return null;
+
   const d = dataEntrouEtapa.toDate ? dataEntrouEtapa.toDate() : new Date(dataEntrouEtapa);
   if (isNaN(d.getTime())) return null;
   const unidadeMs = etapaCfg.slaUnidade === "horas" ? 3600000 : 86400000;
   const decorrido = (Date.now() - d.getTime()) / unidadeMs;
+  
   let cor = "verde";
-  if (etapaCfg.slaVermelho != null && decorrido >= etapaCfg.slaVermelho) cor = "vermelho";
-  else if (etapaCfg.slaAmarelo != null && decorrido >= etapaCfg.slaAmarelo) cor = "amarelo";
+  if (etapaCfg.slaVermelho > 0 && decorrido >= etapaCfg.slaVermelho) cor = "vermelho";
+  else if (etapaCfg.slaAmarelo > 0 && decorrido >= etapaCfg.slaAmarelo) cor = "amarelo";
+  
   return { cor, decorrido, unidade: etapaCfg.slaUnidade === "horas" ? "h" : "d" };
 }
 
