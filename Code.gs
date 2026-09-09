@@ -339,8 +339,42 @@ function acaoReceberLeadYayformsInterno_(e) {
   var r = corpo.payload && corpo.payload.response;
   var nomeFormulario = "Formulário YayForms";
 
+  // Se o payload vier do webhook, tentamos buscar o nome do form na raiz (alguns webhooks mandam)
+  if (corpo.payload && corpo.payload.form && corpo.payload.form.title) {
+    nomeFormulario = corpo.payload.form.title;
+  }
+
+  // Idempotência: verificar se o lead já foi criado para esta resposta
+  if (r && r.id) {
+    var queryUrl = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents:runQuery?key=" + FIRESTORE_API_KEY_;
+    var queryPayload = {
+      structuredQuery: {
+        from: [{ collectionId: "agendamentos" }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: "yayformsResponseId" },
+            op: "EQUAL",
+            value: { stringValue: String(r.id) }
+          }
+        }
+      }
+    };
+    
+    var respQuery = UrlFetchApp.fetch(queryUrl, {
+      method: "post", contentType: "application/json",
+      headers: { Authorization: "Bearer " + obterIdTokenRobo_() },
+      payload: JSON.stringify(queryPayload), muteHttpExceptions: true
+    });
+    var jsonQuery = JSON.parse(respQuery.getContentText());
+    // runQuery retorna um array. Se o primeiro item tiver "document", já existe.
+    if (jsonQuery && jsonQuery.length > 0 && jsonQuery[0].document) {
+      console.log("Lead já existe para a resposta " + r.id + " (idempotência).");
+      return { ok: true, jaExistia: true, formulario: nomeFormulario };
+    }
+  }
+
   // Se o payload não trouxer a resposta embutida, tentamos buscar via API como fallback
-  if (!r) {
+  if (!corpo.payload || !corpo.payload.response) {
     var apiToken = props.getProperty("YAYFORMS_API_TOKEN");
     if (!apiToken) return { ok: false, erro: "Payload sem dados e YAYFORMS_API_TOKEN não configurado." };
     var responseId = extrairResponseIdYayforms_(corpo, corpoTexto);
@@ -353,14 +387,22 @@ function acaoReceberLeadYayformsInterno_(e) {
     var dadosResposta = JSON.parse(respostaHttp.getContentText());
     r = dadosResposta && dadosResposta.data;
     if (!r) return { ok: false, erro: "Não consegui buscar a resposta " + responseId + " na API da YayForms." };
+  }
 
-    try {
-      var respostaForm = UrlFetchApp.fetch("https://api.yayforms.com/forms/" + r.formId, {
-        headers: { Authorization: "Bearer " + apiToken }, muteHttpExceptions: true
-      });
-      var dadosForm = JSON.parse(respostaForm.getContentText());
-      if (dadosForm && dadosForm.data && dadosForm.data.title) nomeFormulario = dadosForm.data.title;
-    } catch (err) {}
+  // Tenta buscar o nome real do formulário na YayForms
+  if (r && r.formId) {
+    var apiToken = props.getProperty("YAYFORMS_API_TOKEN");
+    if (apiToken) {
+      try {
+        var respostaForm = UrlFetchApp.fetch("https://api.yayforms.com/forms/" + r.formId, {
+          headers: { Authorization: "Bearer " + apiToken }, muteHttpExceptions: true
+        });
+        var dadosForm = JSON.parse(respostaForm.getContentText());
+        if (dadosForm && dadosForm.data && dadosForm.data.title) nomeFormulario = dadosForm.data.title;
+      } catch (err) {
+        console.error("Erro ao buscar título do form:", String(err));
+      }
+    }
   }
 
   // Se 'answers' vier como um objeto (mapa de IDs), converte para array
@@ -394,7 +436,7 @@ function acaoReceberLeadYayformsInterno_(e) {
     telefone: extraido.telefone, email: extraido.email,
     data: "", hora: "", etapa: etapaInicialId,
     convertido: false, enviadoAgenda: false, motivoPerda: "",
-    observacoes: observacoes, formCompleto: !!r.submittedAt
+    observacoes: observacoes, formCompleto: !!r.submittedAt, yayformsResponseId: r.id
   });
 
   return { ok: true, clienteId: clienteId, formulario: nomeFormulario };
@@ -455,13 +497,33 @@ function extrairContatoRespostaYayforms_(answers) {
 //
 // O resto deste sistema fala com o Firestore direto do navegador, via SDK
 // — mas não existe "navegador" esperando quando um webhook chega aqui.
-// Estas funções chamam a API REST pública do Firestore, SEM nenhum token
-// de autenticação — funciona porque as regras em firestore.rules já são
-// "de formato, não de identidade" (mesmo trade-off documentado no README):
-// qualquer requisição, autenticada ou não, que bater no formato exigido
-// (ex: `clientes` só exige um campo "nome") passa. É o mesmo modelo de
-// segurança que o app.js já usa, só que chamado de dentro do Apps Script
-// em vez de dentro do navegador.
+// Estas funções chamam a API REST pública do Firestore.
+// Agora usando a conta-robô para respeitar as regras de firestore (papel automacao).
+
+function obterIdTokenRobo_() {
+  var cache = CacheService.getScriptCache();
+  var tokenInfo = cache.get("ROBOT_AUTH_TOKEN");
+  if (tokenInfo) return tokenInfo;
+  
+  var props = PropertiesService.getScriptProperties();
+  var email = props.getProperty("FIREBASE_ROBOT_EMAIL");
+  var pwd = props.getProperty("FIREBASE_ROBOT_PASSWORD");
+  if (!email || !pwd) throw new Error("FIREBASE_ROBOT_EMAIL ou FIREBASE_ROBOT_PASSWORD ausente nas Script Properties.");
+
+  var url = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + FIRESTORE_API_KEY_;
+  var resp = UrlFetchApp.fetch(url, {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify({ email: email, password: pwd, returnSecureToken: true }),
+    muteHttpExceptions: true
+  });
+  
+  var json = JSON.parse(resp.getContentText());
+  if (json.error) throw new Error("Auth Robo Falhou: " + json.error.message);
+  
+  cache.put("ROBOT_AUTH_TOKEN", json.idToken, 3000); // cache por 50 min
+  return json.idToken;
+}
 
 function valorFirestore_(v) {
   if (v === null || v === undefined) return { nullValue: null };
@@ -480,6 +542,7 @@ function criarDocumentoFirestore_(colecao, dados) {
   var url = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents/" + colecao + "?key=" + FIRESTORE_API_KEY_;
   var resp = UrlFetchApp.fetch(url, {
     method: "post", contentType: "application/json",
+    headers: { Authorization: "Bearer " + obterIdTokenRobo_() },
     payload: JSON.stringify({ fields: fields }), muteHttpExceptions: true
   });
   var json = JSON.parse(resp.getContentText());
@@ -493,7 +556,10 @@ function criarDocumentoFirestore_(colecao, dados) {
 // jeito que um lead criado manualmente no sistema.
 function obterPrimeiraEtapaAgendamento_() {
   var url = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents/etapasAgendamentoConfig?key=" + FIRESTORE_API_KEY_ + "&pageSize=100";
-  var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  var resp = UrlFetchApp.fetch(url, { 
+    headers: { Authorization: "Bearer " + obterIdTokenRobo_() },
+    muteHttpExceptions: true 
+  });
   var json = JSON.parse(resp.getContentText());
   var docs = json.documents || [];
   var melhor = null;

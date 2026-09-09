@@ -126,7 +126,7 @@ service cloud.firestore {
 
     match /clientes/{id} {
       allow read: if equipe();
-      allow create: if equipe()
+      allow create: if temPapel(['admin', 'gerente', 'sdr', 'automacao'])
                     && request.resource.data.keys().hasAll(['nome'])
                     && request.resource.data.nome is string
                     && request.resource.data.nome.size() > 0
@@ -139,7 +139,11 @@ service cloud.firestore {
 
     match /agendamentos/{id} {
       allow read: if equipe();
-      allow create, update: if equipe()
+      allow create: if temPapel(['admin', 'gerente', 'sdr', 'automacao'])
+                    && request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
+                    && request.resource.data.clienteNome is string
+                    && request.resource.data.etapa is string;
+      allow update: if equipe()
                     && request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
                     && request.resource.data.clienteNome is string
                     && request.resource.data.etapa is string;
@@ -169,7 +173,7 @@ service cloud.firestore {
     }
 
     match /etapasAgendamentoConfig/{id} {
-      allow read: if equipe();
+      allow read: if temPapel(['admin', 'gerente', 'sdr', 'automacao']);
       allow create, update: if gestao()
                     && request.resource.data.nome is string
                     && request.resource.data.ordem is number;

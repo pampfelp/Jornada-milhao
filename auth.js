@@ -57,6 +57,7 @@ const AREAS_POR_PAPEL = {
   admin:   ["financeiro", "funis", "contratos", "entradas", "despesas", "clientes", "config", "usuarios", "planilha"],
   gerente: ["financeiro", "funis", "contratos", "entradas", "despesas", "clientes", "config"],
   sdr:     ["funis", "contratos", "clientes"],
+  automacao: [],
 };
 
 export const AUTH = {
