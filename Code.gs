@@ -315,8 +315,11 @@ var FIRESTORE_API_KEY_ = "AIzaSyD2ud5FQsbZeWp8Yh9tIN4W1Nlr60je3dQ";
 // devolver um erro cru pro webhook da YayForms.
 function acaoReceberLeadYayforms_(e) {
   try {
-    return acaoReceberLeadYayformsInterno_(e);
+    var result = acaoReceberLeadYayformsInterno_(e);
+    if (!result.ok) console.error("Erro YayForms Webhook:", result.erro);
+    return result;
   } catch (err) {
+    console.error("Exceção YayForms Webhook:", String(err));
     return { ok: false, erro: String(err) };
   }
 }
@@ -327,33 +330,48 @@ function acaoReceberLeadYayformsInterno_(e) {
   if (!tokenEsperado || !e.parameter || e.parameter.token !== tokenEsperado) {
     return { ok: false, erro: "Token do webhook ausente ou inválido." };
   }
-  var apiToken = props.getProperty("YAYFORMS_API_TOKEN");
-  if (!apiToken) return { ok: false, erro: "Configure YAYFORMS_API_TOKEN em Project Settings > Script Properties." };
 
   var corpoTexto = (e.postData && e.postData.contents) || "{}";
+  console.log("Payload recebido da YayForms:", corpoTexto);
   var corpo = {};
   try { corpo = JSON.parse(corpoTexto); } catch (err) {}
 
-  var responseId = extrairResponseIdYayforms_(corpo, corpoTexto);
-  if (!responseId) return { ok: false, erro: "Não encontrei o ID da resposta no webhook recebido." };
-
-  var respostaHttp = UrlFetchApp.fetch("https://api.yayforms.com/responses/" + responseId, {
-    headers: { Authorization: "Bearer " + apiToken }, muteHttpExceptions: true
-  });
-  var dadosResposta = JSON.parse(respostaHttp.getContentText());
-  var r = dadosResposta && dadosResposta.data;
-  if (!r) return { ok: false, erro: "Não consegui buscar a resposta " + responseId + " na API da YayForms." };
-
+  var r = corpo.payload && corpo.payload.response;
   var nomeFormulario = "Formulário YayForms";
-  try {
-    var respostaForm = UrlFetchApp.fetch("https://api.yayforms.com/forms/" + r.formId, {
+
+  // Se o payload não trouxer a resposta embutida, tentamos buscar via API como fallback
+  if (!r) {
+    var apiToken = props.getProperty("YAYFORMS_API_TOKEN");
+    if (!apiToken) return { ok: false, erro: "Payload sem dados e YAYFORMS_API_TOKEN não configurado." };
+    var responseId = extrairResponseIdYayforms_(corpo, corpoTexto);
+    if (!responseId) return { ok: false, erro: "Não encontrei o ID da resposta no webhook recebido." };
+
+    var respostaHttp = UrlFetchApp.fetch("https://api.yayforms.com/responses/" + responseId, {
       headers: { Authorization: "Bearer " + apiToken }, muteHttpExceptions: true
     });
-    var dadosForm = JSON.parse(respostaForm.getContentText());
-    if (dadosForm && dadosForm.data && dadosForm.data.title) nomeFormulario = dadosForm.data.title;
-  } catch (err) {}
+    console.log("Resposta YayForms API:", respostaHttp.getContentText());
+    var dadosResposta = JSON.parse(respostaHttp.getContentText());
+    r = dadosResposta && dadosResposta.data;
+    if (!r) return { ok: false, erro: "Não consegui buscar a resposta " + responseId + " na API da YayForms." };
 
-  var extraido = extrairContatoRespostaYayforms_(r.answers || []);
+    try {
+      var respostaForm = UrlFetchApp.fetch("https://api.yayforms.com/forms/" + r.formId, {
+        headers: { Authorization: "Bearer " + apiToken }, muteHttpExceptions: true
+      });
+      var dadosForm = JSON.parse(respostaForm.getContentText());
+      if (dadosForm && dadosForm.data && dadosForm.data.title) nomeFormulario = dadosForm.data.title;
+    } catch (err) {}
+  }
+
+  // Se 'answers' vier como um objeto (mapa de IDs), converte para array
+  var answersArray = [];
+  if (r.answers && typeof r.answers === 'object' && !Array.isArray(r.answers)) {
+    Object.keys(r.answers).forEach(function(k) { answersArray.push(r.answers[k]); });
+  } else if (Array.isArray(r.answers)) {
+    answersArray = r.answers;
+  }
+
+  var extraido = extrairContatoRespostaYayforms_(answersArray);
 
   var etapaInicialId = obterPrimeiraEtapaAgendamento_();
   if (!etapaInicialId) return { ok: false, erro: "Cadastre ao menos uma etapa no Funil de Agendamento (Configurações) antes de ligar essa integração." };
@@ -376,7 +394,7 @@ function acaoReceberLeadYayformsInterno_(e) {
     telefone: extraido.telefone, email: extraido.email,
     data: "", hora: "", etapa: etapaInicialId,
     convertido: false, enviadoAgenda: false, motivoPerda: "",
-    observacoes: observacoes
+    observacoes: observacoes, formCompleto: !!r.submittedAt
   });
 
   return { ok: true, clienteId: clienteId, formulario: nomeFormulario };
@@ -414,7 +432,11 @@ function extrairContatoRespostaYayforms_(answers) {
     if (a.content === null || a.content === undefined) return;
     var valorTexto = Array.isArray(a.content) ? a.content.join(", ") : String(a.content);
     if (!valorTexto.trim()) return;
-    var tituloLower = String(a.fieldPlainTitle || "").toLowerCase();
+    var tituloBase = a.fieldPlainTitle || a.fieldTitle || "Pergunta";
+    // Tira as tags de html de fieldTitle se for o caso
+    tituloBase = tituloBase.replace(/<[^>]*>?/gm, '');
+    var tituloLower = tituloBase.toLowerCase();
+    
     var pareceEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valorTexto.trim());
     var pareceTelefone = /^[\d+()\s-]{8,20}$/.test(valorTexto.trim());
     if (!nome && !pareceEmail && !pareceTelefone && tituloLower.indexOf("nome") > -1) {
@@ -424,7 +446,7 @@ function extrairContatoRespostaYayforms_(answers) {
     } else if (!telefone && (pareceTelefone || tituloLower.indexOf("telefone") > -1 || tituloLower.indexOf("whatsapp") > -1 || tituloLower.indexOf("celular") > -1)) {
       telefone = valorTexto;
     }
-    linhas.push((a.fieldPlainTitle || "Pergunta") + ": " + valorTexto);
+    linhas.push(tituloBase + ": " + valorTexto);
   });
   return { nome: nome, telefone: telefone, email: email, linhas: linhas };
 }
