@@ -43,9 +43,9 @@ const STATE = {
   // Kanban (padrão) ou lista, e o recorte de período, por funil —
   // independentes entre os 3 (agendamento/vendas/administrativo).
   funilView: { agendamento: "kanban", vendas: "kanban", administrativo: "kanban" },
-  funilPeriodoPreset: { agendamento: "tudo", vendas: "tudo", administrativo: "tudo" },
+  funilPeriodoPreset: { agendamento: "tudo", vendas: "tudo", administrativo: "tudo", tarefas: "tudo" },
   funilPeriodoCustom: {
-    agendamento: { de: "", ate: "" }, vendas: { de: "", ate: "" }, administrativo: { de: "", ate: "" }
+    agendamento: { de: "", ate: "" }, vendas: { de: "", ate: "" }, administrativo: { de: "", ate: "" }, tarefas: { de: "", ate: "" }
   },
   // Busca por funil, no mesmo padrão de Contratos/Clientes/Despesas. Filtra
   // as DUAS visões ao mesmo tempo (Kanban e Lista) porque as duas saem do
@@ -4664,23 +4664,92 @@ setTimeout(() => { if (pwaEhIOS()) mostrarBannerPwa(); }, 3000);
 
 /* ══════════════ TAREFAS E ROTINAS ══════════════ */
 
+// Nome de quem a tarefa está atribuída. "usuarios" só é lido por inteiro
+// pra quem tem acesso à tela de Contas de Acesso (admin — ver
+// AREAS_POR_PAPEL em auth.js e a regra de /usuarios em firestore.rules), então
+// gerente/SDR/colaborador não enxergam o diretório completo. Pra não exibir
+// "Sem responsável" quando na verdade TEM responsável (só não dá pra ver o
+// nome), resolve o próprio usuário via AUTH.usuario (sempre disponível) e só
+// declara "sem responsável" quando o campo realmente está vazio.
+function nomeResponsavelTarefa(t) {
+  if (!t.responsavelUid) return "Sem responsável";
+  if (AUTH.user && t.responsavelUid === AUTH.user.uid) return AUTH.usuario?.nome || "Você";
+  const u = STATE.usuarios.find((x) => x.id === t.responsavelUid);
+  return u ? u.nome : "—";
+}
+// "Atrasada" aqui é só informativo (KPI e badge no card) — Frente 2 do
+// plano decidiu de propósito NÃO ter SLA/cobrança automática em Tarefas,
+// então isso nunca bloqueia nada, só mostra.
+function prazoVencido(t) {
+  if (!t.prazo) return false;
+  const etapaCfg = STATE.etapasTarefa.find((e) => e.id === t.etapa);
+  if (etapaCfg && (etapaCfg.concluido || etapaCfg.descartado)) return false;
+  return t.prazo < hojeStr();
+}
+function renderCardTarefa(t) {
+  const prazo = t.prazo ? `<span class="kcard-prazo${prazoVencido(t) ? " atrasado" : ""}">${fmtData(t.prazo)}</span>` : "";
+  let subs = "";
+  if (t.subtarefas && t.subtarefas.length > 0) {
+    const concluidas = t.subtarefas.filter((s) => s.feito).length;
+    subs = `<div class="kcard-sub" style="margin-top:6px;">☑ ${concluidas}/${t.subtarefas.length} subtarefas</div>`;
+  }
+  return `
+    <div class="kcard-nome">${esc(t.titulo || "Tarefa sem título")}</div>
+    ${t.descricao ? `<div class="kcard-sub">${esc(t.descricao)}</div>` : ""}
+    ${subs}
+    <div class="kcard-foot" style="margin-top:8px;">
+      <span class="kcard-sub">${esc(nomeResponsavelTarefa(t))}</span>
+      ${prazo}
+    </div>
+  `;
+}
+
+// Filtro de pessoa: só pra gestão (admin/gerente — é quem "acompanha todo
+// mundo", crença repetida na reunião do módulo), e só faz sentido junto
+// com "Todas" (em "Minhas" já é uma pessoa só, a própria). Monta as opções
+// a partir de quem TEM tarefa no recorte atual, não do diretório inteiro de
+// usuários — assim funciona mesmo pra gerente, que não enxerga a lista
+// completa de contas (mesma limitação de nomeResponsavelTarefa acima).
+function atualizarFiltroPessoaTarefas(cardsBase) {
+  const wrap = document.getElementById("tarefas-filtro-pessoa-wrap");
+  const sel = document.getElementById("tarefas-filtro-pessoa");
+  if (!wrap || !sel) return;
+  const souGestor = isAdmin() || papelAtual() === "gerente";
+  const mostrar = souGestor && STATE.filtroTarefas === "todas";
+  wrap.style.display = mostrar ? "" : "none";
+  if (!mostrar) { sel.value = ""; return; }
+  const valorAtual = sel.value;
+  const uids = [...new Set(cardsBase.map((t) => t.responsavelUid).filter(Boolean))];
+  const opcoes = uids
+    .map((uid) => ({ uid, nome: nomeResponsavelTarefa({ responsavelUid: uid }) }))
+    .sort((a, b) => a.nome.localeCompare(b.nome));
+  sel.innerHTML = `<option value="">Todas as pessoas</option>` + opcoes.map((o) => `<option value="${esc(o.uid)}">${esc(o.nome)}</option>`).join("");
+  if (uids.includes(valorAtual)) sel.value = valorAtual;
+}
+
 function renderKanbanTarefas() {
   if (!document.getElementById("kanban-tarefas")) return;
-  const colunas = STATE.etapasTarefa.map((e) => ({ id: e.id, nome: e.nome }));
-  let cards = STATE.tarefas;
-  if (STATE.filtroTarefas === "minhas" && AUTH.user) cards = cards.filter(t => t.responsavelUid === AUTH.user.uid);
+  const colunas = [...STATE.etapasTarefa].sort((a, b) => a.ordem - b.ordem).map((e) => ({ id: e.id, nome: e.nome }));
 
-  renderKanban("kanban-tarefas", "tarefas", colunas, cards, (t) => t.etapa, (t) => {
-    const resp = STATE.usuarios.find(u => u.id === t.responsavelUid);
-    const respNome = resp ? resp.nome : "Sem responsável";
-    const prazo = t.prazo ? `&nbsp;&nbsp;•&nbsp;&nbsp;Prazo: ${fmtData(t.prazo)}` : "";
-    let subs = "";
-    if (t.subtarefas && t.subtarefas.length > 0) {
-      const concluidas = t.subtarefas.filter(s => s.feito).length;
-      subs = `<div style="font-size:11px;color:var(--ink-soft);margin-top:4px;">☑ ${concluidas}/${t.subtarefas.length} subtarefas</div>`;
-    }
-    return ` <div class="card-title">${esc(t.titulo || "Tarefa sem título")}</div> ${t.descricao ? `<div style="font-size:12px;color:var(--ink-soft);margin-top:2px;">${esc(t.descricao)}</div>` : ""} ${subs} <div class="card-meta" style="margin-top:6px;"> ${esc(respNome)}${prazo} </div> `;
-  });
+  let cards = STATE.tarefas;
+  if (STATE.filtroTarefas === "minhas" && AUTH.user) cards = cards.filter((t) => t.responsavelUid === AUTH.user.uid);
+
+  const doPeriodo = filtrarCardsPorPeriodoFunil(cards, "tarefas");
+  atualizarFiltroPessoaTarefas(doPeriodo);
+  const filtroPessoa = document.getElementById("tarefas-filtro-pessoa")?.value || "";
+  const visiveis = filtroPessoa ? doPeriodo.filter((t) => t.responsavelUid === filtroPessoa) : doPeriodo;
+
+  renderKanban("kanban-tarefas", "tarefas", colunas, visiveis, (t) => t.etapa, renderCardTarefa);
+
+  const emAndamento = doPeriodo.filter((t) => { const e = STATE.etapasTarefa.find((x) => x.id === t.etapa); return e && !e.concluido && !e.descartado; }).length;
+  const concluidas = doPeriodo.filter((t) => { const e = STATE.etapasTarefa.find((x) => x.id === t.etapa); return e && e.concluido; }).length;
+  const atrasadas = doPeriodo.filter(prazoVencido).length;
+  document.getElementById("tarefas-kpis").innerHTML = [
+    { tag: "No período", num: String(doPeriodo.length) },
+    { tag: "Em andamento", num: String(emAndamento) },
+    { tag: "Concluídas", num: String(concluidas) },
+    { tag: "Atrasadas", num: String(atrasadas), sub: "prazo vencido, ainda não concluída" }
+  ].map((k) => `<div class="funil-kpi"><div class="tag">${esc(k.tag)}</div><div class="num">${k.num}</div>${k.sub ? `<div class="sub">${esc(k.sub)}</div>` : ""}</div>`).join("");
 }
 
 document.querySelectorAll("#tarefas-filtro-toggle .view-toggle-btn").forEach((btn) => {
@@ -4691,6 +4760,23 @@ document.querySelectorAll("#tarefas-filtro-toggle .view-toggle-btn").forEach((bt
     renderKanbanTarefas();
   });
 });
+document.getElementById("tarefas-filtro-pessoa")?.addEventListener("change", renderKanbanTarefas);
+(function wirePeriodoTarefas() {
+  const grupo = document.getElementById("periodo-toggle-tarefas");
+  const custom = document.getElementById("periodo-custom-tarefas");
+  if (!grupo || !custom) return;
+  grupo.querySelectorAll(".periodo-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      grupo.querySelectorAll(".periodo-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      STATE.funilPeriodoPreset.tarefas = btn.dataset.periodo;
+      custom.style.display = btn.dataset.periodo === "personalizado" ? "flex" : "none";
+      renderKanbanTarefas();
+    });
+  });
+  custom.querySelector(".pf-de").addEventListener("change", (e) => { STATE.funilPeriodoCustom.tarefas.de = e.target.value || ""; renderKanbanTarefas(); });
+  custom.querySelector(".pf-ate").addEventListener("change", (e) => { STATE.funilPeriodoCustom.tarefas.ate = e.target.value || ""; renderKanbanTarefas(); });
+})();
 
 document.getElementById("btn-nova-tarefa")?.addEventListener("click", () => {
   pendingTarefaId = null;

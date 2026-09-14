@@ -421,14 +421,33 @@
         <div class="view-desc">Acompanhamento de tarefas, atividades avulsas e rotinas diárias.</div>
       </div>
       <div class="top-actions">
-        <div class="view-toggle" id="tarefas-filtro-toggle" style="margin-right:10px;">
-          <button class="view-toggle-btn active" data-filtro="minhas">Minhas</button>
-          <button class="view-toggle-btn" data-filtro="todas">Todas</button>
-        </div>
         <button class="btn btn-primary" id="btn-nova-tarefa">+ Nova Tarefa</button>
       </div>
     </header>
-    <div class="kanban-wrap" id="kanban-tarefas"></div>
+    <div class="funil-kpis" id="tarefas-kpis"></div>
+    <div class="row" style="margin-bottom:14px;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+      <div class="view-toggle" id="tarefas-filtro-toggle">
+        <button class="view-toggle-btn active" data-filtro="minhas">Minhas</button>
+        <button class="view-toggle-btn" data-filtro="todas">Todas</button>
+      </div>
+      <div class="periodo-toggle" id="periodo-toggle-tarefas">
+        <button class="periodo-btn" data-periodo="hoje">Hoje</button>
+        <button class="periodo-btn" data-periodo="7dias">7 dias</button>
+        <button class="periodo-btn" data-periodo="15dias">15 dias</button>
+        <button class="periodo-btn" data-periodo="mes">Este mês</button>
+        <button class="periodo-btn active" data-periodo="tudo">Tudo</button>
+        <button class="periodo-btn" data-periodo="personalizado">Personalizado</button>
+      </div>
+      <div class="row periodo-custom" id="periodo-custom-tarefas" style="display:none;gap:8px;">
+        <div class="field"><label>De</label><input type="date" class="pf-de"></div>
+        <div class="field"><label>Até</label><input type="date" class="pf-ate"></div>
+      </div>
+      <div class="field" id="tarefas-filtro-pessoa-wrap" style="display:none;min-width:200px;">
+        <label>Pessoa</label>
+        <select id="tarefas-filtro-pessoa"><option value="">Todas as pessoas</option></select>
+      </div>
+    </div>
+    <div class="kanban-wrap kanban-wrap-grande" id="kanban-tarefas"></div>
   </section>
 
   <!-- ═══ CONFIGURAÇÕES ═══ -->
