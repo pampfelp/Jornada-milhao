@@ -4216,9 +4216,12 @@ async function iniciarListeners() {
     // inteira.
     onSnapshot(collection(db, "diretorioNomes"), { includeMetadataChanges: true }, (snap) => {
       const mapa = {};
-      snap.docs.forEach((d) => { mapa[d.id] = d.data().nome; });
+      snap.docs.forEach((d) => { mapa[d.id] = { nome: d.data().nome, ativo: d.data().ativo !== false }; });
       STATE.diretorioNomes = mapa;
       renderKanbanTarefas();
+      renderConfigRotinas();
+      popularComboResponsaveis("mt-responsavel");
+      popularComboResponsaveis("mr-responsavel");
     }, (err) => mostrarErro("Erro de conexão (diretório de nomes): " + err.message));
   }
 
@@ -4280,16 +4283,18 @@ function iniciarListenerUsuarios() {
   );
 }
 
-// Mantém diretorioNomes/{uid} = {nome} em dia com usuarios/{uid}.nome —
+// Mantém diretorioNomes/{uid} = {nome, ativo} em dia com usuarios/{uid} —
 // só o admin chega aqui (é quem tem o listener de "usuarios" aberto), e só
-// escreve quando o nome realmente mudou, pra não regravar tudo a cada
-// snapshot. Não apaga o espelho de contas removidas (baixo risco: só
+// escreve quando nome ou ativo realmente mudaram, pra não regravar tudo a
+// cada snapshot. Não apaga o espelho de contas removidas (baixo risco: só
 // vaza um nome de alguém que já saiu, não e-mail nem papel), então isso
 // fica de fora de propósito — cobre o caso comum, não todos.
 function sincronizarDiretorioNomes(lista) {
   lista.forEach((u) => {
-    if (u.nome && STATE.diretorioNomes[u.id] !== u.nome) {
-      setDoc(doc(db, "diretorioNomes", u.id), { nome: u.nome }, { merge: true }).catch(() => {});
+    const atual = STATE.diretorioNomes[u.id];
+    const ativo = u.ativo !== false;
+    if (u.nome && (!atual || atual.nome !== u.nome || atual.ativo !== ativo)) {
+      setDoc(doc(db, "diretorioNomes", u.id), { nome: u.nome, ativo }, { merge: true }).catch(() => {});
     }
   });
 }
@@ -4700,7 +4705,7 @@ setTimeout(() => { if (pwaEhIOS()) mostrarBannerPwa(); }, 3000);
 // via AUTH.usuario cobre até o instante entre logar e o espelho carregar.
 function nomeResponsavelTarefa(t) {
   if (!t.responsavelUid) return "Sem responsável";
-  if (STATE.diretorioNomes[t.responsavelUid]) return STATE.diretorioNomes[t.responsavelUid];
+  if (STATE.diretorioNomes[t.responsavelUid]) return STATE.diretorioNomes[t.responsavelUid].nome;
   if (AUTH.user && t.responsavelUid === AUTH.user.uid) return AUTH.usuario?.nome || "Você";
   const u = STATE.usuarios.find((x) => x.id === t.responsavelUid);
   return u ? u.nome : "—";
@@ -4820,10 +4825,24 @@ document.getElementById("btn-nova-tarefa")?.addEventListener("click", () => {
   abrirModal("modal-tarefa");
 });
 
+// Fonte é diretorioNomes, não STATE.usuarios: é o que faz esse combo
+// funcionar pra gerente/SDR/colaborador também, não só pro admin (mesmo
+// motivo do diretorioNomes existir — ver firestore.rules). Precisa incluir
+// o próprio usuário mesmo se o espelho ainda não carregou (janela curta
+// entre logar e o primeiro snapshot chegar), senão ninguém consegue se
+// auto-atribuir logo depois de logar.
 function popularComboResponsaveis(idSelect, vazioOp = "Sem responsável") {
   const sel = document.getElementById(idSelect);
+  if (!sel) return;
   const atual = sel.value;
-  sel.innerHTML = `<option value="">${vazioOp}</option>` + STATE.usuarios.filter(u => u.ativo !== false).map(u => `<option value="${esc(u.id)}">${esc(u.nome)}</option>`).join("");
+  const pessoas = Object.entries(STATE.diretorioNomes)
+    .filter(([, v]) => v.ativo)
+    .map(([id, v]) => ({ id, nome: v.nome }));
+  if (AUTH.user && AUTH.usuario && !pessoas.some((p) => p.id === AUTH.user.uid)) {
+    pessoas.push({ id: AUTH.user.uid, nome: AUTH.usuario.nome || "Você" });
+  }
+  pessoas.sort((a, b) => a.nome.localeCompare(b.nome));
+  sel.innerHTML = `<option value="">${vazioOp}</option>` + pessoas.map((p) => `<option value="${esc(p.id)}">${esc(p.nome)}</option>`).join("");
   sel.value = atual;
 }
 
@@ -4925,8 +4944,7 @@ function renderConfigRotinas() {
   if (!STATE.rotinas.length) { tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--ink-faint);">Nenhuma rotina cadastrada.</td></tr>`; return; }
   const mapDias = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
   tbody.innerHTML = STATE.rotinas.map((r) => {
-    const resp = STATE.usuarios.find(u => u.id === r.responsavelUid);
-    const respNome = resp ? resp.nome : "—";
+    const respNome = nomeResponsavelTarefa({ responsavelUid: r.responsavelUid });
     const dias = (r.diasSemana || []).map(d => mapDias[d]).join(", ") || "Nenhum";
     return `<tr><td style="font-weight:500;">${esc(r.titulo)}</td><td>${esc(respNome)}</td><td>${esc(dias)}</td><td>${r.ativa ? "Sim" : "Não"}</td><td style="text-align:right;"><button class="btn-small" onclick="editarRotina('${r.id}')">Editar</button></td></tr>`;
   }).join("");
