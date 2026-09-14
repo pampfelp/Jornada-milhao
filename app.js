@@ -30,6 +30,10 @@ const STATE = {
   rotinas: [],
   etapasTarefa: [],
   filtroTarefas: "minhas", // ou "todas"
+  // Espelho leve de usuarios/{uid} -> nome (uid -> nome), lido por
+  // qualquer um que veja Tarefas — ver diretorioNomes em firestore.rules
+  // pro porquê. Mantido em dia só pelo admin (iniciarListenerUsuarios).
+  diretorioNomes: {},
   usuarios: [],
   config: {},
   periodoFinanceiro: new Date().toISOString().slice(0, 7),
@@ -4205,6 +4209,17 @@ async function iniciarListeners() {
       renderKanbanTarefas();
       rastrearSincronizacao("etapasTarefaConfig", snap);
     }, (err) => mostrarErro("Erro de conexão (etapas tarefas): " + err.message));
+
+    // Todo mundo que vê Tarefas lê o espelho de nomes (só nome, sem
+    // e-mail/papel) — é o que faz o responsável de um card aparecer certo
+    // pra gerente/SDR/colaborador, que não têm acesso à coleção "usuarios"
+    // inteira.
+    onSnapshot(collection(db, "diretorioNomes"), { includeMetadataChanges: true }, (snap) => {
+      const mapa = {};
+      snap.docs.forEach((d) => { mapa[d.id] = d.data().nome; });
+      STATE.diretorioNomes = mapa;
+      renderKanbanTarefas();
+    }, (err) => mostrarErro("Erro de conexão (diretório de nomes): " + err.message));
   }
 
   // Despesas e entradas são o que a SDR não pode ver. As regras já barram do
@@ -4260,9 +4275,23 @@ let pendingUsuarioId = null;
 
 function iniciarListenerUsuarios() {
   assinarUsuarios(
-    (lista) => { STATE.usuarios = lista; renderTabelaUsuarios(); },
+    (lista) => { STATE.usuarios = lista; renderTabelaUsuarios(); sincronizarDiretorioNomes(lista); },
     (err) => mostrarErro("Erro de conexão (contas de acesso): " + err.message)
   );
+}
+
+// Mantém diretorioNomes/{uid} = {nome} em dia com usuarios/{uid}.nome —
+// só o admin chega aqui (é quem tem o listener de "usuarios" aberto), e só
+// escreve quando o nome realmente mudou, pra não regravar tudo a cada
+// snapshot. Não apaga o espelho de contas removidas (baixo risco: só
+// vaza um nome de alguém que já saiu, não e-mail nem papel), então isso
+// fica de fora de propósito — cobre o caso comum, não todos.
+function sincronizarDiretorioNomes(lista) {
+  lista.forEach((u) => {
+    if (u.nome && STATE.diretorioNomes[u.id] !== u.nome) {
+      setDoc(doc(db, "diretorioNomes", u.id), { nome: u.nome }, { merge: true }).catch(() => {});
+    }
+  });
 }
 
 function renderTabelaUsuarios() {
@@ -4664,15 +4693,14 @@ setTimeout(() => { if (pwaEhIOS()) mostrarBannerPwa(); }, 3000);
 
 /* ══════════════ TAREFAS E ROTINAS ══════════════ */
 
-// Nome de quem a tarefa está atribuída. "usuarios" só é lido por inteiro
-// pra quem tem acesso à tela de Contas de Acesso (admin — ver
-// AREAS_POR_PAPEL em auth.js e a regra de /usuarios em firestore.rules), então
-// gerente/SDR/colaborador não enxergam o diretório completo. Pra não exibir
-// "Sem responsável" quando na verdade TEM responsável (só não dá pra ver o
-// nome), resolve o próprio usuário via AUTH.usuario (sempre disponível) e só
-// declara "sem responsável" quando o campo realmente está vazio.
+// Nome de quem a tarefa está atribuída. Fonte principal é o espelho leve
+// diretorioNomes (todo mundo que vê Tarefas lê ele — ver firestore.rules);
+// STATE.usuarios só existe pra quem tem a tela de Contas de Acesso (admin),
+// então fica como reforço, não como dependência. Resolver o próprio nome
+// via AUTH.usuario cobre até o instante entre logar e o espelho carregar.
 function nomeResponsavelTarefa(t) {
   if (!t.responsavelUid) return "Sem responsável";
+  if (STATE.diretorioNomes[t.responsavelUid]) return STATE.diretorioNomes[t.responsavelUid];
   if (AUTH.user && t.responsavelUid === AUTH.user.uid) return AUTH.usuario?.nome || "Você";
   const u = STATE.usuarios.find((x) => x.id === t.responsavelUid);
   return u ? u.nome : "—";
@@ -4707,9 +4735,10 @@ function renderCardTarefa(t) {
 // Filtro de pessoa: só pra gestão (admin/gerente — é quem "acompanha todo
 // mundo", crença repetida na reunião do módulo), e só faz sentido junto
 // com "Todas" (em "Minhas" já é uma pessoa só, a própria). Monta as opções
-// a partir de quem TEM tarefa no recorte atual, não do diretório inteiro de
-// usuários — assim funciona mesmo pra gerente, que não enxerga a lista
-// completa de contas (mesma limitação de nomeResponsavelTarefa acima).
+// a partir de quem TEM tarefa no recorte atual (não do diretório inteiro de
+// usuários — não tem por que listar gente sem nenhuma tarefa), usando
+// nomeResponsavelTarefa, que já resolve certo pro gerente via
+// diretorioNomes.
 function atualizarFiltroPessoaTarefas(cardsBase) {
   const wrap = document.getElementById("tarefas-filtro-pessoa-wrap");
   const sel = document.getElementById("tarefas-filtro-pessoa");

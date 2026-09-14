@@ -100,6 +100,19 @@ service cloud.firestore {
       allow delete: if ehAdmin() && request.auth.uid != uid;
     }
 
+    // Espelho enxuto de usuarios/{uid} — só o nome, nada de e-mail/papel.
+    // Existe porque a leitura de "usuarios" é exclusiva do admin (linha 73
+    // acima), mas o nome de quem é responsável por uma tarefa precisa
+    // aparecer pra QUALQUER um que veja o módulo de Tarefas (gerente
+    // filtrando "Todas", SDR vendo o card de um colega etc.) — sem abrir
+    // e-mail/papel de ninguém pra isso. O app.js mantém isto sincronizado
+    // sozinho (iniciarListenerUsuarios, só roda pro admin) sempre que
+    // "usuarios" muda; nunca é escrito por mão de usuário comum.
+    match /diretorioNomes/{uid} {
+      allow read: if podeVerTarefas();
+      allow write: if ehAdmin();
+    }
+
     /* ══════════════ configuração ══════════════ */
 
     // Leitura pública e sem login de propósito: a tela precisa saber se
