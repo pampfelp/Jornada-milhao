@@ -405,16 +405,23 @@ function acaoReceberLeadYayformsInterno_(e) {
     }
   }
 
-  // Se 'answers' vier como um objeto (mapa de IDs), converte para array
+  // Se 'answers' vier como um objeto (mapa de IDs), converte para array —
+  // mas guarda o ID de cada campo (a chave do mapa) em "fieldId" antes de
+  // achatar, porque é dele que mapearQualificacaoYayforms_ depende pra
+  // saber EXATAMENTE qual pergunta é essa (ver comentário lá embaixo).
   var answersArray = [];
   if (r.answers && typeof r.answers === 'object' && !Array.isArray(r.answers)) {
-    Object.keys(r.answers).forEach(function(k) { answersArray.push(r.answers[k]); });
+    Object.keys(r.answers).forEach(function(k) {
+      var a = r.answers[k];
+      a.fieldId = k;
+      answersArray.push(a);
+    });
   } else if (Array.isArray(r.answers)) {
     answersArray = r.answers;
   }
 
   var extraido = extrairContatoRespostaYayforms_(answersArray);
-  var qualificacao = mapearQualificacaoYayforms_(answersArray);
+  var qualificacao = mapearQualificacaoYayforms_(answersArray, r.formId);
 
   var etapaInicialId = obterPrimeiraEtapaAgendamento_();
   if (!etapaInicialId) return { ok: false, erro: "Cadastre ao menos uma etapa no Funil de Agendamento (Configurações) antes de ligar essa integração." };
@@ -446,58 +453,114 @@ function acaoReceberLeadYayformsInterno_(e) {
   return { ok: true, clienteId: clienteId, formulario: nomeFormulario };
 }
 
-function mapearQualificacaoYayforms_(answers) {
-  var q = {
-    estabelecimento: null,
-    timeComercial: null,
-    faturamento6meses: null,
-    ondeTrava: [],
-    instagram: ""
-  };
-  
-  answers.forEach(function (a) {
-    if (a.content === null || a.content === undefined) return;
-    var valorTexto = Array.isArray(a.content) ? a.content.join(", ") : String(a.content);
-    if (!valorTexto.trim()) return;
-    
-    var tituloBase = a.fieldPlainTitle || a.fieldTitle || "Pergunta";
-    tituloBase = tituloBase.replace(/<[^>]*>?/gm, '');
-    var t = tituloBase.toLowerCase();
-    var v = valorTexto.toLowerCase();
-    
-    if (t.indexOf("instagram") > -1) {
-      q.instagram = valorTexto.trim();
-    } else if (t.indexOf("estabelecimento") > -1 || t.indexOf("ponto fixo") > -1) {
-      if (v.indexOf("remoto") > -1 || v.indexOf("online") > -1) q.estabelecimento = "remoto_online";
-      else if (v.indexOf("fixo") > -1 || v.indexOf("físico") > -1 || v.indexOf("fisico") > -1) q.estabelecimento = "ponto_fixo";
-    } else if (t.indexOf("time comercial") > -1 || t.indexOf("vendedores") > -1) {
-      if (v.indexOf("0") > -1 || v.indexOf("1") > -1) q.timeComercial = "0_1";
-      else if (v.indexOf("2") > -1) q.timeComercial = "ate_2";
-      else if (v.indexOf("3") > -1) q.timeComercial = "ate_3";
-      else if (v.indexOf("equipe") > -1) q.timeComercial = "equipe";
-    } else if (t.indexOf("faturamento") > -1 || t.indexOf("6 meses") > -1 || t.indexOf("seis meses") > -1) {
-      if (v.indexOf("menos") > -1) q.faturamento6meses = "menos_500k";
-      else if (v.indexOf("500") > -1 && v.indexOf("800") > -1) q.faturamento6meses = "500k_800k";
-      else if (v.indexOf("800") > -1 && (v.indexOf("1,2") > -1 || v.indexOf("1.2") > -1)) q.faturamento6meses = "800k_1_2mi";
-      else if ((v.indexOf("1,2") > -1 || v.indexOf("1.2") > -1) && v.indexOf("2") > -1) q.faturamento6meses = "1_2mi_2mi";
-      else if (v.indexOf("acima") > -1) q.faturamento6meses = "acima_2mi";
-    } else if (t.indexOf("trava") > -1 || t.indexOf("dificuldade") > -1 || t.indexOf("desafio") > -1 || t.indexOf("crescer") > -1) {
-      var dicionarioOndeTrava = [
+// ══════════════ MAPA FIXO DE PERGUNTAS POR FORMULÁRIO (1 pergunta = 1 campo) ══════════════
+//
+// Antes disso o casamento era por PALAVRA-CHAVE no título da pergunta —
+// funcionava até duas perguntas do MESMO formulário conterem a mesma
+// palavra. Foi exatamente o que aconteceu: "Qual faturamento você TEVE nos
+// últimos 6 meses" e "Qual faturamento você QUER atingir nos próximos 6
+// meses" continham as duas "faturamento" e "6 meses", então caíam no mesmo
+// bloco de código — só não se via o efeito porque as opções de resposta da
+// segunda não batiam com nenhuma faixa esperada, por sorte de redação, não
+// por proteção de verdade.
+//
+// Agora é pelo ID do campo na YayForms (a chave de "answers", ex.:
+// "6a4bf6f071fc6c335703ec48") — único por pergunta DENTRO de um formulário,
+// sem ambiguidade nenhuma: 1 ID = 1 pergunta = 1 campo do CRM. Cada formId
+// tem sua própria tabela porque o ID de cada campo é gerado pela YayForms e
+// não se repete entre formulários diferentes, mesmo quando a pergunta
+// parece igual.
+//
+// Formulário sem tabela aqui (ou pergunta sem entrada dentro da tabela)
+// simplesmente não preenche aquele campo — a resposta continua intacta no
+// texto de observações (extrairContatoRespostaYayforms_ grava TODAS as
+// respostas lá, nenhuma se perde), e a SDR preenche na ligação, como
+// sempre foi pra lead que não veio de formulário nenhum.
+//
+// Pra adicionar/completar um formulário: abra uma resposta completa na
+// tela de Logs da YayForms (ícone de olho), pegue o "formId" e, pra cada
+// pergunta que quiser mapear, o ID da chave dentro de "answers" e o texto
+// EXATO da opção escolhida (cópia e cola, sem adivinhar acento nem
+// pontuação).
+var MAPAS_FORMULARIO_QUALIFICACAO_ = {
+  // "Jornada do Milhão - ORGANICO"
+  "6a4bf6ef71fc6c335703ec43": {
+    "6a4bf6ef71fc6c335703ec47": { chave: "instagram", tipo: "texto" },
+    "6a4bf6f071fc6c335703ec48": {
+      chave: "estabelecimento", tipo: "opcao",
+      mapa: {
+        "Não, operamos de forma remota / home office": "remoto_online"
+        // "Sim, temos loja/escritório físico" (ou texto equivalente) ainda
+        // não apareceu numa resposta real — adicione aqui assim que uma
+        // resposta escolher essa opção.
+      }
+    },
+    "6a4bf6f071fc6c335703ec49": {
+      chave: "timeComercial", tipo: "opcao",
+      mapa: {
+        "Trabalho sozinho ou tenho 1 vendedor": "0_1"
+        // "Até 2 vendedores" / "Até 3 vendedores" / "Equipe comercial" (ou
+        // texto equivalente) ainda não apareceram — adicione aqui quando
+        // aparecerem.
+      }
+    },
+    "6a4bf6f071fc6c335703ec4a": {
+      chave: "faturamento6meses", tipo: "opcao",
+      mapa: {
+        "Menos de R$ 500.000,00": "menos_500k",
+        "Entre R$ 500.000,00 e R$ 800.000,00": "500k_800k",
+        "Entre R$ 800.000,00 e R$ 1,2 milhão": "800k_1_2mi",
+        "Entre R$ 1,2 milhão e R$ 2 milhões": "1_2mi_2mi",
+        "Acima de R$ 2 milhões": "acima_2mi"
+      }
+    },
+    "6a4bf6f071fc6c335703ec4b": {
+      chave: "ondeTrava", tipo: "multipla",
+      opcoes: [
         "Margem caindo, mesmo vendendo",
         "Não consigo escalar as vendas mesmo tendo equipe",
         "Minha operação não comporta crescer mais",
         "Falta de previsibilidade - mês bom, mês ruim",
         "Gestão de time comercial",
         "Dificuldade em contratar e remunerar time comercial"
-      ];
+      ]
+    }
+    // 6a4bf6f071fc6c335703ec4c (nome da empresa/cidade), ec4f (meta de
+    // faturamento), ec4e (comprometimento) e ec4d (confirmação de vaga) não
+    // têm campo correspondente no CRM ainda — de propósito, ver plano.
+  }
+  // Outro formId aqui quando "parceiros" / "tráfego" / "tráfego (com capa)"
+  // precisarem do mesmo tratamento — hoje eles ficam sem qualificação
+  // automática (só o texto em observações), igual um lead sem formulário.
+};
+
+function mapearQualificacaoYayforms_(answers, formId) {
+  var q = { estabelecimento: null, timeComercial: null, faturamento6meses: null, ondeTrava: [], instagram: "" };
+  var mapaForm = MAPAS_FORMULARIO_QUALIFICACAO_[formId];
+  if (!mapaForm) return q;
+
+  answers.forEach(function (a) {
+    var cfg = mapaForm[a.fieldId];
+    if (!cfg || a.content === null || a.content === undefined) return;
+    var valorTexto = Array.isArray(a.content) ? a.content.join(", ") : String(a.content);
+    valorTexto = valorTexto.trim();
+    if (!valorTexto) return;
+
+    if (cfg.tipo === "texto") {
+      q[cfg.chave] = valorTexto;
+    } else if (cfg.tipo === "opcao") {
+      // Comparação EXATA de propósito: já sabemos com certeza qual pergunta
+      // é essa (foi o ID que decidiu), então não tem por que adivinhar o
+      // valor por pedaço de texto — se a opção ainda não está no "mapa",
+      // fica de fora (visível nos comentários acima) em vez de arriscar
+      // um match errado.
+      var codigo = cfg.mapa[valorTexto];
+      if (codigo) q[cfg.chave] = codigo;
+    } else if (cfg.tipo === "multipla") {
       var selecionados = Array.isArray(a.content) ? a.content : [String(a.content)];
-      selecionados.forEach(function(sel) {
-        var lowerSel = sel.toLowerCase();
-        dicionarioOndeTrava.forEach(function(dictItem) {
-          if (lowerSel.indexOf(dictItem.toLowerCase().substring(0, 15)) > -1) {
-            if (q.ondeTrava.indexOf(dictItem) === -1) q.ondeTrava.push(dictItem);
-          }
-        });
+      selecionados.forEach(function (sel) {
+        var s = String(sel).trim();
+        if (cfg.opcoes.indexOf(s) > -1 && q.ondeTrava.indexOf(s) === -1) q.ondeTrava.push(s);
       });
     }
   });
@@ -591,6 +654,12 @@ function valorFirestore_(v) {
   if (v === null || v === undefined) return { nullValue: null };
   if (typeof v === "boolean") return { booleanValue: v };
   if (typeof v === "number") return { doubleValue: v };
+  // Faltava isso: sem checar array ANTES do "resto vira string", uma lista
+  // como ondeTrava virava "String(['a','b'])" = "a,b" gravado como
+  // stringValue — o app.js espera um array de verdade (chama .join nele) e
+  // quebrava ao abrir o card. Recursivo pra cobrir array de objeto também,
+  // se algum dia precisar.
+  if (Array.isArray(v)) return { arrayValue: { values: v.map(valorFirestore_) } };
   return { stringValue: String(v) };
 }
 

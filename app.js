@@ -1193,7 +1193,7 @@ function requisitosFaltantesEtapa(etapaCfg, cliente, ag) {
     if (!ag?.estabelecimento) faltando.push("estabelecimento (ponto fixo/remoto)");
     if (!ag?.timeComercial) faltando.push("time comercial");
     if (!ag?.faturamento6meses) faltando.push("faturamento dos últimos 6 meses");
-    if (!(ag?.ondeTrava && ag.ondeTrava.length)) faltando.push("onde a empresa trava");
+    if (!(Array.isArray(ag?.ondeTrava) && ag.ondeTrava.length)) faltando.push("onde a empresa trava");
     if (ag?.comprometimento == null) faltando.push("nível de comprometimento (0 a 10)");
     if (ag?.nivelInteresse == null) faltando.push("nível de interesse");
   }
@@ -1273,7 +1273,7 @@ async function processarAgendamentoAgendado(agendamentoId, dados) {
           email: dados.email || "", nivelInteresse: dados.nivelInteresse || null,
           instagram: dados.instagram || "", estabelecimento: dados.estabelecimento || null,
           timeComercial: dados.timeComercial || null, faturamento6meses: dados.faturamento6meses || null,
-          ondeTrava: dados.ondeTrava || [], comprometimento: dados.comprometimento != null ? dados.comprometimento : null,
+          ondeTrava: Array.isArray(dados.ondeTrava) ? dados.ondeTrava : [], comprometimento: dados.comprometimento != null ? dados.comprometimento : null,
           data: dados.data || "", hora: dados.hora || "",
           agendamentoId, etapa: primeiraEtapaVenda.id, valorProposto: 0, observacoes: dados.observacoes || "",
           perdida: false, motivoPerda: "", fechada: false,
@@ -1455,7 +1455,7 @@ function preencherCamposQualificacaoAgendamento(a) {
   pickerEstabelecimento.set(a.estabelecimento || null);
   document.getElementById("ma-time-comercial").value = a.timeComercial || "";
   document.getElementById("ma-faturamento").value = a.faturamento6meses || "";
-  checkboxOndeTrava.setSelecionados(a.ondeTrava || []);
+  checkboxOndeTrava.setSelecionados(Array.isArray(a.ondeTrava) ? a.ondeTrava : []);
   pickerComprometimento.set(a.comprometimento != null ? String(a.comprometimento) : null);
 }
 
@@ -1630,7 +1630,7 @@ function abrirDetalheAgendamento(id) {
         ["Estabelecimento", esc(LABEL_ESTABELECIMENTO[a.estabelecimento] || "—")],
         ["Time comercial", esc(LABEL_TIME_COMERCIAL[a.timeComercial] || "—")],
         ["Faturamento (últimos 6 meses)", esc(LABEL_FATURAMENTO[a.faturamento6meses] || "—")],
-        ["Onde a empresa trava", (a.ondeTrava && a.ondeTrava.length) ? esc(a.ondeTrava.join("; ")) : "—"],
+        ["Onde a empresa trava", (Array.isArray(a.ondeTrava) && a.ondeTrava.length) ? esc(a.ondeTrava.join("; ")) : "—"],
         ["Comprometimento (0 a 10)", a.comprometimento != null ? `${a.comprometimento}/10` : "—"],
         ["Nível de interesse", esc(labelNivelInteresse(a.nivelInteresse))],
         ["Data", esc(fmtData(a.data))],
@@ -1868,7 +1868,7 @@ function abrirDetalheOportunidade(id) {
       ["Estabelecimento", esc(LABEL_ESTABELECIMENTO[o.estabelecimento] || "—")],
       ["Time comercial", esc(LABEL_TIME_COMERCIAL[o.timeComercial] || "—")],
       ["Faturamento (últimos 6 meses)", esc(LABEL_FATURAMENTO[o.faturamento6meses] || "—")],
-      ["Onde a empresa trava", (o.ondeTrava && o.ondeTrava.length) ? esc(o.ondeTrava.join("; ")) : "—"],
+      ["Onde a empresa trava", (Array.isArray(o.ondeTrava) && o.ondeTrava.length) ? esc(o.ondeTrava.join("; ")) : "—"],
       ["Comprometimento (0 a 10)", o.comprometimento != null ? `${o.comprometimento}/10` : "—"],
       ["Nível de interesse", esc(labelNivelInteresse(o.nivelInteresse))],
       ["Data do agendamento", esc(fmtData(o.data))],
