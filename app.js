@@ -5000,3 +5000,46 @@ document.getElementById("btn-excluir-rotina")?.addEventListener("click", async (
   try { await deleteDoc(doc(db, "rotinas", pendingRotinaId)); fecharModal("modal-rotina"); mostrarToast("Rotina excluída."); } catch (err) { mostrarErro(err.message); }
 });
 
+// Botão manual pra "lançar rotinas de hoje" — cobre o intervalo até o
+// trigger automático do Apps Script existir (Frente 2 do plano de Tarefas)
+// sem deixar o time refém dele nesse meio-tempo. A dedupe é local: como
+// STATE.tarefas já vem em tempo real (onSnapshot), basta checar se já
+// existe uma tarefa {origemRotinaId, dataReferencia} — mesmo par que o
+// trigger automático vai usar, então rodar os dois no mesmo dia nunca
+// duplica nada.
+async function lancarRotinasDoDia() {
+  const hoje = hojeStr();
+  const diaSemana = new Date(hoje + "T12:00:00").getDay(); // meio-dia: nunca vira o dia por fuso
+  const primeiraEtapa = STATE.etapasTarefa[0]; // já vem ordenado por "ordem" (ver listener)
+  if (!primeiraEtapa) { mostrarErro('Cadastre ao menos uma etapa em Configurações → Etapas de Tarefas antes de lançar rotinas.'); return; }
+
+  const candidatas = STATE.rotinas.filter((r) => r.ativa && (r.diasSemana || []).includes(diaSemana));
+  if (!candidatas.length) { mostrarToast("Nenhuma rotina ativa marcada pra hoje."); return; }
+
+  const jaLancadas = new Set(STATE.tarefas.filter((t) => t.origemRotinaId && t.dataReferencia === hoje).map((t) => t.origemRotinaId));
+  const pendentes = candidatas.filter((r) => !jaLancadas.has(r.id));
+  if (!pendentes.length) { mostrarToast(`${candidatas.length} rotina(s) de hoje — todas já tinham sido lançadas.`); return; }
+
+  const btn = document.getElementById("btn-lancar-rotinas");
+  if (btn) btn.disabled = true;
+  try {
+    for (const r of pendentes) {
+      await addDoc(collection(db, "tarefas"), {
+        titulo: r.titulo, descricao: "",
+        responsavelUid: r.responsavelUid || "",
+        etapa: primeiraEtapa.id,
+        subtarefas: (r.checklistTemplate || []).map((c) => ({ titulo: c.titulo, feito: false })),
+        origemRotinaId: r.id, dataReferencia: hoje, prazo: "",
+        dataEntrouEtapa: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+      });
+    }
+    const pulou = candidatas.length - pendentes.length;
+    mostrarToast(`${pendentes.length} rotina(s) lançada(s) como tarefa de hoje.${pulou ? ` (${pulou} já existia${pulou > 1 ? "m" : ""}.)` : ""}`);
+  } catch (err) {
+    mostrarErro(err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+document.getElementById("btn-lancar-rotinas")?.addEventListener("click", lancarRotinasDoDia);
+
