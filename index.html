@@ -114,6 +114,7 @@
     <a data-view="entradas"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>Entradas</a>
     <a data-view="despesas"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span>Despesas &amp; Custos</a>
     <a data-view="clientes"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>Clientes</a>
+    <a data-view="tarefas" id="menu-tarefas"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>Tarefas</a>
     <a data-view="config"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>Configurações</a>
   </nav>
   <div class="sessao">
@@ -412,6 +413,24 @@
     </div>
   </section>
 
+  <!-- ═══ TAREFAS E ROTINAS ═══ -->
+  <section id="view-tarefas" class="view">
+    <header class="top">
+      <div>
+        <h1>Tarefas &amp; Rotinas</h1>
+        <div class="view-desc">Acompanhamento de tarefas, atividades avulsas e rotinas diárias.</div>
+      </div>
+      <div class="top-actions">
+        <div class="view-toggle" id="tarefas-filtro-toggle" style="margin-right:10px;">
+          <button class="view-toggle-btn active" data-filtro="minhas">Minhas</button>
+          <button class="view-toggle-btn" data-filtro="todas">Todas</button>
+        </div>
+        <button class="btn btn-primary" id="btn-nova-tarefa">+ Nova Tarefa</button>
+      </div>
+    </header>
+    <div class="kanban-wrap" id="kanban-tarefas"></div>
+  </section>
+
   <!-- ═══ CONFIGURAÇÕES ═══ -->
   <section id="view-config" class="view">
     <header class="top"><div><h1>Configurações</h1></div></header>
@@ -447,6 +466,17 @@
         </table>
       </div>
       <p class="hint"><button class="btn-small" id="btn-nova-etapa-admin">+ Etapa</button></p>
+    </div>
+
+    <div class="card" id="config-rotinas">
+      <div class="section-head"><h2>Configuração de <span>Rotinas</span></h2><div class="hint">Tarefas geradas automaticamente em dias específicos.</div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Título</th><th>Responsável</th><th>Dias da Semana</th><th>Ativa</th><th></th></tr></thead>
+          <tbody id="tabela-rotinas"></tbody>
+        </table>
+      </div>
+      <p class="hint"><button class="btn-small" id="btn-nova-rotina">+ Nova Rotina</button></p>
     </div>
 
     <div class="card">
@@ -1025,6 +1055,94 @@
       <div class="modal-actions">
         <button class="btn btn-primary" data-fechar-modal="modal-usuario">Entendi</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL NOVA/EDITAR TAREFA ═══ -->
+<div class="modal" id="modal-tarefa">
+  <div class="modal-box">
+    <button class="modal-close" data-fechar-modal="modal-tarefa"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    <h2 id="modal-tarefa-titulo">Nova Tarefa</h2>
+    <div class="field">
+      <label>Título</label>
+      <input type="text" id="mt-titulo" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Descrição</label>
+      <textarea id="mt-descricao" rows="3" placeholder="Opcional"></textarea>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>Responsável</label>
+        <select id="mt-responsavel"><option value="">Sem responsável</option></select>
+      </div>
+      <div class="field">
+        <label>Prazo (opcional)</label>
+        <input type="date" id="mt-prazo">
+      </div>
+    </div>
+    <div class="field">
+      <label>Checklist</label>
+      <div id="mt-checklist-container" style="border:1px solid var(--line);border-radius:6px;padding:8px;margin-bottom:8px;max-height:150px;overflow-y:auto;">
+        <!-- Itens injetados via JS -->
+      </div>
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="mt-novo-item" placeholder="Novo item..." autocomplete="off" style="flex:1;">
+        <button class="btn" id="btn-add-item-checklist" type="button">Add</button>
+      </div>
+    </div>
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn btn-danger" id="btn-excluir-tarefa" style="display:none;margin-right:auto;">Excluir</button>
+      <button class="btn" data-fechar-modal="modal-tarefa">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-tarefa">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL NOVA/EDITAR ROTINA ═══ -->
+<div class="modal" id="modal-rotina">
+  <div class="modal-box">
+    <button class="modal-close" data-fechar-modal="modal-rotina"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    <h2 id="modal-rotina-titulo">Nova Rotina</h2>
+    <div class="field">
+      <label>Título da rotina</label>
+      <input type="text" id="mr-titulo" autocomplete="off" placeholder="Ex: Acompanhar contratos">
+    </div>
+    <div class="field">
+      <label>Responsável Padrão</label>
+      <select id="mr-responsavel"><option value="">Sem responsável</option></select>
+    </div>
+    <div class="field">
+      <label>Dias da Semana (Geração automática)</label>
+      <div class="checkbox-group" id="mr-dias-semana" style="display:flex;gap:8px;flex-wrap:wrap;">
+        <label><input type="checkbox" value="1"> Seg</label>
+        <label><input type="checkbox" value="2"> Ter</label>
+        <label><input type="checkbox" value="3"> Qua</label>
+        <label><input type="checkbox" value="4"> Qui</label>
+        <label><input type="checkbox" value="5"> Sex</label>
+        <label><input type="checkbox" value="6"> Sáb</label>
+        <label><input type="checkbox" value="0"> Dom</label>
+      </div>
+      <p class="hint">A tarefa nascerá sozinha de madrugada nos dias marcados.</p>
+    </div>
+    <div class="field">
+      <label>Template de Checklist (Opcional)</label>
+      <div id="mr-checklist-container" style="border:1px solid var(--line);border-radius:6px;padding:8px;margin-bottom:8px;max-height:150px;overflow-y:auto;"></div>
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="mr-novo-item" placeholder="Novo item..." autocomplete="off" style="flex:1;">
+        <button class="btn" id="btn-add-item-rotina" type="button">Add</button>
+      </div>
+    </div>
+    <div class="field" style="margin-top:12px;">
+      <label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;">
+        <input type="checkbox" id="mr-ativa" checked> Rotina Ativa
+      </label>
+    </div>
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn btn-danger" id="btn-excluir-rotina" style="display:none;margin-right:auto;">Excluir</button>
+      <button class="btn" data-fechar-modal="modal-rotina">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-rotina">Salvar</button>
     </div>
   </div>
 </div>

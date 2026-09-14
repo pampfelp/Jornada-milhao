@@ -414,6 +414,7 @@ function acaoReceberLeadYayformsInterno_(e) {
   }
 
   var extraido = extrairContatoRespostaYayforms_(answersArray);
+  var qualificacao = mapearQualificacaoYayforms_(answersArray);
 
   var etapaInicialId = obterPrimeiraEtapaAgendamento_();
   if (!etapaInicialId) return { ok: false, erro: "Cadastre ao menos uma etapa no Funil de Agendamento (Configurações) antes de ligar essa integração." };
@@ -436,10 +437,71 @@ function acaoReceberLeadYayformsInterno_(e) {
     telefone: extraido.telefone, email: extraido.email,
     data: "", hora: "", etapa: etapaInicialId,
     convertido: false, enviadoAgenda: false, motivoPerda: "",
-    observacoes: observacoes, formCompleto: !!r.submittedAt, yayformsResponseId: r.id
+    observacoes: observacoes, formCompleto: !!r.submittedAt, yayformsResponseId: r.id,
+    instagram: qualificacao.instagram, estabelecimento: qualificacao.estabelecimento,
+    timeComercial: qualificacao.timeComercial, faturamento6meses: qualificacao.faturamento6meses,
+    ondeTrava: qualificacao.ondeTrava
   });
 
   return { ok: true, clienteId: clienteId, formulario: nomeFormulario };
+}
+
+function mapearQualificacaoYayforms_(answers) {
+  var q = {
+    estabelecimento: null,
+    timeComercial: null,
+    faturamento6meses: null,
+    ondeTrava: [],
+    instagram: ""
+  };
+  
+  answers.forEach(function (a) {
+    if (a.content === null || a.content === undefined) return;
+    var valorTexto = Array.isArray(a.content) ? a.content.join(", ") : String(a.content);
+    if (!valorTexto.trim()) return;
+    
+    var tituloBase = a.fieldPlainTitle || a.fieldTitle || "Pergunta";
+    tituloBase = tituloBase.replace(/<[^>]*>?/gm, '');
+    var t = tituloBase.toLowerCase();
+    var v = valorTexto.toLowerCase();
+    
+    if (t.indexOf("instagram") > -1) {
+      q.instagram = valorTexto.trim();
+    } else if (t.indexOf("estabelecimento") > -1 || t.indexOf("ponto fixo") > -1) {
+      if (v.indexOf("remoto") > -1 || v.indexOf("online") > -1) q.estabelecimento = "remoto_online";
+      else if (v.indexOf("fixo") > -1 || v.indexOf("físico") > -1 || v.indexOf("fisico") > -1) q.estabelecimento = "ponto_fixo";
+    } else if (t.indexOf("time comercial") > -1 || t.indexOf("vendedores") > -1) {
+      if (v.indexOf("0") > -1 || v.indexOf("1") > -1) q.timeComercial = "0_1";
+      else if (v.indexOf("2") > -1) q.timeComercial = "ate_2";
+      else if (v.indexOf("3") > -1) q.timeComercial = "ate_3";
+      else if (v.indexOf("equipe") > -1) q.timeComercial = "equipe";
+    } else if (t.indexOf("faturamento") > -1 || t.indexOf("6 meses") > -1 || t.indexOf("seis meses") > -1) {
+      if (v.indexOf("menos") > -1) q.faturamento6meses = "menos_500k";
+      else if (v.indexOf("500") > -1 && v.indexOf("800") > -1) q.faturamento6meses = "500k_800k";
+      else if (v.indexOf("800") > -1 && (v.indexOf("1,2") > -1 || v.indexOf("1.2") > -1)) q.faturamento6meses = "800k_1_2mi";
+      else if ((v.indexOf("1,2") > -1 || v.indexOf("1.2") > -1) && v.indexOf("2") > -1) q.faturamento6meses = "1_2mi_2mi";
+      else if (v.indexOf("acima") > -1) q.faturamento6meses = "acima_2mi";
+    } else if (t.indexOf("trava") > -1 || t.indexOf("dificuldade") > -1 || t.indexOf("desafio") > -1 || t.indexOf("crescer") > -1) {
+      var dicionarioOndeTrava = [
+        "Margem caindo, mesmo vendendo",
+        "Não consigo escalar as vendas mesmo tendo equipe",
+        "Minha operação não comporta crescer mais",
+        "Falta de previsibilidade - mês bom, mês ruim",
+        "Gestão de time comercial",
+        "Dificuldade em contratar e remunerar time comercial"
+      ];
+      var selecionados = Array.isArray(a.content) ? a.content : [String(a.content)];
+      selecionados.forEach(function(sel) {
+        var lowerSel = sel.toLowerCase();
+        dicionarioOndeTrava.forEach(function(dictItem) {
+          if (lowerSel.indexOf(dictItem.toLowerCase().substring(0, 15)) > -1) {
+            if (q.ondeTrava.indexOf(dictItem) === -1) q.ondeTrava.push(dictItem);
+          }
+        });
+      });
+    }
+  });
+  return q;
 }
 
 // A YayForms manda o ID da resposta em algum lugar do corpo do webhook —
@@ -576,4 +638,125 @@ function obterPrimeiraEtapaAgendamento_() {
 
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ══════════════ LANÇAMENTO DIÁRIO DE ROTINAS (Frente 2) ══════════════
+
+function instalarTriggerRotinas() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "acaoLancarRotinasDiarias_") return;
+  }
+  ScriptApp.newTrigger("acaoLancarRotinasDiarias_")
+    .timeBased()
+    .atHour(0)
+    .everyDays(1)
+    .create();
+}
+
+function acaoLancarRotinasDiarias_() {
+  try {
+    var token = obterIdTokenRobo_();
+    var hoje = new Date().toISOString().slice(0, 10);
+    var urlRotinas = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents/rotinas?key=" + FIRESTORE_API_KEY_ + "&pageSize=300";
+    var respRotinas = UrlFetchApp.fetch(urlRotinas, { headers: { Authorization: "Bearer " + token }, muteHttpExceptions: true });
+    var jsonRotinas = JSON.parse(respRotinas.getContentText());
+    if (jsonRotinas.error) throw new Error("Erro ler rotinas: " + jsonRotinas.error.message);
+    
+    var rotinas = jsonRotinas.documents || [];
+    
+    var urlEtapas = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents/etapasTarefaConfig?key=" + FIRESTORE_API_KEY_ + "&pageSize=100";
+    var respEtapas = UrlFetchApp.fetch(urlEtapas, { headers: { Authorization: "Bearer " + token }, muteHttpExceptions: true });
+    var jsonEtapas = JSON.parse(respEtapas.getContentText());
+    var docs = jsonEtapas.documents || [];
+    var melhor = null;
+    docs.forEach(function (d) {
+      var campoOrdem = d.fields && d.fields.ordem;
+      var ordem = campoOrdem ? Number(campoOrdem.integerValue != null ? campoOrdem.integerValue : campoOrdem.doubleValue) : 999999;
+      if (!melhor || ordem < melhor.ordem) {
+        var partes = d.name.split("/");
+        melhor = { id: partes[partes.length - 1], ordem: ordem };
+      }
+    });
+    var etapaInicialId = melhor ? melhor.id : "a_fazer";
+
+    var diaSemanaHj = new Date().getDay(); 
+
+    rotinas.forEach(function (r) {
+      var rotinaId = r.name.split("/").pop();
+      var f = r.fields || {};
+      var ativa = f.ativa && f.ativa.booleanValue;
+      if (!ativa) return;
+      
+      var diasSemana = [];
+      if (f.diasSemana && f.diasSemana.arrayValue && f.diasSemana.arrayValue.values) {
+        diasSemana = f.diasSemana.arrayValue.values.map(function(v) { return Number(v.integerValue != null ? v.integerValue : v.doubleValue); });
+      }
+      if (diasSemana.length > 0 && diasSemana.indexOf(diaSemanaHj) === -1) return;
+
+      var queryUrl = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents:runQuery?key=" + FIRESTORE_API_KEY_;
+      var queryPayload = {
+        structuredQuery: {
+          from: [{ collectionId: "tarefas" }],
+          where: {
+            compositeFilter: {
+              op: "AND",
+              filters: [
+                { fieldFilter: { field: { fieldPath: "origemRotinaId" }, op: "EQUAL", value: { stringValue: rotinaId } } },
+                { fieldFilter: { field: { fieldPath: "dataReferencia" }, op: "EQUAL", value: { stringValue: hoje } } }
+              ]
+            }
+          }
+        }
+      };
+      
+      var respQuery = UrlFetchApp.fetch(queryUrl, {
+        method: "post", contentType: "application/json",
+        headers: { Authorization: "Bearer " + token },
+        payload: JSON.stringify(queryPayload), muteHttpExceptions: true
+      });
+      var jsonQuery = JSON.parse(respQuery.getContentText());
+      if (jsonQuery && jsonQuery.length > 0 && jsonQuery[0].document) {
+        console.log("Tarefa já existe para rotina " + rotinaId + " na data " + hoje);
+        return;
+      }
+      
+      var subtarefasList = [];
+      if (f.checklistTemplate && f.checklistTemplate.arrayValue && f.checklistTemplate.arrayValue.values) {
+        subtarefasList = f.checklistTemplate.arrayValue.values.map(function(v) { 
+          return { mapValue: { fields: { titulo: { stringValue: v.stringValue }, feito: { booleanValue: false } } } }; 
+        });
+      }
+
+      var fields = {
+        titulo: f.titulo ? f.titulo : { stringValue: "" },
+        descricao: { stringValue: "Lançamento automático de rotina" },
+        responsavelUid: f.responsavelUid ? f.responsavelUid : { stringValue: "" },
+        etapa: { stringValue: etapaInicialId },
+        origemRotinaId: { stringValue: rotinaId },
+        dataReferencia: { stringValue: hoje },
+        prazo: { stringValue: "" }
+      };
+      if (subtarefasList.length > 0) {
+        fields.subtarefas = { arrayValue: { values: subtarefasList } };
+      } else {
+        fields.subtarefas = { arrayValue: { values: [] } };
+      }
+      
+      var agora = new Date().toISOString();
+      fields.createdAt = { timestampValue: agora };
+      fields.updatedAt = { timestampValue: agora };
+      fields.dataEntrouEtapa = { timestampValue: agora };
+      
+      var urlCreate = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents/tarefas?key=" + FIRESTORE_API_KEY_;
+      UrlFetchApp.fetch(urlCreate, {
+        method: "post", contentType: "application/json",
+        headers: { Authorization: "Bearer " + token },
+        payload: JSON.stringify({ fields: fields }), muteHttpExceptions: true
+      });
+    });
+
+  } catch (err) {
+    console.error("Erro na acaoLancarRotinasDiarias_:", String(err));
+  }
 }

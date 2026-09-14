@@ -41,6 +41,8 @@ service cloud.firestore {
     function equipe() { return temPapel(['admin', 'gerente', 'sdr']); }
     function gestao() { return temPapel(['admin', 'gerente']); }
     function ehAdmin() { return temPapel(['admin']); }
+    function podeVerTarefas() { return temPapel(['admin', 'gerente', 'sdr', 'colaborador']); }
+    function podeEscreverTarefas() { return temPapel(['admin', 'gerente', 'sdr', 'colaborador', 'automacao']); }
 
     // Janela de criação do primeiro admin, fechada pra sempre pelo próprio
     // fluxo de cadastro. Firestore rules não sabem "contar quantos admins
@@ -57,7 +59,7 @@ service cloud.firestore {
       // vir com campos extras não previstos junto na mesma escrita.
       function camposValidos() {
         return request.resource.data.keys().hasOnly(['nome', 'email', 'telefone', 'papel', 'ativo', 'precisaTrocarSenha', 'createdAt'])
-               && request.resource.data.papel in ['admin', 'gerente', 'sdr']
+               && request.resource.data.papel in ['admin', 'gerente', 'sdr', 'colaborador', 'automacao']
                && request.resource.data.nome is string
                && request.resource.data.nome.size() > 0
                && request.resource.data.nome.size() < 120
@@ -282,6 +284,37 @@ service cloud.firestore {
                     && request.resource.data.valor is number
                     && request.resource.data.status is string;
       allow delete: if gestao();
+    }
+
+    /* ══════════════ módulo de tarefas/rotina ══════════════ */
+
+    match /tarefas/{id} {
+      allow read: if podeVerTarefas() || temPapel(['automacao']);
+      allow create, update, delete: if podeEscreverTarefas();
+      
+      match /historico/{logId} {
+        allow read: if podeVerTarefas() || temPapel(['automacao']);
+        allow create: if podeEscreverTarefas();
+        allow update: if false;
+        allow delete: if podeEscreverTarefas();
+      }
+
+      match /atividades/{atId} {
+        allow read: if podeVerTarefas() || temPapel(['automacao']);
+        allow create: if podeEscreverTarefas();
+        allow update: if false;
+        allow delete: if podeEscreverTarefas();
+      }
+    }
+
+    match /rotinas/{id} {
+      allow read: if podeVerTarefas() || temPapel(['automacao']);
+      allow create, update, delete: if podeVerTarefas();
+    }
+
+    match /etapasTarefaConfig/{id} {
+      allow read: if podeVerTarefas() || temPapel(['automacao']);
+      allow create, update, delete: if podeVerTarefas();
     }
   }
 }

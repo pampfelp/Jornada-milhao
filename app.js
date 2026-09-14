@@ -26,6 +26,10 @@ const STATE = {
   entradas: [],
   etapasAdmin: [],
   cardsAdmin: [],
+  tarefas: [],
+  rotinas: [],
+  etapasTarefa: [],
+  filtroTarefas: "minhas", // ou "todas"
   usuarios: [],
   config: {},
   periodoFinanceiro: new Date().toISOString().slice(0, 7),
@@ -73,7 +77,10 @@ let pendingPerda = null; // { colecao: "agendamentos"|"oportunidades", id }
 let pendingEtapaAgendamentoId = null;
 let pendingEtapaVendaId = null;
 let pendingEtapaAdminId = null;
+let pendingEtapaTarefaId = null;
 let pendingClienteId = null;
+let pendingTarefaId = null;
+let pendingRotinaId = null;
 // Quando o cadastro de cliente é aberto "por cima" de outro modal (via
 // "+ Criar cliente" no combobox, ou "Editar cliente" dentro do
 // Agendamento/Vendas), guarda o que fazer depois de salvar: qual callback
@@ -1109,12 +1116,14 @@ function onMoveCard(funil, cardId, novaEtapa) {
   if (funil === "agendamento") moverAgendamento(cardId, novaEtapa);
   else if (funil === "vendas") moverOportunidade(cardId, novaEtapa);
   else if (funil === "administrativo") moverCardAdmin(cardId, novaEtapa);
+  else if (funil === "tarefas") moverTarefa(cardId, novaEtapa);
 }
 
 function onCardClick(funil, cardId) {
   if (funil === "agendamento") abrirDetalheAgendamento(cardId);
   else if (funil === "vendas") abrirDetalheOportunidade(cardId);
   else if (funil === "administrativo") abrirDetalheCardAdmin(cardId);
+  else if (funil === "tarefas") editarTarefa(cardId);
 }
 
 /* ══════════════ FUNIL DE AGENDAMENTO ══════════════ */
@@ -4026,6 +4035,12 @@ const DEFAULT_ETAPAS_ADMIN = [
   { nome: "Envio do Contrato", ordem: 3, slaUnidade: "dias", slaAmarelo: 1, slaVermelho: 2 },
   { nome: "Enviado para Mentoria", ordem: 4, slaUnidade: "dias", slaAmarelo: 3, slaVermelho: 7 }
 ];
+const DEFAULT_ETAPAS_TAREFA = [
+  { nome: "A Fazer", ordem: 1, concluido: false, descartado: false },
+  { nome: "Em Andamento", ordem: 2, concluido: false, descartado: false },
+  { nome: "Concluído", ordem: 3, concluido: true, descartado: false },
+  { nome: "Descartado", ordem: 4, concluido: false, descartado: true }
+];
 
 // Cria as etapas padrão de uma coleção SÓ se ela estiver mesmo vazia no
 // servidor — usa getDocsFromServer (nunca cache) porque essa checagem
@@ -4110,7 +4125,8 @@ async function iniciarListeners() {
       await Promise.all([
         seedEtapasSeVazio_("etapasAgendamentoConfig", DEFAULT_ETAPAS_AGENDAMENTO),
         seedEtapasSeVazio_("etapasVendaConfig", DEFAULT_ETAPAS_VENDA),
-        seedEtapasSeVazio_("etapasAdminConfig", DEFAULT_ETAPAS_ADMIN)
+        seedEtapasSeVazio_("etapasAdminConfig", DEFAULT_ETAPAS_ADMIN),
+        seedEtapasSeVazio_("etapasTarefaConfig", DEFAULT_ETAPAS_TAREFA)
       ]);
     } catch (err) {
       console.warn("[etapas] seed padrão não rodou:", err.message);
@@ -4170,6 +4186,26 @@ async function iniciarListeners() {
     renderFinanceiro();
     rastrearSincronizacao("parcelas", snap);
   }, (err) => mostrarErro("Erro de conexão (parcelas): " + err.message));
+
+  if (podeVer("tarefas")) {
+    onSnapshot(query(collection(db, "tarefas"), orderBy("createdAt", "desc")), { includeMetadataChanges: true }, (snap) => {
+      STATE.tarefas = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      renderKanbanTarefas();
+      rastrearSincronizacao("tarefas", snap);
+    }, (err) => mostrarErro("Erro de conexão (tarefas): " + err.message));
+
+    onSnapshot(collection(db, "rotinas"), { includeMetadataChanges: true }, (snap) => {
+      STATE.rotinas = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      renderConfigRotinas();
+      rastrearSincronizacao("rotinas", snap);
+    }, (err) => mostrarErro("Erro de conexão (rotinas): " + err.message));
+
+    onSnapshot(query(collection(db, "etapasTarefaConfig"), orderBy("ordem")), { includeMetadataChanges: true }, (snap) => {
+      STATE.etapasTarefa = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      renderKanbanTarefas();
+      rastrearSincronizacao("etapasTarefaConfig", snap);
+    }, (err) => mostrarErro("Erro de conexão (etapas tarefas): " + err.message));
+  }
 
   // Despesas e entradas são o que a SDR não pode ver. As regras já barram do
   // lado do servidor; não abrir a escuta aqui evita o erro de permissão em
@@ -4624,3 +4660,210 @@ document.getElementById("pwa-banner-fechar").addEventListener("click", () => {
 // iOS não tem "beforeinstallprompt" pra escutar — mostra a instrução manual
 // direto, com um atraso pra não competir com o carregamento inicial.
 setTimeout(() => { if (pwaEhIOS()) mostrarBannerPwa(); }, 3000);
+
+
+/* ══════════════ TAREFAS E ROTINAS ══════════════ */
+
+function renderKanbanTarefas() {
+  if (!document.getElementById("kanban-tarefas")) return;
+  const colunas = STATE.etapasTarefa.map((e) => ({ id: e.id, nome: e.nome }));
+  let cards = STATE.tarefas;
+  if (STATE.filtroTarefas === "minhas" && AUTH.user) cards = cards.filter(t => t.responsavelUid === AUTH.user.uid);
+
+  renderKanban("kanban-tarefas", "tarefas", colunas, cards, (t) => t.etapa, (t) => {
+    const resp = STATE.usuarios.find(u => u.id === t.responsavelUid);
+    const respNome = resp ? resp.nome : "Sem responsável";
+    const prazo = t.prazo ? `&nbsp;&nbsp;•&nbsp;&nbsp;Prazo: ${fmtData(t.prazo)}` : "";
+    let subs = "";
+    if (t.subtarefas && t.subtarefas.length > 0) {
+      const concluidas = t.subtarefas.filter(s => s.feito).length;
+      subs = `<div style="font-size:11px;color:var(--ink-soft);margin-top:4px;">☑ ${concluidas}/${t.subtarefas.length} subtarefas</div>`;
+    }
+    return ` <div class="card-title">${esc(t.titulo || "Tarefa sem título")}</div> ${t.descricao ? `<div style="font-size:12px;color:var(--ink-soft);margin-top:2px;">${esc(t.descricao)}</div>` : ""} ${subs} <div class="card-meta" style="margin-top:6px;"> ${esc(respNome)}${prazo} </div> `;
+  });
+}
+
+document.querySelectorAll("#tarefas-filtro-toggle .view-toggle-btn").forEach((btn) => {
+  btn.addEventListener("click", (e) => {
+    document.querySelectorAll("#tarefas-filtro-toggle .view-toggle-btn").forEach((b) => b.classList.remove("active"));
+    e.target.classList.add("active");
+    STATE.filtroTarefas = e.target.dataset.filtro;
+    renderKanbanTarefas();
+  });
+});
+
+document.getElementById("btn-nova-tarefa")?.addEventListener("click", () => {
+  pendingTarefaId = null;
+  document.getElementById("modal-tarefa-titulo").textContent = "Nova Tarefa";
+  document.getElementById("mt-titulo").value = "";
+  document.getElementById("mt-descricao").value = "";
+  document.getElementById("mt-prazo").value = "";
+  document.getElementById("mt-checklist-container").innerHTML = "";
+  document.getElementById("btn-excluir-tarefa").style.display = "none";
+  popularComboResponsaveis("mt-responsavel");
+  document.getElementById("mt-responsavel").value = AUTH.user ? AUTH.user.uid : "";
+  abrirModal("modal-tarefa");
+});
+
+function popularComboResponsaveis(idSelect, vazioOp = "Sem responsável") {
+  const sel = document.getElementById(idSelect);
+  const atual = sel.value;
+  sel.innerHTML = `<option value="">${vazioOp}</option>` + STATE.usuarios.filter(u => u.ativo !== false).map(u => `<option value="${esc(u.id)}">${esc(u.nome)}</option>`).join("");
+  sel.value = atual;
+}
+
+function lerChecklistForm(containerId) {
+  const itens = [];
+  document.querySelectorAll(`#${containerId} .checklist-item-row`).forEach((row) => {
+    const titulo = row.querySelector(".ci-titulo").value.trim();
+    const feito = row.querySelector(".ci-feito") ? row.querySelector(".ci-feito").checked : false;
+    if (titulo) itens.push({ titulo, feito });
+  });
+  return itens;
+}
+
+function renderChecklistForm(containerId, subtarefas, comCheckbox) {
+  const c = document.getElementById(containerId);
+  c.innerHTML = "";
+  (subtarefas || []).forEach(s => adicionarItemChecklist(containerId, s.titulo, s.feito, comCheckbox));
+}
+
+function adicionarItemChecklist(containerId, titulo = "", feito = false, comCheckbox = true) {
+  const div = document.createElement("div");
+  div.className = "checklist-item-row";
+  div.style.display = "flex";
+  div.style.gap = "8px";
+  div.style.marginBottom = "4px";
+  div.style.alignItems = "center";
+  let chk = comCheckbox ? `<input type="checkbox" class="ci-feito" ${feito ? "checked" : ""}>` : "";
+  div.innerHTML = `${chk}<input type="text" class="ci-titulo" value="${esc(titulo)}" style="flex:1;" autocomplete="off"><button class="btn-small" type="button" onclick="this.parentElement.remove()" style="color:var(--danger); border-color:var(--danger); padding:0 6px;">✕</button>`;
+  document.getElementById(containerId).appendChild(div);
+}
+window.adicionarItemChecklist = adicionarItemChecklist;
+
+document.getElementById("btn-add-item-checklist")?.addEventListener("click", () => {
+  const v = document.getElementById("mt-novo-item").value.trim();
+  if (v) { adicionarItemChecklist("mt-checklist-container", v, false, true); document.getElementById("mt-novo-item").value = ""; }
+});
+document.getElementById("btn-add-item-rotina")?.addEventListener("click", () => {
+  const v = document.getElementById("mr-novo-item").value.trim();
+  if (v) { adicionarItemChecklist("mr-checklist-container", v, false, false); document.getElementById("mr-novo-item").value = ""; }
+});
+document.getElementById("mt-novo-item")?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("btn-add-item-checklist").click(); }});
+document.getElementById("mr-novo-item")?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("btn-add-item-rotina").click(); }});
+
+document.getElementById("btn-salvar-tarefa")?.addEventListener("click", async () => {
+  const titulo = document.getElementById("mt-titulo").value.trim();
+  if (!titulo) return mostrarErro("Preencha o título.");
+  const descricao = document.getElementById("mt-descricao").value.trim();
+  const responsavelUid = document.getElementById("mt-responsavel").value;
+  const prazo = document.getElementById("mt-prazo").value;
+  const subtarefas = lerChecklistForm("mt-checklist-container");
+  const dados = { titulo, descricao, responsavelUid, prazo, subtarefas };
+  try {
+    if (pendingTarefaId) {
+      dados.updatedAt = serverTimestamp();
+      await updateDoc(doc(db, "tarefas", pendingTarefaId), dados);
+      mostrarToast("Tarefa atualizada.");
+    } else {
+      dados.etapa = STATE.etapasTarefa.length > 0 ? STATE.etapasTarefa[0].id : "a_fazer";
+      dados.createdAt = serverTimestamp();
+      dados.updatedAt = serverTimestamp();
+      dados.dataEntrouEtapa = serverTimestamp();
+      dados.origemRotinaId = null;
+      dados.dataReferencia = hojeStr();
+      await addDoc(collection(db, "tarefas"), dados);
+      mostrarToast("Tarefa criada.");
+    }
+    fecharModal("modal-tarefa");
+  } catch (err) { mostrarErro(err.message); }
+});
+
+document.getElementById("btn-excluir-tarefa")?.addEventListener("click", async () => {
+  if (!pendingTarefaId || !(await confirmarAcao("Excluir esta tarefa permanentemente?"))) return;
+  try { await deleteDoc(doc(db, "tarefas", pendingTarefaId)); fecharModal("modal-tarefa"); mostrarToast("Tarefa excluída."); } catch (err) { mostrarErro(err.message); }
+});
+
+window.editarTarefa = function(id) {
+  const t = STATE.tarefas.find(x => x.id === id);
+  if (!t) return;
+  pendingTarefaId = id;
+  document.getElementById("modal-tarefa-titulo").textContent = "Editar Tarefa";
+  document.getElementById("mt-titulo").value = t.titulo || "";
+  document.getElementById("mt-descricao").value = t.descricao || "";
+  document.getElementById("mt-prazo").value = t.prazo || "";
+  popularComboResponsaveis("mt-responsavel");
+  document.getElementById("mt-responsavel").value = t.responsavelUid || "";
+  renderChecklistForm("mt-checklist-container", t.subtarefas, true);
+  document.getElementById("mt-novo-item").value = "";
+  document.getElementById("btn-excluir-tarefa").style.display = "block";
+  abrirModal("modal-tarefa");
+}
+
+window.moverTarefa = async function(id, novaEtapa) {
+  try { await updateDoc(doc(db, "tarefas", id), { etapa: novaEtapa, dataEntrouEtapa: serverTimestamp(), updatedAt: serverTimestamp() }); } catch (err) { mostrarErro(err.message); }
+}
+
+function renderConfigRotinas() {
+  const tbody = document.getElementById("tabela-rotinas");
+  if (!tbody) return;
+  if (!STATE.rotinas.length) { tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--ink-faint);">Nenhuma rotina cadastrada.</td></tr>`; return; }
+  const mapDias = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+  tbody.innerHTML = STATE.rotinas.map((r) => {
+    const resp = STATE.usuarios.find(u => u.id === r.responsavelUid);
+    const respNome = resp ? resp.nome : "—";
+    const dias = (r.diasSemana || []).map(d => mapDias[d]).join(", ") || "Nenhum";
+    return `<tr><td style="font-weight:500;">${esc(r.titulo)}</td><td>${esc(respNome)}</td><td>${esc(dias)}</td><td>${r.ativa ? "Sim" : "Não"}</td><td style="text-align:right;"><button class="btn-small" onclick="editarRotina('${r.id}')">Editar</button></td></tr>`;
+  }).join("");
+}
+
+window.editarRotina = function(id) {
+  const r = STATE.rotinas.find(x => x.id === id);
+  if (!r) return;
+  pendingRotinaId = id;
+  document.getElementById("modal-rotina-titulo").textContent = "Editar Rotina";
+  document.getElementById("mr-titulo").value = r.titulo || "";
+  popularComboResponsaveis("mr-responsavel");
+  document.getElementById("mr-responsavel").value = r.responsavelUid || "";
+  document.querySelectorAll("#mr-dias-semana input").forEach(chk => chk.checked = (r.diasSemana || []).includes(Number(chk.value)));
+  renderChecklistForm("mr-checklist-container", r.checklistTemplate, false);
+  document.getElementById("mr-novo-item").value = "";
+  document.getElementById("mr-ativa").checked = r.ativa !== false;
+  document.getElementById("btn-excluir-rotina").style.display = "block";
+  abrirModal("modal-rotina");
+};
+
+document.getElementById("btn-nova-rotina")?.addEventListener("click", () => {
+  pendingRotinaId = null;
+  document.getElementById("modal-rotina-titulo").textContent = "Nova Rotina";
+  document.getElementById("mr-titulo").value = "";
+  popularComboResponsaveis("mr-responsavel");
+  document.getElementById("mr-responsavel").value = AUTH.user ? AUTH.user.uid : "";
+  document.querySelectorAll("#mr-dias-semana input").forEach(chk => chk.checked = false);
+  document.getElementById("mr-checklist-container").innerHTML = "";
+  document.getElementById("mr-ativa").checked = true;
+  document.getElementById("btn-excluir-rotina").style.display = "none";
+  abrirModal("modal-rotina");
+});
+
+document.getElementById("btn-salvar-rotina")?.addEventListener("click", async () => {
+  const titulo = document.getElementById("mr-titulo").value.trim();
+  if (!titulo) return mostrarErro("Preencha o título da rotina.");
+  const responsavelUid = document.getElementById("mr-responsavel").value;
+  const diasSemana = [];
+  document.querySelectorAll("#mr-dias-semana input:checked").forEach(chk => diasSemana.push(Number(chk.value)));
+  const checklistTemplate = lerChecklistForm("mr-checklist-container").map(c => ({ titulo: c.titulo, feito: false }));
+  const ativa = document.getElementById("mr-ativa").checked;
+  const dados = { titulo, responsavelUid, diasSemana, checklistTemplate, ativa };
+  try {
+    if (pendingRotinaId) { await updateDoc(doc(db, "rotinas", pendingRotinaId), dados); mostrarToast("Rotina atualizada."); }
+    else { await addDoc(collection(db, "rotinas"), dados); mostrarToast("Rotina criada."); }
+    fecharModal("modal-rotina");
+  } catch (err) { mostrarErro(err.message); }
+});
+
+document.getElementById("btn-excluir-rotina")?.addEventListener("click", async () => {
+  if (!pendingRotinaId || !(await confirmarAcao("Excluir esta rotina? (Tarefas já geradas não serão apagadas)"))) return;
+  try { await deleteDoc(doc(db, "rotinas", pendingRotinaId)); fecharModal("modal-rotina"); mostrarToast("Rotina excluída."); } catch (err) { mostrarErro(err.message); }
+});
+

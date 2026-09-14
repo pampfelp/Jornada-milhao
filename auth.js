@@ -40,6 +40,8 @@ export const PAPEIS = {
   admin: "Administrador",
   gerente: "Gerente",
   sdr: "SDR",
+  colaborador: "Colaborador",
+  automacao: "Automação",
 };
 
 /*
@@ -54,10 +56,11 @@ export const PAPEIS = {
   juntas quando um papel mudar de escopo.
 */
 const AREAS_POR_PAPEL = {
-  admin:   ["financeiro", "funis", "contratos", "entradas", "despesas", "clientes", "config", "usuarios", "planilha"],
-  gerente: ["financeiro", "funis", "contratos", "entradas", "despesas", "clientes", "config"],
-  sdr:     ["funis", "contratos", "clientes"],
-  automacao: [],
+  admin:       ["financeiro", "funis", "contratos", "entradas", "despesas", "clientes", "config", "usuarios", "planilha", "tarefas"],
+  gerente:     ["financeiro", "funis", "contratos", "entradas", "despesas", "clientes", "config", "tarefas"],
+  sdr:         ["funis", "contratos", "clientes", "tarefas"],
+  colaborador: ["tarefas"],
+  automacao:   [],
 };
 
 export const AUTH = {
