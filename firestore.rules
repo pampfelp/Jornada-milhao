@@ -9,9 +9,14 @@ rules_version = '2';
 // painel financeiro.
 //
 // Papéis (documento usuarios/{uid}, campo `papel`):
-//   admin    — tudo, mais gestão de contas de acesso e a planilha administrativa
-//   gerente  — tudo do negócio, inclusive financeiro; não mexe em contas nem planilha
-//   sdr      — funis, clientes e contratos; nunca despesas, entradas ou financeiro
+//   admin       — tudo, mais gestão de contas de acesso e a planilha administrativa
+//   gerente     — tudo do negócio, inclusive financeiro; não mexe em contas nem planilha
+//   sdr         — funis, clientes e contratos; nunca despesas, entradas ou financeiro
+//   colaborador — só o módulo de Tarefas
+//   marketing   — só o módulo de Tarefas (mesmo alcance de colaborador hoje;
+//                 papel próprio pra aparecer identificado como "Marketing")
+//   automacao   — sem UI nenhuma; é a conta-robô que o Code.gs usa pra
+//                 escrever direto no Firestore (webhook da YayForms, rotinas)
 //
 // Esconder no navegador é conveniência. A segurança de verdade é este
 // arquivo: quem abrir o DevTools continua limitado ao que o papel permite.
@@ -41,8 +46,8 @@ service cloud.firestore {
     function equipe() { return temPapel(['admin', 'gerente', 'sdr']); }
     function gestao() { return temPapel(['admin', 'gerente']); }
     function ehAdmin() { return temPapel(['admin']); }
-    function podeVerTarefas() { return temPapel(['admin', 'gerente', 'sdr', 'colaborador']); }
-    function podeEscreverTarefas() { return temPapel(['admin', 'gerente', 'sdr', 'colaborador', 'automacao']); }
+    function podeVerTarefas() { return temPapel(['admin', 'gerente', 'sdr', 'colaborador', 'marketing']); }
+    function podeEscreverTarefas() { return temPapel(['admin', 'gerente', 'sdr', 'colaborador', 'marketing', 'automacao']); }
 
     // Janela de criação do primeiro admin, fechada pra sempre pelo próprio
     // fluxo de cadastro. Firestore rules não sabem "contar quantos admins
@@ -59,7 +64,7 @@ service cloud.firestore {
       // vir com campos extras não previstos junto na mesma escrita.
       function camposValidos() {
         return request.resource.data.keys().hasOnly(['nome', 'email', 'telefone', 'papel', 'ativo', 'precisaTrocarSenha', 'createdAt'])
-               && request.resource.data.papel in ['admin', 'gerente', 'sdr', 'colaborador', 'automacao']
+               && request.resource.data.papel in ['admin', 'gerente', 'sdr', 'colaborador', 'marketing', 'automacao']
                && request.resource.data.nome is string
                && request.resource.data.nome.size() > 0
                && request.resource.data.nome.size() < 120

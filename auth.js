@@ -41,6 +41,7 @@ export const PAPEIS = {
   gerente: "Gerente",
   sdr: "SDR",
   colaborador: "Colaborador",
+  marketing: "Marketing",
   automacao: "Automação",
 };
 
@@ -60,6 +61,13 @@ const AREAS_POR_PAPEL = {
   gerente:     ["financeiro", "funis", "contratos", "entradas", "despesas", "clientes", "config", "tarefas"],
   sdr:         ["funis", "contratos", "clientes", "tarefas"],
   colaborador: ["tarefas"],
+  // Time de conteúdo (posts diários, roteiro, edição — ver reunião do
+  // módulo de Tarefas). Mesmo alcance que colaborador hoje: só Tarefas,
+  // nada de funil/cliente/financeiro. Existe como papel próprio (em vez de
+  // reaproveitar "colaborador") pra aparecer como "Marketing" na tela de
+  // Contas de Acesso — se marketing precisar enxergar mais coisa amanhã
+  // (ex: Funis pra ver origem de lead), muda só a linha abaixo.
+  marketing:   ["tarefas"],
   automacao:   [],
 };
 
