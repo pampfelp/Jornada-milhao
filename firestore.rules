@@ -308,6 +308,21 @@ service cloud.firestore {
       allow delete: if gestao();
     }
 
+    // Um carimbo por parcela por dia em que alguém copiou a mensagem de
+    // cobrança (Painel Financeiro > "Copiar cobrança") — é daqui que vem o
+    // "já é o nosso contato nº N" na mensagem. Documento tem ID
+    // "{parcelaId}_{data}" de propósito: escrever de novo no mesmo dia é a
+    // MESMA escrita (create na 1ª vez, update nas seguintes — por isso os
+    // dois têm a mesma regra), nunca cria um segundo registro do mesmo dia.
+    match /registrosCobranca/{id} {
+      allow read: if gestao();
+      allow create, update: if gestao()
+                    && request.resource.data.keys().hasOnly(['parcelaId', 'data', 'criadoEm'])
+                    && request.resource.data.parcelaId is string
+                    && request.resource.data.data is string;
+      allow delete: if gestao();
+    }
+
     /* ══════════════ módulo de tarefas/rotina ══════════════ */
 
     match /tarefas/{id} {

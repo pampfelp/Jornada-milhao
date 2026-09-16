@@ -22,6 +22,7 @@ const STATE = {
   oportunidades: [],
   contratos: [],
   parcelas: [],
+  registrosCobranca: [], // {parcelaId, data} — 1 por parcela por dia em que "Copiar cobrança" foi usado
   despesas: [],
   entradas: [],
   etapasAdmin: [],
@@ -3160,43 +3161,101 @@ function saudacaoHorario_() {
   if (h < 18) return "Boa tarde";
   return "Boa noite";
 }
+
+const MESES_PT_ = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+// "Ref." é o MÊS do vencimento (não o número sequencial da parcela) —
+// pedido dele. "18/09/2026" -> "Setembro/2026".
+function refMesAno_(vencimentoIso) {
+  const [ano, mes] = (vencimentoIso || "").split("-");
+  if (!ano || !mes) return "—";
+  const nome = MESES_PT_[Number(mes) - 1] || "";
+  return `${nome.charAt(0).toUpperCase()}${nome.slice(1)}/${ano}`;
+}
+// Data por extenso, do jeito que se fala: "18 de setembro de 2026".
+function dataExtenso_(vencimentoIso) {
+  const [ano, mes, dia] = (vencimentoIso || "").split("-");
+  if (!ano || !mes || !dia) return "—";
+  return `${Number(dia)} de ${MESES_PT_[Number(mes) - 1]} de ${ano}`;
+}
+// "trata-se da parcela número X, Ref. Mês/Ano" — o pedaço que identifica
+// QUAL parcela é essa, comum aos dois modelos de mensagem.
+function descricaoParcela_(p) {
+  const numeroTexto = p.numero === 0 ? "de entrada" : `número ${p.numero}`;
+  return `parcela ${numeroTexto}, Ref. ${refMesAno_(p.vencimento)}`;
+}
+
+// Quantos DIAS DIFERENTES já teve cobrança copiada pra essa parcela,
+// contando o de hoje (a mensagem que está sendo montada agora É um desses
+// contatos, mesmo antes do registro em registrosCobranca terminar de
+// gravar — por isso soma aqui, sem esperar o Firestore confirmar).
+// Um por dia, não por clique: clicar 5x no mesmo dia continua sendo 1.
+function contagemContatosParcela_(p) {
+  const dias = new Set(STATE.registrosCobranca.filter((r) => r.parcelaId === p.id).map((r) => r.data));
+  dias.add(hojeStr());
+  return dias.size;
+}
+
 function montarTextoCobranca(p) {
   const nome = nomeParaCobranca_(p);
-  const ref = p.numero === 0 ? "Entrada" : String(p.numero);
-  const dataVenc = fmtData(p.vencimento);
+  const descricao = descricaoParcela_(p);
+  const dataVenc = dataExtenso_(p.vencimento);
   const hoje = hojeStr();
   const diasParaVencer = p.vencimento ? Math.round((new Date(p.vencimento + "T12:00:00") - new Date(hoje + "T12:00:00")) / 86400000) : null;
 
-  // Vencimento hoje ou no futuro: antecipada, com a contagem de dias.
+  // Vencimento hoje ou no futuro: antecipada, com a contagem de dias. Não
+  // soma no contador de tentativas — é lembrete, não cobrança de atraso.
   if (diasParaVencer != null && diasParaVencer >= 0) {
-    const fraseQuando = diasParaVencer === 0
-      ? `sua parcela Ref. ${ref} vence HOJE (${dataVenc})`
-      : `faltam ${diasParaVencer} DIA${diasParaVencer > 1 ? "S" : ""} da sua parcela Ref. ${ref}, prevista para dia ${dataVenc}`;
+    const quando = diasParaVencer === 0 ? "vence HOJE" : `vence em ${diasParaVencer} DIA${diasParaVencer > 1 ? "S" : ""}`;
     return `Fala, ${nome}!\n${saudacaoHorario_()}\n\n` +
       `Sou Felipe, Financeiro da Jornada do M1lhão.\n` +
       `Espero que sua Jornada esteja sendo brilhante 🤩🧭\n\n` +
-      `Estou passando aqui para lembrar que ${fraseQuando} conforme contrato acordado. Abaixo está o link virtual para efetuar o pagamento online e a chave para pix também.\n\n` +
+      `Estou passando aqui para lembrar que sua ${descricao} ${quando}, com vencimento para dia ${dataVenc}, conforme contrato acordado. Abaixo está o link virtual para efetuar o pagamento online e a chave para pix também.\n\n` +
       `[LINK DE PAGAMENTO]\n\n` +
       `Atenciosamente,\nEquipe Jornada do Milhão`;
   }
 
-  // Vencimento já passou: cobrança.
+  // Vencimento já passou: cobrança. "Novamente" e "já é o nosso contato
+  // nº N" só entram a partir do 2º dia de contato — no primeiro dia ainda
+  // não é "de novo" nada.
+  const n = contagemContatosParcela_(p);
+  const abertura = n === 1
+    ? `Estou passando aqui sobre a sua ${descricao}, com vencimento para dia ${dataVenc}, que segue em aberto até o momento.`
+    : `Estou passando aqui novamente sobre a sua ${descricao}, com vencimento para dia ${dataVenc}, que segue em aberto até o momento — esse já é o nosso contato nº ${n} sobre essa parcela.`;
   return `${saudacaoHorario_()}, ${nome}! Tudo bem?\n\n` +
     `Sou Felipe, Financeiro da Jornada do M1lhão.\n\n` +
-    `Estou passando aqui novamente sobre a sua parcela Ref. ${ref}, com vencimento em ${dataVenc}, que segue em aberto até o momento. Ainda não identificamos o pagamento nem retorno sobre isso.\n\n` +
+    `${abertura} Ainda não identificamos o pagamento nem retorno sobre isso.\n\n` +
     `Você tem uma previsão para que a situação seja regularizada?\n\n` +
     `Abaixo está o link virtual para pagamento e a chave pix:\n\n` +
     `[LINK DE PAGAMENTO]\n\n` +
     `Pedimos a gentileza de confirmar o pagamento ou nos retornar aqui explicando a situação.\n\n` +
     `Atenciosamente,\nEquipe Jornada do Milhão`;
 }
-function copiarTextoCobranca(parcelaId, el) {
+// Um registro por parcela por dia — o ID do documento É "parcelaId_data",
+// então clicar em "Copiar cobrança" 5x no mesmo dia só regrava o mesmo
+// documento (merge idempotente), nunca cria um segundo. É essa contagem
+// de dias distintos (contagemContatosParcela_, acima) que vira o "contato
+// nº N" na mensagem de cobrança.
+function registrarContatoParcela_(parcelaId) {
+  const hoje = hojeStr();
+  return setDoc(doc(db, "registrosCobranca", `${parcelaId}_${hoje}`), {
+    parcelaId, data: hoje, criadoEm: serverTimestamp()
+  }, { merge: true });
+}
+async function copiarTextoCobranca(parcelaId, el) {
   const p = STATE.parcelas.find((x) => x.id === parcelaId);
   if (!p) return;
-  navigator.clipboard.writeText(montarTextoCobranca(p)).then(() => {
-    mostrarToast("Mensagem de cobrança copiada — falta só colar o link de pagamento.");
-    if (el) { el.classList.add("copiado"); setTimeout(() => el.classList.remove("copiado"), 900); }
-  }).catch(() => mostrarErro("Não foi possível copiar. Tente de novo."));
+  try {
+    await navigator.clipboard.writeText(montarTextoCobranca(p));
+  } catch (err) {
+    mostrarErro("Não foi possível copiar. Tente de novo.");
+    return;
+  }
+  mostrarToast("Mensagem de cobrança copiada — falta só colar o link de pagamento.");
+  if (el) { el.classList.add("copiado"); setTimeout(() => el.classList.remove("copiado"), 900); }
+  // Best-effort: se o registro falhar (ex: sem internet por 1 segundo), a
+  // mensagem já foi copiada e a pessoa já vai mandar — não é motivo pra
+  // travar isso com um erro na tela.
+  registrarContatoParcela_(parcelaId).catch(() => {});
 }
 
 function renderFinanceiro() {
@@ -4311,6 +4370,16 @@ async function iniciarListeners() {
       renderFinanceiro();
       rastrearSincronizacao("entradas", snap);
     }, (err) => mostrarErro("Erro de conexão (entradas): " + err.message));
+  }
+
+  // Contagem de "contato nº N" na mensagem de cobrança (montarTextoCobranca)
+  // depende disso — mesmo gate de "financeiro" porque é só quem vê o Painel
+  // Financeiro que copia cobrança.
+  if (podeVer("financeiro")) {
+    onSnapshot(collection(db, "registrosCobranca"), { includeMetadataChanges: true }, (snap) => {
+      STATE.registrosCobranca = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      renderFinanceiro();
+    }, (err) => mostrarErro("Erro de conexão (registros de cobrança): " + err.message));
   }
 
   onSnapshot(query(collection(db, "etapasAdminConfig"), orderBy("ordem")), { includeMetadataChanges: true }, (snap) => {
