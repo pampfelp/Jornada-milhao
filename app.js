@@ -3137,6 +3137,68 @@ function abrirDetalheParcela(id) {
   });
 }
 
+// Monta o texto de cobrança de uma parcela em aberto, pronto pra colar no
+// WhatsApp. Só preenche o que o sistema TEM de verdade — link de pagamento
+// e chave PIX o Felipe cola na hora (o PicPay gera um link novo por
+// cobrança, o sistema não tem como saber esse link), e "quantos contatos já
+// foram feitos" também não é um dado que o sistema guarda, então fica de
+// fora em vez de inventar "segundo contato" sempre.
+//
+// Nome usado é o da PESSOA (representanteNome, quando o cliente é PJ),
+// nunca o nome da empresa — pedido dele: "eu uso o nome das pessoas".
+// Cai pro nome do cliente (que já É uma pessoa, se for PF) e, na falta de
+// tudo, pro clienteNome gravado na própria parcela.
+function nomeParaCobranca_(p) {
+  const cliente = STATE.clientes.find((c) => c.id === p.clienteId);
+  return (cliente && (cliente.representanteNome || cliente.nome)) || p.clienteNome || "cliente";
+}
+// Bom dia/Boa tarde/Boa noite pela hora de quem está copiando a mensagem
+// (é ele que vai mandar agora, não importa quando a parcela venceu).
+function saudacaoHorario_() {
+  const h = new Date().getHours();
+  if (h < 12) return "Bom dia";
+  if (h < 18) return "Boa tarde";
+  return "Boa noite";
+}
+function montarTextoCobranca(p) {
+  const nome = nomeParaCobranca_(p);
+  const ref = p.numero === 0 ? "Entrada" : String(p.numero);
+  const dataVenc = fmtData(p.vencimento);
+  const hoje = hojeStr();
+  const diasParaVencer = p.vencimento ? Math.round((new Date(p.vencimento + "T12:00:00") - new Date(hoje + "T12:00:00")) / 86400000) : null;
+
+  // Vencimento hoje ou no futuro: antecipada, com a contagem de dias.
+  if (diasParaVencer != null && diasParaVencer >= 0) {
+    const fraseQuando = diasParaVencer === 0
+      ? `sua parcela Ref. ${ref} vence HOJE (${dataVenc})`
+      : `faltam ${diasParaVencer} DIA${diasParaVencer > 1 ? "S" : ""} da sua parcela Ref. ${ref}, prevista para dia ${dataVenc}`;
+    return `Fala, ${nome}!\n${saudacaoHorario_()}\n\n` +
+      `Sou Felipe, Financeiro da Jornada do M1lhão.\n` +
+      `Espero que sua Jornada esteja sendo brilhante 🤩🧭\n\n` +
+      `Estou passando aqui para lembrar que ${fraseQuando} conforme contrato acordado. Abaixo está o link virtual para efetuar o pagamento online e a chave para pix também.\n\n` +
+      `[LINK DE PAGAMENTO]\n\n` +
+      `Atenciosamente,\nEquipe Jornada do Milhão`;
+  }
+
+  // Vencimento já passou: cobrança.
+  return `${saudacaoHorario_()}, ${nome}! Tudo bem?\n\n` +
+    `Sou Felipe, Financeiro da Jornada do M1lhão.\n\n` +
+    `Estou passando aqui novamente sobre a sua parcela Ref. ${ref}, com vencimento em ${dataVenc}, que segue em aberto até o momento. Ainda não identificamos o pagamento nem retorno sobre isso.\n\n` +
+    `Você tem uma previsão para que a situação seja regularizada?\n\n` +
+    `Abaixo está o link virtual para pagamento e a chave pix:\n\n` +
+    `[LINK DE PAGAMENTO]\n\n` +
+    `Pedimos a gentileza de confirmar o pagamento ou nos retornar aqui explicando a situação.\n\n` +
+    `Atenciosamente,\nEquipe Jornada do Milhão`;
+}
+function copiarTextoCobranca(parcelaId, el) {
+  const p = STATE.parcelas.find((x) => x.id === parcelaId);
+  if (!p) return;
+  navigator.clipboard.writeText(montarTextoCobranca(p)).then(() => {
+    mostrarToast("Mensagem de cobrança copiada — falta só colar o link de pagamento.");
+    if (el) { el.classList.add("copiado"); setTimeout(() => el.classList.remove("copiado"), 900); }
+  }).catch(() => mostrarErro("Não foi possível copiar. Tente de novo."));
+}
+
 function renderFinanceiro() {
   // Chamado pelos listeners de contratos e parcelas, que a SDR também tem.
   // Sem esta guarda, o painel seria montado com despesas e entradas vazias
@@ -3200,7 +3262,10 @@ function renderFinanceiro() {
   document.getElementById("tabela-parcelas-vencidas").innerHTML = vencidas.map((p) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheParcela('${p.id}')">
     <td>${esc(p.clienteNome)}</td><td>${p.numero === 0 ? "Entrada" : "Parcela " + p.numero}</td>
     <td>${fmtData(p.vencimento)}</td><td class="num">${fmtMoeda(p.valor)}</td>
-    <td><button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('parcela','${p.id}')">Marcar paga</button></td>
+    <td>
+      <button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('parcela','${p.id}')">Marcar paga</button>
+      <button class="btn-small" onclick="event.stopPropagation();window.__jm.copiarTextoCobranca('${p.id}',this)">Copiar cobrança</button>
+    </td>
   </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma parcela vencida.</div></td></tr>`;
 
   document.getElementById("tabela-parcelas-periodo").innerHTML = parcelasDoPeriodo
@@ -3210,7 +3275,8 @@ function renderFinanceiro() {
       <td>${fmtData(p.vencimento)}</td><td class="num">${fmtMoeda(p.valor)}</td>
       <td><span class="stamp ${p.status}">${p.status === "realizado" ? "Pago" : "Esperado"}</span></td>
       <td>${p.status === "esperado"
-        ? `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('parcela','${p.id}')">Marcar paga</button>`
+        ? `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('parcela','${p.id}')">Marcar paga</button>
+           <button class="btn-small" onclick="event.stopPropagation();window.__jm.copiarTextoCobranca('${p.id}',this)">Copiar cobrança</button>`
         : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.desmarcarPago('parcela','${p.id}')">Desfazer</button>`}</td>
     </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma parcela neste período.</div></td></tr>`;
 
@@ -4264,7 +4330,7 @@ async function iniciarListeners() {
 // Funções chamadas a partir de HTML gerado por string (onclick inline) —
 // só assim dá pra referenciá-las de dentro de innerHTML num ES module.
 window.__jm = {
-  abrirModalMarcarPago, desmarcarPago,
+  abrirModalMarcarPago, desmarcarPago, copiarTextoCobranca,
   abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela, abrirDetalheEntrada,
   abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin,
   gerarPdfContratoExistente, enviarContratoParaAssinatura,
