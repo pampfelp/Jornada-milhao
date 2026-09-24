@@ -8,7 +8,7 @@ import {
   onSnapshot, query, orderBy, serverTimestamp, Timestamp
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import {
-  AUTH, PAPEIS, SENHA_PRIMEIRO_ACESSO, iniciarAuth, mensagemErroAuth, podeVer, isAdmin, papelAtual, sessaoLiberada,
+  AUTH, PAPEIS, SENHA_PRIMEIRO_ACESSO, iniciarAuth, mensagemErroAuth, podeVer, isAdmin, papelAtual, AREAS_CONCEDIVEIS, areasDoPapel, sessaoLiberada,
   login, logout, enviarResetSenha, alterarMinhaSenha,
   bootstrapNecessario, criarPrimeiroAdmin, garantirBootstrapFechado,
   assinarUsuarios, criarUsuario, atualizarUsuario, removerVinculoUsuario,
@@ -4474,6 +4474,7 @@ function abrirDetalheUsuario(uid) {
       ["E-mail", esc(u.email || "—")],
       ["Telefone", esc(u.telefone || "—")],
       ["Papel", esc(PAPEIS[u.papel] || u.papel || "—")],
+      ["Telas extras", esc((u.areasExtras || []).map((a) => AREAS_CONCEDIVEIS[a] || a).join(", ") || "Nenhuma")],
       ["Situação", u.ativo === false ? "Suspensa" : "Ativa"],
       ["Primeiro acesso", u.precisaTrocarSenha ? "Ainda não trocou a senha temporária" : "Concluído"],
       ["Criada em", esc(fmtDataHora(u.createdAt))],
@@ -4487,6 +4488,21 @@ function abrirDetalheUsuario(uid) {
   });
 }
 
+function renderAreasExtras(papel, marcadas) {
+  const padrao = areasDoPapel(papel);
+  document.getElementById("mu-areas").innerHTML = Object.entries(AREAS_CONCEDIVEIS).map(([k, nome]) => {
+    const doPapel = padrao.includes(k);
+    return `<label style="display:flex;gap:8px;align-items:center;margin:4px 0;font-weight:normal;">
+      <input type="checkbox" value="${k}" ${doPapel || marcadas.includes(k) ? "checked" : ""} ${doPapel ? "disabled" : ""}>
+      ${nome}${doPapel ? ' <span class="sublabel">(já vem com o papel)</span>' : ""}
+    </label>`;
+  }).join("");
+}
+function lerAreasExtras() {
+  return [...document.querySelectorAll("#mu-areas input:checked:not(:disabled)")].map((i) => i.value);
+}
+document.getElementById("mu-papel").addEventListener("change", (e) => renderAreasExtras(e.target.value, lerAreasExtras()));
+
 function abrirModalUsuario() {
   pendingUsuarioId = null;
   document.getElementById("mu-form").classList.remove("hidden");
@@ -4498,6 +4514,7 @@ function abrirModalUsuario() {
   document.getElementById("mu-telefone").value = "";
   document.getElementById("mu-papel").value = "sdr";
   document.getElementById("mu-papel").disabled = false;
+  renderAreasExtras("sdr", []);
   document.getElementById("mu-bloco-ativo").style.display = "none";
   document.getElementById("mu-aviso-senha").classList.remove("hidden");
   abrirModal("modal-usuario");
@@ -4518,6 +4535,7 @@ function editarUsuario(uid) {
   document.getElementById("mu-telefone").value = u.telefone || "";
   document.getElementById("mu-papel").value = u.papel || "sdr";
   document.getElementById("mu-aviso-senha").classList.add("hidden");
+  renderAreasExtras(u.papel || "sdr", u.areasExtras || []);
   document.getElementById("mu-bloco-ativo").style.display = "";
   document.getElementById("mu-ativo").value = u.ativo === false ? "nao" : "sim";
   // Bloqueio por estado, não por papel: aqui vale a regra de desabilitar com
@@ -4541,6 +4559,7 @@ document.getElementById("btn-salvar-usuario").addEventListener("click", async ()
     if (pendingUsuarioId) {
       await atualizarUsuario(pendingUsuarioId, {
         nome, telefone, papel, ativo: document.getElementById("mu-ativo").value !== "nao",
+        areasExtras: lerAreasExtras(),
       });
       mostrarToast("Conta atualizada.");
       fecharModal("modal-usuario");
@@ -4548,7 +4567,7 @@ document.getElementById("btn-salvar-usuario").addEventListener("click", async ()
     } else {
       const email = document.getElementById("mu-email").value.trim();
       if (!email) { mostrarErro("Informe o e-mail."); return; }
-      await criarUsuario({ nome, email, telefone, papel });
+      await criarUsuario({ nome, email, telefone, papel, areasExtras: lerAreasExtras() });
       // Mostra a senha de primeiro acesso em vez de fechar o modal: quem
       // cadastrou precisa repassar essa senha, e é aqui que ela aparece.
       document.getElementById("mu-sucesso-texto").textContent = `${nome} já pode entrar no sistema.`;
@@ -4575,7 +4594,7 @@ async function alternarSituacaoUsuario(uid) {
   );
   if (!ok) return;
   try {
-    await atualizarUsuario(uid, { nome: u.nome, papel: u.papel, ativo: !suspendendo });
+    await atualizarUsuario(uid, { nome: u.nome, telefone: u.telefone, papel: u.papel, ativo: !suspendendo });
     mostrarToast(suspendendo ? "Acesso suspenso." : "Acesso reativado.");
   } catch (err) { mostrarErro(mensagemErroAuth(err)); }
 }
@@ -4601,6 +4620,10 @@ async function excluirUsuario(uid) {
 let listenersIniciados = false;
 let listenerUsuariosIniciado = false;
 let papelDosListeners = null;
+// Papel + telas extras: mudar qualquer um dos dois exige recomeçar as escutas.
+function assinaturaAcesso() {
+  return papelAtual() + "|" + [...(AUTH.usuario?.areasExtras || [])].sort().join(",");
+}
 
 function mostrarPassoAcesso(id) {
   document.querySelectorAll("#acesso-overlay .acesso-passo").forEach((p) => p.classList.add("hidden"));
@@ -4666,7 +4689,7 @@ iniciarAuth(async (estado) => {
   // pessoa usava o sistema): as escutas já abertas passariam a bater em
   // regra que não permite mais, então recomeça do zero em vez de tentar
   // desmontar escuta por escuta.
-  if (listenersIniciados && papelDosListeners !== papelAtual()) {
+  if (listenersIniciados && papelDosListeners !== assinaturaAcesso()) {
     location.reload();
     return;
   }
@@ -4676,7 +4699,7 @@ iniciarAuth(async (estado) => {
   if (isAdmin()) garantirBootstrapFechado();
   if (!listenersIniciados) {
     listenersIniciados = true;
-    papelDosListeners = papelAtual();
+    papelDosListeners = assinaturaAcesso();
     iniciarListeners();
   }
   if (podeVer("usuarios") && !listenerUsuariosIniciado) {

@@ -46,6 +46,22 @@ service cloud.firestore {
     function equipe() { return temPapel(['admin', 'gerente', 'sdr']); }
     function gestao() { return temPapel(['admin', 'gerente']); }
     function ehAdmin() { return temPapel(['admin']); }
+    // Áreas extras concedidas a uma pessoa específica (usuarios/{uid}.areasExtras),
+    // somadas às do papel. "usuarios" nunca entra aqui: quem gerencia contas
+    // poderia se promover.
+    function temExtra(area) {
+      return request.auth != null
+             && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
+             && meuVinculo().ativo == true
+             && area in meuVinculo().get('areasExtras', []);
+    }
+    function fClientes()   { return temPapel(['admin', 'gerente', 'sdr']) || temExtra('clientes'); }
+    function fFunis()      { return temPapel(['admin', 'gerente', 'sdr']) || temExtra('funis'); }
+    function fContratos()  { return temPapel(['admin', 'gerente', 'sdr']) || temExtra('contratos'); }
+    function fDespesas()   { return temPapel(['admin', 'gerente']) || temExtra('despesas'); }
+    function fEntradas()   { return temPapel(['admin', 'gerente']) || temExtra('entradas'); }
+    function fFinanceiro() { return temPapel(['admin', 'gerente']) || temExtra('financeiro'); }
+    function fTarefas()    { return podeVerTarefas() || temExtra('tarefas'); }
     function podeVerTarefas() { return temPapel(['admin', 'gerente', 'sdr', 'colaborador', 'marketing']); }
     function podeEscreverTarefas() { return temPapel(['admin', 'gerente', 'sdr', 'colaborador', 'marketing', 'automacao']); }
 
@@ -63,14 +79,17 @@ service cloud.firestore {
       // hasOnly fecha mass assignment: sem isso, um update legítimo poderia
       // vir com campos extras não previstos junto na mesma escrita.
       function camposValidos() {
-        return request.resource.data.keys().hasOnly(['nome', 'email', 'telefone', 'papel', 'ativo', 'precisaTrocarSenha', 'createdAt'])
+        return request.resource.data.keys().hasOnly(['nome', 'email', 'telefone', 'papel', 'ativo', 'precisaTrocarSenha', 'createdAt', 'areasExtras'])
                && request.resource.data.papel in ['admin', 'gerente', 'sdr', 'colaborador', 'marketing', 'automacao']
                && request.resource.data.nome is string
                && request.resource.data.nome.size() > 0
                && request.resource.data.nome.size() < 120
                && request.resource.data.email is string
                && request.resource.data.email.size() < 200
-               && request.resource.data.ativo is bool;
+               && request.resource.data.ativo is bool
+               && (!('areasExtras' in request.resource.data)
+                   || (request.resource.data.areasExtras is list
+                       && !('usuarios' in request.resource.data.areasExtras)));
       }
 
       // Cada um lê o próprio vínculo (é assim que o app descobre o papel de
@@ -142,62 +161,62 @@ service cloud.firestore {
     // recém-criada se promovendo a admin, porque cadastro no Firebase Auth
     // é aberto por natureza.
     match /config/{id} {
-      allow read: if equipe();
+      allow read: if equipe() || fFunis() || fContratos() || fClientes() || fFinanceiro();
       allow write: if ehAdmin() || (gestao() && id != 'bootstrap');
     }
 
     /* ══════════════ vendas: funis, clientes e contratos ══════════════ */
 
     match /clientes/{id} {
-      allow read: if equipe();
-      allow create: if temPapel(['admin', 'gerente', 'sdr', 'automacao'])
+      allow read: if fClientes();
+      allow create: if (fClientes() || temPapel(['automacao']))
                     && request.resource.data.keys().hasAll(['nome'])
                     && request.resource.data.nome is string
                     && request.resource.data.nome.size() > 0
                     && request.resource.data.nome.size() < 200;
-      allow update: if equipe()
+      allow update: if fClientes()
                     && request.resource.data.nome is string
                     && request.resource.data.nome.size() < 200;
-      allow delete: if equipe();
+      allow delete: if fClientes();
     }
 
     match /agendamentos/{id} {
-      allow read: if equipe();
-      allow create: if temPapel(['admin', 'gerente', 'sdr', 'automacao'])
+      allow read: if fFunis();
+      allow create: if (fFunis() || temPapel(['automacao']))
                     && request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
                     && request.resource.data.clienteNome is string
                     && request.resource.data.etapa is string;
-      allow update: if equipe()
+      allow update: if fFunis()
                     && request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
                     && request.resource.data.clienteNome is string
                     && request.resource.data.etapa is string;
-      allow delete: if equipe();
+      allow delete: if fFunis();
 
       match /historico/{logId} {
-        allow read: if equipe();
-        allow create: if equipe();
+        allow read: if fFunis();
+        allow create: if fFunis();
         // Nunca editar um evento já gravado (log append-only de verdade),
         // mas PRECISA permitir apagar: quando o card pai é excluído, o
         // app.js apaga o histórico junto (exclusão em cascata) — sem isso,
         // "Missing or insufficient permissions" ao excluir, e o histórico
         // órfão fica pra sempre no banco.
         allow update: if false;
-        allow delete: if equipe();
+        allow delete: if fFunis();
       }
 
       // Conversa/ligação registrada sem mudar de etapa (funil-crm regra 3).
       // Mesmo formato de historico: append-only, apagado em cascata junto
       // com o card pai.
       match /atividades/{atId} {
-        allow read: if equipe();
-        allow create: if equipe();
+        allow read: if fFunis();
+        allow create: if fFunis();
         allow update: if false;
-        allow delete: if equipe();
+        allow delete: if fFunis();
       }
     }
 
     match /etapasAgendamentoConfig/{id} {
-      allow read: if temPapel(['admin', 'gerente', 'sdr', 'automacao']);
+      allow read: if (fFunis() || temPapel(['automacao']));
       allow create, update: if gestao()
                     && request.resource.data.nome is string
                     && request.resource.data.ordem is number;
@@ -205,7 +224,7 @@ service cloud.firestore {
     }
 
     match /etapasVendaConfig/{id} {
-      allow read: if equipe();
+      allow read: if fFunis();
       allow create, update: if gestao()
                     && request.resource.data.nome is string
                     && request.resource.data.ordem is number;
@@ -213,49 +232,49 @@ service cloud.firestore {
     }
 
     match /oportunidades/{id} {
-      allow read: if equipe();
-      allow create, update: if equipe()
+      allow read: if fFunis();
+      allow create, update: if fFunis()
                     && request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
                     && request.resource.data.clienteNome is string
                     && request.resource.data.etapa is string;
-      allow delete: if equipe();
+      allow delete: if fFunis();
 
       match /historico/{logId} {
-        allow read: if equipe();
-        allow create: if equipe();
+        allow read: if fFunis();
+        allow create: if fFunis();
         allow update: if false;
-        allow delete: if equipe();
+        allow delete: if fFunis();
       }
 
       match /atividades/{atId} {
-        allow read: if equipe();
-        allow create: if equipe();
+        allow read: if fFunis();
+        allow create: if fFunis();
         allow update: if false;
-        allow delete: if equipe();
+        allow delete: if fFunis();
       }
     }
 
     match /contratos/{id} {
-      allow read: if equipe();
-      allow create, update: if equipe()
+      allow read: if fContratos();
+      allow create, update: if fContratos()
                     && request.resource.data.keys().hasAll(['clienteNome', 'valorTotal'])
                     && request.resource.data.clienteNome is string
                     && request.resource.data.valorTotal is number;
-      allow delete: if equipe();
+      allow delete: if fContratos();
     }
 
     match /parcelas/{id} {
-      allow read: if equipe();
-      allow create, update: if equipe()
+      allow read: if fContratos();
+      allow create, update: if fContratos()
                     && request.resource.data.keys().hasAll(['contratoId', 'valor', 'vencimento', 'status'])
                     && request.resource.data.contratoId is string
                     && request.resource.data.valor is number
                     && request.resource.data.status is string;
-      allow delete: if equipe();
+      allow delete: if fContratos();
     }
 
     match /etapasAdminConfig/{id} {
-      allow read: if equipe();
+      allow read: if fFunis();
       allow create, update: if gestao()
                     && request.resource.data.keys().hasAll(['nome', 'ordem'])
                     && request.resource.data.nome is string
@@ -264,48 +283,48 @@ service cloud.firestore {
     }
 
     match /cardsAdmin/{id} {
-      allow read: if equipe();
-      allow create, update: if equipe()
+      allow read: if fFunis();
+      allow create, update: if fFunis()
                     && request.resource.data.keys().hasAll(['clienteNome', 'etapa'])
                     && request.resource.data.clienteNome is string
                     && request.resource.data.etapa is string;
-      allow delete: if equipe();
+      allow delete: if fFunis();
 
       match /historico/{logId} {
-        allow read: if equipe();
-        allow create: if equipe();
+        allow read: if fFunis();
+        allow create: if fFunis();
         allow update: if false;
-        allow delete: if equipe();
+        allow delete: if fFunis();
       }
 
       match /atividades/{atId} {
-        allow read: if equipe();
-        allow create: if equipe();
+        allow read: if fFunis();
+        allow create: if fFunis();
         allow update: if false;
-        allow delete: if equipe();
+        allow delete: if fFunis();
       }
     }
 
     /* ══════════════ financeiro: fora do alcance da SDR ══════════════ */
 
     match /despesas/{id} {
-      allow read: if gestao();
-      allow create, update: if gestao()
+      allow read: if fDespesas();
+      allow create, update: if fDespesas()
                     && request.resource.data.keys().hasAll(['descricao', 'valor', 'tipo'])
                     && request.resource.data.descricao is string
                     && request.resource.data.valor is number
                     && request.resource.data.tipo is string;
-      allow delete: if gestao();
+      allow delete: if fDespesas();
     }
 
     match /entradas/{id} {
-      allow read: if gestao();
-      allow create, update: if gestao()
+      allow read: if fEntradas();
+      allow create, update: if fEntradas()
                     && request.resource.data.keys().hasAll(['descricao', 'valor', 'status'])
                     && request.resource.data.descricao is string
                     && request.resource.data.valor is number
                     && request.resource.data.status is string;
-      allow delete: if gestao();
+      allow delete: if fEntradas();
     }
 
     // Um carimbo por parcela por dia em que alguém copiou a mensagem de
@@ -315,43 +334,43 @@ service cloud.firestore {
     // MESMA escrita (create na 1ª vez, update nas seguintes — por isso os
     // dois têm a mesma regra), nunca cria um segundo registro do mesmo dia.
     match /registrosCobranca/{id} {
-      allow read: if gestao();
-      allow create, update: if gestao()
+      allow read: if fFinanceiro();
+      allow create, update: if fFinanceiro()
                     && request.resource.data.keys().hasOnly(['parcelaId', 'data', 'criadoEm'])
                     && request.resource.data.parcelaId is string
                     && request.resource.data.data is string;
-      allow delete: if gestao();
+      allow delete: if fFinanceiro();
     }
 
     /* ══════════════ módulo de tarefas/rotina ══════════════ */
 
     match /tarefas/{id} {
-      allow read: if podeVerTarefas() || temPapel(['automacao']);
-      allow create, update, delete: if podeEscreverTarefas();
+      allow read: if fTarefas() || temPapel(['automacao']);
+      allow create, update, delete: if (fTarefas() || temPapel(['automacao']));
       
       match /historico/{logId} {
-        allow read: if podeVerTarefas() || temPapel(['automacao']);
-        allow create: if podeEscreverTarefas();
+        allow read: if fTarefas() || temPapel(['automacao']);
+        allow create: if (fTarefas() || temPapel(['automacao']));
         allow update: if false;
-        allow delete: if podeEscreverTarefas();
+        allow delete: if (fTarefas() || temPapel(['automacao']));
       }
 
       match /atividades/{atId} {
-        allow read: if podeVerTarefas() || temPapel(['automacao']);
-        allow create: if podeEscreverTarefas();
+        allow read: if fTarefas() || temPapel(['automacao']);
+        allow create: if (fTarefas() || temPapel(['automacao']));
         allow update: if false;
-        allow delete: if podeEscreverTarefas();
+        allow delete: if (fTarefas() || temPapel(['automacao']));
       }
     }
 
     match /rotinas/{id} {
-      allow read: if podeVerTarefas() || temPapel(['automacao']);
-      allow create, update, delete: if podeVerTarefas();
+      allow read: if fTarefas() || temPapel(['automacao']);
+      allow create, update, delete: if fTarefas();
     }
 
     match /etapasTarefaConfig/{id} {
-      allow read: if podeVerTarefas() || temPapel(['automacao']);
-      allow create, update, delete: if podeVerTarefas();
+      allow read: if fTarefas() || temPapel(['automacao']);
+      allow create, update, delete: if fTarefas();
     }
   }
 }

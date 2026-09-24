@@ -71,6 +71,20 @@ const AREAS_POR_PAPEL = {
   automacao:   [],
 };
 
+/** Telas que podem ser liberadas individualmente, além das do papel. */
+export const AREAS_CONCEDIVEIS = {
+  financeiro: "Painel Financeiro",
+  funis: "Funis",
+  contratos: "Contratos",
+  entradas: "Entradas",
+  despesas: "Despesas",
+  clientes: "Clientes",
+  config: "Configurações",
+  planilha: "Planilha",
+  tarefas: "Tarefas",
+};
+export function areasDoPapel(papel) { return AREAS_POR_PAPEL[papel] || []; }
+
 export const AUTH = {
   pronto: false,   // primeiro carregamento (login + papel) já resolvido
   user: null,      // objeto do Firebase Auth
@@ -132,7 +146,9 @@ export function isAdmin() { return papelAtual() === "admin"; }
 /** Fonte única de "esse papel enxerga essa área?". */
 export function podeVer(area) {
   const areas = AREAS_POR_PAPEL[papelAtual()];
-  return !!areas && areas.includes(area);
+  if (!!areas && areas.includes(area)) return true;
+  // "usuarios" nunca é concedível por pessoa (escalada de privilégio).
+  return area !== "usuarios" && (AUTH.usuario?.areasExtras || []).includes(area);
 }
 
 /** Sessão utilizável: logado, com vínculo, ativo e sem troca de senha pendente. */
@@ -224,14 +240,14 @@ export function assinarUsuarios(aoAtualizar, aoFalhar) {
  *
  * Sem Cloud Functions e sem Admin SDK, só o Web SDK chamado duas vezes.
  */
-export async function criarUsuario({ nome, email, telefone, papel }) {
+export async function criarUsuario({ nome, email, telefone, papel, areasExtras = [] }) {
   const nomeInstancia = "criar-usuario-" + Date.now();
   const appSecundario = initializeApp(firebaseConfig, nomeInstancia);
   const authSecundario = getAuth(appSecundario);
   try {
     const cred = await createUserWithEmailAndPassword(authSecundario, email.trim(), SENHA_PRIMEIRO_ACESSO);
     await setDoc(doc(db, "usuarios", cred.user.uid), {
-      nome, email: email.trim(), telefone: telefone || "", papel, ativo: true,
+      nome, email: email.trim(), telefone: telefone || "", papel, ativo: true, areasExtras,
       // A senha é a mesma pra todo mundo, então a troca no primeiro acesso
       // não é opcional — é ela que faz a senha compartilhada ser descartável.
       precisaTrocarSenha: true, createdAt: serverTimestamp(),
@@ -243,8 +259,10 @@ export async function criarUsuario({ nome, email, telefone, papel }) {
   }
 }
 
-export async function atualizarUsuario(uid, { nome, telefone, papel, ativo }) {
-  await updateDoc(doc(db, "usuarios", uid), { nome, telefone: telefone || "", papel, ativo });
+export async function atualizarUsuario(uid, { nome, telefone, papel, ativo, areasExtras }) {
+  const dados = { nome, telefone: telefone || "", papel, ativo };
+  if (areasExtras) dados.areasExtras = areasExtras;
+  await updateDoc(doc(db, "usuarios", uid), dados);
 }
 
 /**
