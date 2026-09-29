@@ -490,6 +490,89 @@ const comboAgendamento = criarComboCliente("ma-cliente-busca", "ma-cliente-dropd
 const comboOportunidade = criarComboCliente("mo-cliente-busca", "mo-cliente-dropdown", (cliente) => atualizarContatoOportunidade(cliente));
 const comboContrato = criarComboCliente("mct-cliente-busca", "mct-cliente-dropdown", (cliente) => preencherCamposFaltantesContrato(cliente.id));
 
+// Combobox de descrição da despesa: filtra os Custos Recorrentes (molde,
+// com id — escolher um liga a despesa a ele) e as descrições já usadas em
+// despesas avulsas (só texto, sem molde) enquanto digita. Texto livre
+// continua aceito — não é obrigatório escolher da lista, só ajuda a não
+// digitar "Salario" numa vez e "Salário" na outra. Local, filtra em cima do
+// que já está em STATE (não é busca na internet nem autocomplete do
+// navegador — pedido explícito dele em 2026-09-29).
+function criarComboDescricaoDespesa(inputId, dropdownId, campos) {
+  const input = document.getElementById(inputId);
+  const dropdown = document.getElementById(dropdownId);
+  const api = { origemAtual: null };
+
+  function fontes() {
+    const vistos = new Set();
+    const itens = [];
+    STATE.despesasRecorrentes.forEach((r) => {
+      vistos.add(r.descricao.trim().toLowerCase());
+      itens.push({ descricao: r.descricao, recorrente: r });
+    });
+    STATE.despesas.forEach((d) => {
+      const chave = (d.descricao || "").trim().toLowerCase();
+      if (!chave || vistos.has(chave)) return;
+      vistos.add(chave);
+      itens.push({ descricao: d.descricao, recorrente: null });
+    });
+    return itens.sort((a, b) => a.descricao.localeCompare(b.descricao));
+  }
+
+  // Preenche categoria/tipo/valor/chave PIX a partir do molde — só quando o
+  // texto bate exatamente com um recorrente cadastrado, seja por clique ou
+  // por ter digitado o nome inteiro. Não muda a data nem o que já foi
+  // ajustado manualmente fora desses campos.
+  function aplicarOrigem(recorrente) {
+    api.origemAtual = recorrente ? recorrente.id : null;
+    if (recorrente && campos) {
+      if (campos.categoria) document.getElementById(campos.categoria).value = recorrente.categoria || "";
+      if (campos.tipo) document.getElementById(campos.tipo).value = recorrente.tipo || "despesa";
+      if (campos.valor) document.getElementById(campos.valor).value = String(recorrente.valor || "").replace(".", ",");
+      if (campos.chavePix) document.getElementById(campos.chavePix).value = recorrente.chavePix || "";
+    }
+  }
+
+  function renderOpcoes(filtro) {
+    const termo = filtro.trim().toLowerCase();
+    const todos = fontes();
+    const encontrados = termo ? todos.filter((it) => it.descricao.toLowerCase().includes(termo)) : todos;
+    dropdown.innerHTML = encontrados.slice(0, 30).map((it) => (
+      `<div class="combo-item" data-descricao="${esc(it.descricao)}">${esc(it.descricao)}${it.recorrente ? ' <span class="combo-item-sub">Recorrente</span>' : ""}</div>`
+    )).join("") || `<div class="combo-vazio">${termo ? "Nada parecido lançado antes — segue com esse texto." : "Nenhuma despesa lançada ainda."}</div>`;
+    dropdown.classList.add("active");
+
+    // Digitar o nome inteiro de um recorrente (sem clicar) já liga a
+    // despesa a ele — é o "muda durante o preenchimento" pedido por ele.
+    const exato = todos.find((it) => it.descricao.trim().toLowerCase() === termo);
+    aplicarOrigem(exato ? exato.recorrente : null);
+  }
+
+  input.addEventListener("input", () => renderOpcoes(input.value));
+  input.addEventListener("focus", () => renderOpcoes(input.value));
+  document.addEventListener("click", (e) => {
+    if (e.target !== input && !dropdown.contains(e.target)) dropdown.classList.remove("active");
+  });
+  dropdown.addEventListener("click", (e) => {
+    const item = e.target.closest(".combo-item[data-descricao]");
+    if (!item) return;
+    const escolhida = item.dataset.descricao;
+    input.value = escolhida;
+    const achado = fontes().find((it) => it.descricao === escolhida);
+    aplicarOrigem(achado ? achado.recorrente : null);
+    dropdown.classList.remove("active");
+  });
+
+  // Ao abrir o modal pra editar uma despesa já ligada a um recorrente, ou
+  // pro estado inicial de uma nova, sem passar pelo digitar/clicar.
+  api.selecionar = (descricao, origemRecorrenteId) => {
+    input.value = descricao || "";
+    api.origemAtual = origemRecorrenteId || null;
+  };
+  return api;
+}
+const comboDescricaoDespesa = criarComboDescricaoDespesa("md-descricao", "md-descricao-dropdown",
+  { categoria: "md-categoria", tipo: "md-tipo", valor: "md-valor", chavePix: "md-chavepix" });
+
 // Nível de interesse do lead/oportunidade — escala fixa de 5 pontos
 // (nunca emoji — regra do segundo-cerebro), tratada como "tag" visual nos
 // cards e tabelas (não é uma lista que cresce, então não entra na regra de
@@ -3372,7 +3455,7 @@ function renderFinanceiro() {
 function abrirModalDespesa() {
   pendingDespesaId = null;
   document.getElementById("modal-despesa-titulo").textContent = "Nova despesa/custo";
-  document.getElementById("md-descricao").value = "";
+  comboDescricaoDespesa.selecionar("", null);
   document.getElementById("md-categoria").value = "";
   document.getElementById("md-valor").value = "";
   document.getElementById("md-data").value = hojeStr();
@@ -3389,7 +3472,7 @@ function editarDespesa(id) {
   if (!d) return;
   pendingDespesaId = id;
   document.getElementById("modal-despesa-titulo").textContent = `Editar — ${d.descricao}`;
-  document.getElementById("md-descricao").value = d.descricao || "";
+  comboDescricaoDespesa.selecionar(d.descricao || "", d.origemRecorrenteId || null);
   document.getElementById("md-categoria").value = d.categoria || "";
   document.getElementById("md-valor").value = String(d.valor || "").replace(".", ",");
   document.getElementById("md-data").value = d.data || hojeStr();
@@ -3413,14 +3496,18 @@ document.getElementById("btn-salvar-despesa").addEventListener("click", async ()
     // silêncio o valor de um lançamento antigo que já usava sinal negativo.
     tipo: document.getElementById("md-tipo").value, valor: adiantamento ? Math.abs(valor) : valor, data,
     chavePix: document.getElementById("md-chavepix").value.trim(),
-    adiantamento
+    adiantamento,
+    // Reflete o que o combobox de descrição resolveu por último — digitar
+    // o nome inteiro de outro recorrente, ou apagar até não bater com
+    // nenhum, muda a ligação mesmo editando uma despesa que já tinha uma.
+    origemRecorrenteId: comboDescricaoDespesa.origemAtual
   };
   try {
     if (pendingDespesaId) {
       await updateDoc(doc(db, "despesas", pendingDespesaId), dados);
     } else {
       await addDoc(collection(db, "despesas"), {
-        ...dados, origemRecorrenteId: null, status: "esperado", dataPagamento: null, createdAt: serverTimestamp()
+        ...dados, status: "esperado", dataPagamento: null, createdAt: serverTimestamp()
       });
     }
     fecharModal("modal-despesa");

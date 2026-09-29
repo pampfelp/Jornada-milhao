@@ -896,7 +896,13 @@
 <div class="modal-overlay" id="modal-despesa">
   <div class="modal-box">
     <h2 id="modal-despesa-titulo">Nova despesa/custo</h2>
-    <div class="field"><label>Descrição</label><input type="text" id="md-descricao"></div>
+    <div class="field">
+      <label>Descrição</label>
+      <div class="combo-wrap">
+        <input type="text" id="md-descricao" autocomplete="off" placeholder="Digite ou escolha um já lançado antes">
+        <div class="combo-dropdown" id="md-descricao-dropdown"></div>
+      </div>
+    </div>
     <div class="row">
       <div class="field">
         <label>Tipo</label>
