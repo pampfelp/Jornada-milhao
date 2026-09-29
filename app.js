@@ -24,6 +24,7 @@ const STATE = {
   parcelas: [],
   registrosCobranca: [], // {parcelaId, data} — 1 por parcela por dia em que "Copiar cobrança" foi usado
   despesas: [],
+  despesasRecorrentes: [],
   entradas: [],
   etapasAdmin: [],
   cardsAdmin: [],
@@ -94,6 +95,7 @@ let pendingRotinaId = null;
 let pendingClienteRetornoCallback = null;
 let pendingClienteRetornoModais = [];
 let pendingDespesaId = null;
+let pendingRecorrenteId = null;
 let pendingParcelaId = null;
 let pendingContratoStatusId = null;
 let pendingAgendamentoEditId = null;
@@ -3376,7 +3378,6 @@ function abrirModalDespesa() {
   document.getElementById("md-data").value = hojeStr();
   document.getElementById("md-chavepix").value = "";
   document.getElementById("md-tipo").value = "despesa";
-  document.getElementById("md-recorrente").checked = false;
   document.getElementById("md-adiantamento").checked = false;
   abrirModal("modal-despesa");
 }
@@ -3394,7 +3395,6 @@ function editarDespesa(id) {
   document.getElementById("md-data").value = d.data || hojeStr();
   document.getElementById("md-chavepix").value = d.chavePix || "";
   document.getElementById("md-tipo").value = d.tipo || "despesa";
-  document.getElementById("md-recorrente").checked = !!d.recorrente;
   document.getElementById("md-adiantamento").checked = !!d.adiantamento;
   abrirModal("modal-despesa");
 }
@@ -3404,7 +3404,6 @@ document.getElementById("btn-salvar-despesa").addEventListener("click", async ()
   const data = document.getElementById("md-data").value || hojeStr();
   if (!descricao) { mostrarErro("Informe a descrição."); return; }
   if (!valor) { mostrarErro("Informe o valor."); return; }
-  const recorrente = document.getElementById("md-recorrente").checked;
   const adiantamento = document.getElementById("md-adiantamento").checked;
   const dados = {
     descricao, categoria: document.getElementById("md-categoria").value.trim(),
@@ -3414,7 +3413,6 @@ document.getElementById("btn-salvar-despesa").addEventListener("click", async ()
     // silêncio o valor de um lançamento antigo que já usava sinal negativo.
     tipo: document.getElementById("md-tipo").value, valor: adiantamento ? Math.abs(valor) : valor, data,
     chavePix: document.getElementById("md-chavepix").value.trim(),
-    recorrente, diaVencimento: recorrente ? parseInt(data.split("-")[2], 10) : null,
     adiantamento
   };
   try {
@@ -3422,8 +3420,7 @@ document.getElementById("btn-salvar-despesa").addEventListener("click", async ()
       await updateDoc(doc(db, "despesas", pendingDespesaId), dados);
     } else {
       await addDoc(collection(db, "despesas"), {
-        ...dados, ultimoMesLancado: recorrente ? data.slice(0, 7) : null,
-        origemRecorrenteId: null, status: "esperado", dataPagamento: null, createdAt: serverTimestamp()
+        ...dados, origemRecorrenteId: null, status: "esperado", dataPagamento: null, createdAt: serverTimestamp()
       });
     }
     fecharModal("modal-despesa");
@@ -3449,7 +3446,7 @@ function abrirDetalheDespesa(id) {
       ["Adiantamento", ehAdiantamento(d) ? "Sim — abate outra despesa" : "—"],
       ["Data", esc(fmtData(d.data))],
       ["Chave PIX", esc(d.chavePix || "—")],
-      ["Recorrente", d.recorrente ? `Sim (dia ${d.diaVencimento})` : "—"],
+      ["Recorrente", d.origemRecorrenteId ? "Sim — gerada em Custos Recorrentes" : "—"],
       d.status === "realizado"
         ? ["Status", `Pago em ${esc(fmtData(d.dataPagamento))} <button class="btn-small" style="margin-left:8px;" onclick="window.__jm.desmarcarPago('despesa','${id}')">Desfazer</button>`]
         : ["Status", `Pendente <button class="btn-small" style="margin-left:8px;" onclick="window.__jm.abrirModalMarcarPago('despesa','${id}')">Marcar pago</button>`]
@@ -3459,35 +3456,154 @@ function abrirDetalheDespesa(id) {
   });
 }
 
-// Sem Cloud Functions, não existe "servidor" lançando as despesas
-// recorrentes sozinho — a checagem roda no navegador de quem abrir o
-// sistema, toda vez que a lista de despesas atualiza (idempotente: só cria
-// uma instância nova se "ultimoMesLancado" do modelo ainda não é o mês
-// atual).
-async function lancarRecorrentesPendentes() {
-  if (lancandoRecorrentes) return;
+/* ══════════════ CUSTOS RECORRENTES ══════════════
+   Tela separada da de Despesas & Custos, de propósito (pedido dele em
+   2026-09-29): antes, "recorrente" era só uma marcação dentro da própria
+   despesa, e não dava pra saber pela tabela o que era base e o que era
+   ocorrência gerada — o molde e a primeira ocorrência viviam no mesmo
+   documento. Agora o molde mora em "despesasRecorrentes" (a BASE, só o que
+   se repete) e cada mês gera uma ocorrência em "despesas" (que pode ser
+   editada, adiada ou marcada como paga sem tocar na base) — mesmo padrão do
+   Financeiro dos Mentorados (custosFixos → ocorrência em custos).
+
+   O controle de "já lancei esse mês" mudou de uma string única
+   (ultimoMesLancado) pra um mapa por mês (mesesLancados: {"2026-09": true}).
+   A string única só suportava lançar o mês corrente, em ordem — lançar um
+   mês futuro adiantado (ex: novembro em setembro) quebrava o mês seguinte,
+   porque comparar só "é igual ao mês de hoje" não sabe dizer que novembro
+   já foi coberto. O mapa responde a pergunta certa: "esse mês específico já
+   tem ocorrência?", não importa a ordem em que os meses forem lançados. */
+
+// Sem Cloud Functions, não existe "servidor" lançando as ocorrências
+// sozinho — a checagem do mês atual roda no navegador de quem abrir o
+// sistema, toda vez que a lista de recorrentes atualiza. O mesmo mecanismo
+// atende o botão "Lançar custos do mês" pra qualquer mês, inclusive futuro.
+async function lancarRecorrentesDoMes(mesRef) {
+  if (lancandoRecorrentes) return 0;
   lancandoRecorrentes = true;
+  let criados = 0;
   try {
-    const mesAtual = hojeStr().slice(0, 7);
-    for (const d of STATE.despesas) {
-      if (!d.recorrente || d.ultimoMesLancado === mesAtual) continue;
-      const dia = String(d.diaVencimento || 1).padStart(2, "0");
+    const ultimoDia = diasNoMes(Number(mesRef.slice(0, 4)), Number(mesRef.slice(5, 7)));
+    for (const r of STATE.despesasRecorrentes) {
+      if (r.ativo === false) continue;
+      if (r.mesesLancados && r.mesesLancados[mesRef]) continue;
+      const dia = String(Math.min(Math.max(parseInt(r.diaVencimento, 10) || 1, 1), ultimoDia)).padStart(2, "0");
       await addDoc(collection(db, "despesas"), {
-        descricao: d.descricao, categoria: d.categoria, tipo: d.tipo, valor: d.valor,
-        chavePix: d.chavePix || "",
-        data: `${mesAtual}-${dia}`, recorrente: false, diaVencimento: null,
-        ultimoMesLancado: null, origemRecorrenteId: d.id,
+        descricao: r.descricao, categoria: r.categoria || "", tipo: r.tipo || "despesa",
+        valor: Number(r.valor) || 0, chavePix: r.chavePix || "",
+        data: `${mesRef}-${dia}`, origemRecorrenteId: r.id,
         status: "esperado", dataPagamento: null, createdAt: serverTimestamp()
       });
-      await updateDoc(doc(db, "despesas", d.id), { ultimoMesLancado: mesAtual });
+      await updateDoc(doc(db, "despesasRecorrentes", r.id), { [`mesesLancados.${mesRef}`]: true });
+      criados++;
     }
   } catch (err) {
-    // Silencioso — não interrompe o uso do resto do app por causa disso.
+    // Silencioso só na checagem automática do mês corrente — o botão manual
+    // trata o próprio retorno e avisa o usuário (ver btn-lancar-mes abaixo).
     console.warn("Falha ao lançar recorrentes:", err);
   } finally {
     lancandoRecorrentes = false;
   }
+  return criados;
 }
+
+function abrirModalRecorrente() {
+  pendingRecorrenteId = null;
+  document.getElementById("modal-recorrente-titulo").textContent = "Novo recorrente";
+  document.getElementById("mr-descricao").value = "";
+  document.getElementById("mr-tipo").value = "despesa";
+  document.getElementById("mr-categoria").value = "";
+  document.getElementById("mr-valor").value = "";
+  document.getElementById("mr-dia").value = "";
+  document.getElementById("mr-chavepix").value = "";
+  document.getElementById("mr-ativo").checked = true;
+  abrirModal("modal-recorrente");
+}
+document.getElementById("btn-novo-recorrente").addEventListener("click", abrirModalRecorrente);
+
+function editarRecorrente(id) {
+  const r = STATE.despesasRecorrentes.find((x) => x.id === id);
+  if (!r) return;
+  pendingRecorrenteId = id;
+  document.getElementById("modal-recorrente-titulo").textContent = `Editar — ${r.descricao}`;
+  document.getElementById("mr-descricao").value = r.descricao || "";
+  document.getElementById("mr-tipo").value = r.tipo || "despesa";
+  document.getElementById("mr-categoria").value = r.categoria || "";
+  document.getElementById("mr-valor").value = String(r.valor || "").replace(".", ",");
+  document.getElementById("mr-dia").value = r.diaVencimento || "";
+  document.getElementById("mr-chavepix").value = r.chavePix || "";
+  document.getElementById("mr-ativo").checked = r.ativo !== false;
+  abrirModal("modal-recorrente");
+}
+
+document.getElementById("btn-salvar-recorrente").addEventListener("click", async () => {
+  const descricao = document.getElementById("mr-descricao").value.trim();
+  const valor = parseMoeda(document.getElementById("mr-valor").value);
+  const dia = Math.min(Math.max(parseInt(document.getElementById("mr-dia").value, 10) || 1, 1), 31);
+  if (!descricao) { mostrarErro("Informe a descrição."); return; }
+  if (!valor) { mostrarErro("Informe o valor."); return; }
+  const dados = {
+    descricao, tipo: document.getElementById("mr-tipo").value,
+    categoria: document.getElementById("mr-categoria").value.trim(), valor,
+    diaVencimento: dia, chavePix: document.getElementById("mr-chavepix").value.trim(),
+    ativo: document.getElementById("mr-ativo").checked
+  };
+  try {
+    if (pendingRecorrenteId) {
+      await updateDoc(doc(db, "despesasRecorrentes", pendingRecorrenteId), dados);
+    } else {
+      await addDoc(collection(db, "despesasRecorrentes"), { ...dados, mesesLancados: {}, criadoEm: serverTimestamp() });
+    }
+    fecharModal("modal-recorrente");
+    pendingRecorrenteId = null;
+    mostrarToast("Recorrente salvo.");
+  } catch (err) { mostrarErro(err.message); }
+});
+
+async function excluirRecorrente(id) {
+  if (!(await confirmarAcao("Excluir este recorrente? As ocorrências já lançadas em Despesas continuam lá."))) return;
+  try { await deleteDoc(doc(db, "despesasRecorrentes", id)); } catch (err) { mostrarErro(err.message); }
+}
+
+function abrirDetalheRecorrente(id) {
+  const r = STATE.despesasRecorrentes.find((x) => x.id === id);
+  if (!r) return;
+  const meses = Object.keys(r.mesesLancados || {}).sort();
+  abrirDetalhe({
+    titulo: r.descricao,
+    campos: [
+      ["Categoria", esc(r.categoria || "—")],
+      ["Tipo", r.tipo === "despesa" ? "Despesa" : "Outro custo"],
+      ["Valor", esc(fmtMoeda(Number(r.valor) || 0))],
+      ["Dia de vencimento", esc(String(r.diaVencimento || "—"))],
+      ["Chave PIX", esc(r.chavePix || "—")],
+      ["Situação", r.ativo === false ? "Inativo" : "Ativo"],
+      ["Meses já lançados", meses.length ? esc(meses.join(", ")) : "Nenhum ainda"]
+    ],
+    onEditar: () => editarRecorrente(id),
+    onExcluir: () => excluirRecorrente(id)
+  });
+}
+
+function renderTabelaRecorrentes() {
+  const lista = STATE.despesasRecorrentes.slice().sort((a, b) => (a.descricao || "").localeCompare(b.descricao || ""));
+  document.getElementById("tabela-recorrentes").innerHTML = lista.map((r) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheRecorrente('${r.id}')">
+      <td>${esc(r.descricao)}</td><td>${esc(r.categoria || "—")}</td>
+      <td>${r.tipo === "despesa" ? "Despesa" : "Outro custo"}</td>
+      <td class="num">${fmtMoeda(Number(r.valor) || 0)}</td>
+      <td>${esc(String(r.diaVencimento || "—"))}</td>
+      <td><span class="stamp ${r.ativo === false ? "vencido" : "realizado"}">${r.ativo === false ? "Inativo" : "Ativo"}</span></td>
+      <td></td>
+    </tr>`).join("") || `<tr><td colspan="7"><div class="empty">Nenhum custo recorrente cadastrado.</div></td></tr>`;
+}
+
+document.getElementById("rec-mes-lancar").value = hojeStr().slice(0, 7);
+document.getElementById("btn-lancar-mes").addEventListener("click", async () => {
+  const mesRef = document.getElementById("rec-mes-lancar").value;
+  if (!mesRef) { mostrarErro("Escolha o mês."); return; }
+  const criados = await lancarRecorrentesDoMes(mesRef);
+  mostrarToast(criados ? `${criados} lançamento(s) criado(s) em Despesas.` : "Nada pra lançar — esse mês já está coberto.");
+});
 
 
 document.getElementById("desp-periodo-de").value = STATE.periodoDespesasDe;
@@ -3586,7 +3702,7 @@ function renderTabelaDespesas() {
       <td>${d.tipo === "despesa" ? "Despesa" : "Outro custo"}</td>
       <td class="num">${fmtMoeda(Math.abs(Number(d.valor) || 0))}</td><td>${fmtData(d.data)}</td>
       <td class="mono-select">${esc(d.chavePix || "—")}</td>
-      <td>${d.recorrente ? "Sim (dia " + d.diaVencimento + ")" : "—"}</td>
+      <td>${d.origemRecorrenteId ? "Sim" : "—"}</td>
       <td><span class="stamp ${status === "realizado" ? "realizado" : vencida ? "vencido" : "esperado"}">${status === "realizado" ? "Pago" : vencida ? "A pagar" : "Pendente"}</span></td>
       <td>${status === "realizado"
         ? `<button class="btn-small" onclick="event.stopPropagation();window.__jm.desmarcarPago('despesa','${d.id}')">Desfazer</button>`
@@ -4358,9 +4474,15 @@ async function iniciarListeners() {
       STATE.despesas = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       renderTabelaDespesas();
       renderFinanceiro();
-      lancarRecorrentesPendentes();
       rastrearSincronizacao("despesas", snap);
     }, (err) => mostrarErro("Erro de conexão (despesas): " + err.message));
+
+    onSnapshot(collection(db, "despesasRecorrentes"), { includeMetadataChanges: true }, (snap) => {
+      STATE.despesasRecorrentes = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      renderTabelaRecorrentes();
+      lancarRecorrentesDoMes(hojeStr().slice(0, 7));
+      rastrearSincronizacao("despesasRecorrentes", snap);
+    }, (err) => mostrarErro("Erro de conexão (custos recorrentes): " + err.message));
   }
 
   if (podeVer("entradas")) {
@@ -4400,7 +4522,7 @@ async function iniciarListeners() {
 // só assim dá pra referenciá-las de dentro de innerHTML num ES module.
 window.__jm = {
   abrirModalMarcarPago, desmarcarPago, copiarTextoCobranca,
-  abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheContrato, abrirDetalheParcela, abrirDetalheEntrada,
+  abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheRecorrente, abrirDetalheContrato, abrirDetalheParcela, abrirDetalheEntrada,
   abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin,
   gerarPdfContratoExistente, enviarContratoParaAssinatura,
   abrirListaKpi, onCardClick, onMoveCard, copiarTelefone,
@@ -4647,14 +4769,19 @@ function mostrarErroAcesso(id, texto) {
  */
 function aplicarPermissoes() {
   document.querySelectorAll(".sidebar a[data-view]").forEach((a) => {
-    a.classList.toggle("hidden", !podeVer(a.dataset.view));
+    // "recorrentes" não é uma área própria (ver auth.js/firestore.rules):
+    // quem vê Despesas vê Custos Recorrentes, é a mesma base de dados,
+    // só que em dois estágios (molde → ocorrência do mês).
+    const area = a.dataset.view === "recorrentes" ? "despesas" : a.dataset.view;
+    a.classList.toggle("hidden", !podeVer(area));
   });
   document.getElementById("card-usuarios").classList.toggle("hidden", !podeVer("usuarios"));
 
   // Se a view ativa virou proibida (troca de papel com a sessão aberta),
   // manda pra primeira permitida em vez de deixar a tela em branco.
   const ativa = document.querySelector(".view.active");
-  if (!ativa || !podeVer(ativa.id.replace("view-", ""))) {
+  const areaAtiva = ativa && ativa.id === "view-recorrentes" ? "despesas" : ativa && ativa.id.replace("view-", "");
+  if (!ativa || !podeVer(areaAtiva)) {
     const primeiro = document.querySelector(".sidebar a[data-view]:not(.hidden)");
     if (primeiro) primeiro.click();
   }

@@ -113,6 +113,7 @@
     <a data-view="contratos"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span>Contratos</a>
     <a data-view="entradas"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>Entradas</a>
     <a data-view="despesas"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span>Despesas &amp; Custos</a>
+    <a data-view="recorrentes"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></span>Custos Recorrentes</a>
     <a data-view="clientes"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>Clientes</a>
     <a data-view="tarefas" id="menu-tarefas"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>Tarefas</a>
     <a data-view="config"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>Configurações</a>
@@ -365,7 +366,7 @@
     <header class="top">
       <div>
         <h1>Despesas &amp; Custos</h1>
-        <div class="view-desc">Despesas operacionais (tráfego, folha, ferramentas) e outros custos (impostos, taxas) lançados manualmente. Marcadas como recorrentes são relançadas sozinhas todo mês.</div>
+        <div class="view-desc">Despesas operacionais (tráfego, folha, ferramentas) e outros custos (impostos, taxas). O que se repete todo mês vem da tela <strong>Custos Recorrentes</strong> — aqui só aparece a ocorrência de cada mês, que pode ser ajustada ou adiada sem mexer na base.</div>
       </div>
       <div class="top-actions">
         <button class="btn btn-primary" id="btn-nova-despesa-2">+ Nova despesa/custo</button>
@@ -385,6 +386,29 @@
       <table>
         <thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Data</th><th>Chave PIX</th><th>Recorrente</th><th>Status</th><th></th></tr></thead>
         <tbody id="tabela-despesas"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══ CUSTOS RECORRENTES ═══ -->
+  <section id="view-recorrentes" class="view">
+    <header class="top">
+      <div>
+        <h1>Custos Recorrentes</h1>
+        <div class="view-desc">A base do que se repete todo mês (folha, aluguel, contas fixas). Cada item aqui gera a ocorrência do mês na tela de Despesas &amp; Custos — é lá que o valor pago de verdade é ajustado, sem mexer nesta base.</div>
+      </div>
+      <div class="top-actions">
+        <button class="btn btn-primary" id="btn-novo-recorrente">+ Novo recorrente</button>
+      </div>
+    </header>
+    <div class="row" style="margin-bottom:14px;align-items:flex-end;">
+      <div class="field"><label>Lançar o mês</label><input type="month" id="rec-mes-lancar"></div>
+      <button class="btn" id="btn-lancar-mes" title="Cria a ocorrência desse mês pra cada recorrente ativo que ainda não tem uma — pula quem já foi lançado.">Lançar custos do mês</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Dia de vencimento</th><th>Situação</th><th></th></tr></thead>
+        <tbody id="tabela-recorrentes"></tbody>
       </table>
     </div>
   </section>
@@ -888,11 +912,38 @@
       <div class="field"><label>Data</label><input type="date" id="md-data"></div>
     </div>
     <div class="field"><label>Chave PIX</label><input type="text" id="md-chavepix" placeholder="CPF/CNPJ, e-mail, telefone ou chave aleatória"></div>
-    <label class="checkbox-field"><input type="checkbox" id="md-recorrente"> Despesa recorrente (relança sozinha todo mês)</label>
     <label class="checkbox-field"><input type="checkbox" id="md-adiantamento"> É um adiantamento (abate outra despesa — entra como crédito no total, valor digitado normalmente positivo)</label>
     <div class="modal-actions">
       <button class="btn" data-fechar-modal="modal-despesa">Cancelar</button>
       <button class="btn btn-primary" id="btn-salvar-despesa">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: CUSTO RECORRENTE ═══ -->
+<div class="modal-overlay" id="modal-recorrente">
+  <div class="modal-box">
+    <h2 id="modal-recorrente-titulo">Novo recorrente</h2>
+    <div class="field"><label>Descrição</label><input type="text" id="mr-descricao"></div>
+    <div class="row">
+      <div class="field">
+        <label>Tipo</label>
+        <select id="mr-tipo">
+          <option value="despesa">Despesa operacional</option>
+          <option value="outro_custo">Outro custo (imposto/taxa)</option>
+        </select>
+      </div>
+      <div class="field"><label>Categoria</label><input type="text" id="mr-categoria" placeholder="ex: folha, custo fixo..."></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Valor</label><input type="text" inputmode="decimal" id="mr-valor" placeholder="0,00"></div>
+      <div class="field"><label>Dia de vencimento</label><input type="number" id="mr-dia" min="1" max="31" placeholder="1 a 31"></div>
+    </div>
+    <div class="field"><label>Chave PIX</label><input type="text" id="mr-chavepix" placeholder="CPF/CNPJ, e-mail, telefone ou chave aleatória"></div>
+    <label class="checkbox-field"><input type="checkbox" id="mr-ativo" checked> Ativo (continua gerando ocorrência todo mês)</label>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-recorrente">Cancelar</button>
+      <button class="btn btn-primary" id="btn-salvar-recorrente">Salvar</button>
     </div>
   </div>
 </div>

@@ -317,6 +317,19 @@ service cloud.firestore {
       allow delete: if fDespesas();
     }
 
+    // Base dos custos que se repetem todo mês (Custos Recorrentes). Mesmo
+    // alcance de Despesas: é a mesma informação em dois estágios, molde e
+    // ocorrência, não uma área própria.
+    match /despesasRecorrentes/{id} {
+      allow read: if fDespesas();
+      allow create, update: if fDespesas()
+                    && request.resource.data.keys().hasAll(['descricao', 'valor', 'tipo'])
+                    && request.resource.data.descricao is string
+                    && request.resource.data.valor is number
+                    && request.resource.data.tipo is string;
+      allow delete: if fDespesas();
+    }
+
     match /entradas/{id} {
       allow read: if fEntradas();
       allow create, update: if fEntradas()
