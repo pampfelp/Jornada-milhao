@@ -5085,14 +5085,21 @@ function nomeResponsavelTarefa(t) {
 // "Atrasada" aqui é só informativo (KPI e badge no card) — Frente 2 do
 // plano decidiu de propósito NÃO ter SLA/cobrança automática em Tarefas,
 // então isso nunca bloqueia nada, só mostra.
+// Sem prazo definido (caso das rotinas, que nascem com prazo ""), a data de
+// criação vale como prazo: aparece no card e conta pra "Atrasadas".
+function prazoEfetivoTarefa(t) {
+  return t.prazo || dataLocalDeTimestamp(t.createdAt);
+}
 function prazoVencido(t) {
-  if (!t.prazo) return false;
+  const prazo = prazoEfetivoTarefa(t);
+  if (!prazo) return false;
   const etapaCfg = STATE.etapasTarefa.find((e) => e.id === t.etapa);
   if (etapaCfg && (etapaCfg.concluido || etapaCfg.descartado)) return false;
-  return t.prazo < hojeStr();
+  return prazo < hojeStr();
 }
 function renderCardTarefa(t) {
-  const prazo = t.prazo ? `<span class="kcard-prazo${prazoVencido(t) ? " atrasado" : ""}">${fmtData(t.prazo)}</span>` : "";
+  const dataPrazo = prazoEfetivoTarefa(t);
+  const prazo = dataPrazo ? `<span class="kcard-prazo${prazoVencido(t) ? " atrasado" : ""}">${fmtData(dataPrazo)}</span>` : "";
   let subs = "";
   if (t.subtarefas && t.subtarefas.length > 0) {
     const concluidas = t.subtarefas.filter((s) => s.feito).length;
@@ -5109,9 +5116,8 @@ function renderCardTarefa(t) {
   `;
 }
 
-// Filtro de pessoa: só pra gestão (admin/gerente — é quem "acompanha todo
-// mundo", crença repetida na reunião do módulo), e só faz sentido junto
-// com "Todas" (em "Minhas" já é uma pessoa só, a própria). Monta as opções
+// Filtro de pessoa: pra qualquer um que esteja vendo "Todas" (em "Minhas"
+// já é uma pessoa só, a própria). Monta as opções
 // a partir de quem TEM tarefa no recorte atual (não do diretório inteiro de
 // usuários — não tem por que listar gente sem nenhuma tarefa), usando
 // nomeResponsavelTarefa, que já resolve certo pro gerente via
@@ -5120,8 +5126,7 @@ function atualizarFiltroPessoaTarefas(cardsBase) {
   const wrap = document.getElementById("tarefas-filtro-pessoa-wrap");
   const sel = document.getElementById("tarefas-filtro-pessoa");
   if (!wrap || !sel) return;
-  const souGestor = isAdmin() || papelAtual() === "gerente";
-  const mostrar = souGestor && STATE.filtroTarefas === "todas";
+  const mostrar = STATE.filtroTarefas === "todas";
   wrap.style.display = mostrar ? "" : "none";
   if (!mostrar) { sel.value = ""; return; }
   const valorAtual = sel.value;
