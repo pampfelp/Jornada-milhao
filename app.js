@@ -32,6 +32,7 @@ const STATE = {
   rotinas: [],
   etapasTarefa: [],
   filtroTarefas: "minhas", // ou "todas"
+  filtroProduto: "todos", // ou um id de PRODUTOS — barra do topo, vale pra todas as telas com produto
   // Espelho leve de usuarios/{uid} -> nome (uid -> nome), lido por
   // qualquer um que veja Tarefas — ver diretorioNomes em firestore.rules
   // pro porquê. Mantido em dia só pelo admin (iniciarListenerUsuarios).
@@ -110,6 +111,41 @@ let pendingAgendamentoMoveEtapa = null;
 let lancandoRecorrentes = false;
 
 /* ══════════════ HELPERS ══════════════ */
+
+// Produtos vendidos pelo mesmo sistema (desde 2026-10-19). Lead/cliente e
+// contrato guardam o id em "produto"; registro sem o campo é de antes do
+// Fast Start existir, portanto Jornada do Milhão.
+const PRODUTOS = { jornada: "Jornada do Milhão", fast_start: "Fast Start" };
+function produtoDe(registro) {
+  return (registro && registro.produto) || "jornada";
+}
+// O card do funil não guarda produto: Agendamento e Vendas herdam do
+// cliente (como a Origem), Administrativo herda do contrato que o criou.
+function produtoDoCard(card, funil) {
+  if (funil === "administrativo") return produtoDe(STATE.contratos.find((c) => c.id === card.contratoId));
+  return produtoDe(STATE.clientes.find((c) => c.id === card.clienteId));
+}
+function passaFiltroProduto(produto) {
+  return STATE.filtroProduto === "todos" || produto === STATE.filtroProduto;
+}
+
+// Taxa da maquininha por faixa de parcelas (Visa e Mastercard iguais —
+// tabela passada pelo Felipe em 2026-10-19). Venda no cartão entra no
+// caixa como UM recebimento, já líquido da taxa; o contrato continua
+// mostrando o valor cheio que o cliente paga.
+const TAXAS_CARTAO = [
+  { ate: 1, pct: 2.83 },
+  { ate: 6, pct: 4.03 },
+  { ate: 12, pct: 7.79 },
+  { ate: 18, pct: 8.29 }
+];
+function taxaCartao(numParcelas) {
+  const faixa = TAXAS_CARTAO.find((t) => numParcelas <= t.ate) || TAXAS_CARTAO[TAXAS_CARTAO.length - 1];
+  return faixa.pct;
+}
+function valorLiquidoCartao(valorTotal, numParcelas) {
+  return Math.round(valorTotal * (1 - taxaCartao(numParcelas) / 100) * 100) / 100;
+}
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
@@ -792,6 +828,7 @@ document.querySelectorAll(".sidebar a[data-view]").forEach((a) => {
     a.classList.add("active");
     document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
     document.getElementById("view-" + a.dataset.view).classList.add("active");
+    atualizarAvisoFiltroProduto();
     fecharMenuMobile();
     if (a.dataset.view === "config" && !calendariosCarregados) {
       calendariosCarregados = true;
@@ -799,6 +836,35 @@ document.querySelectorAll(".sidebar a[data-view]").forEach((a) => {
     }
   });
 });
+// Filtro global de produto (barra no topo de todas as telas). A escolha
+// fica no navegador de quem usa, só por conveniência — não é dado do
+// negócio, então não vai pro Firestore.
+const TELAS_SEM_PRODUTO = ["entradas", "despesas", "recorrentes", "tarefas", "config"];
+function atualizarAvisoFiltroProduto() {
+  const ativa = document.querySelector(".view.active");
+  const tela = ativa ? ativa.id.replace("view-", "") : "";
+  document.getElementById("filtro-produto-aviso").textContent =
+    STATE.filtroProduto !== "todos" && TELAS_SEM_PRODUTO.includes(tela) ? "Esta tela não separa por produto: mostra tudo." : "";
+}
+function marcarFiltroProduto(produto) {
+  STATE.filtroProduto = PRODUTOS[produto] ? produto : "todos";
+  document.querySelectorAll("#filtro-produto .view-toggle-btn").forEach((b) => b.classList.toggle("active", b.dataset.produto === STATE.filtroProduto));
+  atualizarAvisoFiltroProduto();
+}
+document.querySelectorAll("#filtro-produto .view-toggle-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    marcarFiltroProduto(btn.dataset.produto);
+    try { localStorage.setItem("jm-filtro-produto", STATE.filtroProduto); } catch (err) { /* navegador sem storage: só não lembra */ }
+    renderKanbanAgendamento();
+    renderKanbanVendas();
+    renderKanbanAdministrativo();
+    renderTabelaContratos();
+    renderTabelaClientes();
+    renderFinanceiro();
+  });
+});
+try { marcarFiltroProduto(localStorage.getItem("jm-filtro-produto") || "todos"); } catch (err) { marcarFiltroProduto("todos"); }
+
 function fecharMenuMobile() {
   document.getElementById("sidebar").classList.remove("mobile-open");
   document.getElementById("sidebar-backdrop").classList.remove("active");
@@ -1009,7 +1075,9 @@ function normalizarBusca(texto) {
  * filtro é igual pros três.
  */
 function filtrarCardsFunil(cards, funil, etapasRaw, textoDoCard) {
-  const doPeriodo = filtrarCardsPorPeriodoFunil(cards, funil);
+  // O produto entra junto com o período (antes da busca): os KPIs do
+  // funil mostram só o produto escolhido na barra do topo.
+  const doPeriodo = filtrarCardsPorPeriodoFunil(cards, funil).filter((c) => passaFiltroProduto(produtoDoCard(c, funil)));
   const termo = normalizarBusca(STATE.buscaFunil[funil]).trim();
   if (!termo) return { doPeriodo, visiveis: doPeriodo };
   const visiveis = doPeriodo.filter((c) => {
@@ -1335,7 +1403,7 @@ function atualizarContatoAgendamento(cliente) {
   const btn = document.getElementById("ma-btn-editar-cliente");
   if (!cliente) { el.textContent = "Selecione um cliente."; btn.disabled = true; return; }
   btn.disabled = false;
-  el.textContent = `Tel: ${cliente.telefone || "não cadastrado"} · E-mail: ${cliente.email || "não cadastrado"} · Origem: ${cliente.origem || "não cadastrada"}`;
+  el.textContent = `Tel: ${cliente.telefone || "não cadastrado"} · E-mail: ${cliente.email || "não cadastrado"} · Origem: ${cliente.origem || "não cadastrada"} · Produto: ${PRODUTOS[produtoDe(cliente)]}`;
 }
 
 // Só a etapa marcada "entra automaticamente no Funil de Vendas" (por
@@ -1850,7 +1918,7 @@ function atualizarContatoOportunidade(cliente) {
   const btn = document.getElementById("mo-btn-editar-cliente");
   if (!cliente) { el.textContent = "Selecione um cliente."; btn.disabled = true; return; }
   btn.disabled = false;
-  el.textContent = `Tel: ${cliente.telefone || "não cadastrado"} · E-mail: ${cliente.email || "não cadastrado"}`;
+  el.textContent = `Tel: ${cliente.telefone || "não cadastrado"} · E-mail: ${cliente.email || "não cadastrado"} · Produto: ${PRODUTOS[produtoDe(cliente)]}`;
 }
 document.getElementById("btn-nova-oportunidade").addEventListener("click", () => {
   pendingOportunidadeEditId = null;
@@ -2016,7 +2084,14 @@ function numeroInteiroExtenso(n) {
   if (milhoes) partes.push(extensoAte999(milhoes) + (milhoes === 1 ? " milhão" : " milhões"));
   if (milhares) partes.push(milhares === 1 ? "mil" : extensoAte999(milhares) + " mil");
   if (centenas) partes.push(extensoAte999(centenas));
-  return partes.join(" e ");
+  // O "e" antes do último grupo só entra quando ele é centena redonda ou
+  // menor que 100 ("dois mil e quinhentos", "mil e vinte"); nos outros
+  // casos é vírgula ("quatro mil, novecentos e noventa e sete").
+  const ultimo = centenas || milhares;
+  const juntaComE = ultimo < 100 || ultimo % 100 === 0;
+  return partes.length > 1
+    ? partes.slice(0, -1).join(", ") + (juntaComE ? " e " : ", ") + partes[partes.length - 1]
+    : partes[0];
 }
 function valorExtenso(valor) {
   const inteiro = Math.floor(Math.abs(valor) + 1e-9);
@@ -2087,7 +2162,8 @@ function construirTabelaParcelasHtml(parcelas, forma) {
 // referência pulava 3.7 e 7.2/7.3 — sinal de edição manual sem
 // renumerar; aqui fica sequencial) e os parâmetros (%, piso, kWp)
 // configuráveis no formulário em vez de fixos no texto.
-function montarHtmlContrato(cliente, contrato, parcelas) {
+function montarHtmlContrato(cliente, contrato, parcelas, logoFastStart) {
+  if (produtoDe(contrato) === "fast_start") return montarHtmlContratoFastStart(cliente, contrato, parcelas, logoFastStart);
   const ehComissao = contrato.tipoContrato === "consultoria_comissao";
   const dataContrato = contrato.dataContrato || hojeStr();
   const nomeCliente = esc(cliente.nome);
@@ -2274,9 +2350,290 @@ ${clausulaComissaoExtra}
 </body></html>`;
 }
 
+// ═══ Contrato Fast Start ═══
+// Reproduz o "Contrato Fast Start.docx" (modelo recebido em 2026-10-19):
+// capa preta, cabeçalho com logo e rodapé com "Página X de N" em toda
+// página. Testado no conversor do Code.gs (Utilities.newBlob(html).getAs
+// ("application/pdf")), que é um Chromium: carrega a Poppins do Google
+// Fonts, aceita @page com nome e margin boxes, e só imprime cor de fundo
+// com print-color-adjust:exact — sem isso a capa e as tarjas saem brancas.
+// O cabeçalho é o <thead> da tabela que envolve o texto (o Chromium repete
+// o thead em toda página); o número da página é margin box do @page.
+// O logo vem como data URI (carregarLogoFastStart) porque o conversor
+// não enxerga o servidor local nem precisa depender do site no ar.
+const FAST_START_LOGO_URL = "fast-start-logo.png";
+let logoFastStartCache = null;
+async function carregarLogoFastStart() {
+  if (logoFastStartCache) return logoFastStartCache;
+  const blob = await fetch(FAST_START_LOGO_URL).then((r) => r.blob());
+  logoFastStartCache = await new Promise((resolve, reject) => {
+    const leitor = new FileReader();
+    leitor.onload = () => resolve(leitor.result);
+    leitor.onerror = reject;
+    leitor.readAsDataURL(blob);
+  });
+  return logoFastStartCache;
+}
+
+// Cláusula 3 e quadro "Investimento" do Fast Start. "À vista" é o texto
+// literal do modelo; cartão e parcelado são redação nova (pedido de
+// 2026-10-19: a cláusula segue a forma de pagamento do formulário).
+function condicaoPagamentoFastStart(contrato, parcelas) {
+  const forma = contrato.formaPagamento;
+  const n = contrato.numParcelas || 1;
+  const nExtenso = n === 2 ? "duas" : numeroInteiroExtenso(n);
+  if (forma === "cartao") {
+    if (n === 1) {
+      return {
+        destaque: "Cartão de crédito à vista",
+        detalhe: "No ato da assinatura, por link de pagamento.",
+        clausula: "em pagamento único no cartão de crédito, no ato da assinatura deste contrato, por meio de link de pagamento enviado pelo CONTRATADO.",
+        lista: ""
+      };
+    }
+    return {
+      destaque: `${n}x sem juros no cartão de crédito`,
+      detalhe: "No ato da assinatura, por link de pagamento.",
+      clausula: `em ${n} (${nExtenso}) parcelas sem juros no cartão de crédito, cobradas no ato da assinatura deste contrato por meio de link de pagamento enviado pelo CONTRATADO.`,
+      lista: ""
+    };
+  }
+  if (forma === "entrada_parcelas" || forma === "personalizada") {
+    return {
+      destaque: forma === "entrada_parcelas" ? `Entrada + ${n} parcelas` : `${n} parcelas`,
+      detalhe: "Via PIX ou transferência bancária, nas datas da cláusula 3.1.",
+      clausula: "via PIX ou transferência bancária para a conta indicada pelo CONTRATADO, conforme o detalhamento abaixo:",
+      lista: construirTabelaParcelasHtml(parcelas, forma)
+    };
+  }
+  return {
+    destaque: "Pagamento único",
+    detalhe: "No ato da assinatura, via PIX ou transferência bancária.",
+    clausula: "em pagamento único, no ato da assinatura deste contrato, via PIX ou transferência bancária para a conta indicada pelo CONTRATADO.",
+    lista: ""
+  };
+}
+
+function montarHtmlContratoFastStart(cliente, contrato, parcelas, logo) {
+  const nomeCliente = esc(cliente.nome);
+  const ehPj = apenasDigitos(cliente.cpfCnpj).length > 11;
+  const contato = [cliente.email && `e-mail ${esc(cliente.email)}`, cliente.telefone && `telefone ${esc(cliente.telefone)}`].filter(Boolean).join(", ");
+  const qualificacao = construirQualificacaoContratante(cliente) + (contato ? `, ${contato}` : "");
+  const pagamento = condicaoPagamentoFastStart(contrato, parcelas);
+  const valorTotalTexto = esc(fmtMoeda(contrato.valorTotal));
+  const logoImg = (classe) => logo ? `<img class="${classe}" src="${logo}" alt="Fast Start">` : "";
+  const assinaturaContratante = ehPj
+    ? `<div class="ass-nome">Razão social: ${nomeCliente}</div>
+       ${cliente.representanteNome ? `<div class="ass-info">Representante: ${esc(cliente.representanteNome)}</div>` : ""}
+       ${cliente.representanteCpf ? `<div class="ass-info">CPF: ${esc(cliente.representanteCpf)}</div>` : ""}`
+    : `<div class="ass-nome">Nome: ${nomeCliente}</div>
+       <div class="ass-info">CPF: ${esc(cliente.cpfCnpj || "—")}</div>`;
+  const secao = (num, titulo) => `<div class="secao-esp"><table class="secao"><tr><td class="secao-num">${num}</td><td class="secao-tit">${titulo}</td></tr></table></div>`;
+  const p = (num, texto) => `<p><span class="n">${num}</span>  ${texto}</p>`;
+  const dia = (num, rotulo, titulo, itens) => `<table class="dia"><tr>
+    <td class="dia-rot"><div class="dia-num">${num}</div><div class="dia-nome">${rotulo}</div></td>
+    <td class="dia-cont"><div class="dia-tit">${titulo}</div><ul>${itens.map((i) => `<li>${i}</li>`).join("")}</ul></td>
+  </tr></table>`;
+  const alineas = (itens) => `<div class="alineas">${itens.map(([l, t]) => `<p><span class="n">${l})</span>  ${t}</p>`).join("")}</div>`;
+
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Contrato Fast Start - ${nomeCliente}</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box;}
+@page{size:A4;margin:0 0 22mm 0;
+  @bottom-left{content:"FAST START  \\2022  A primeira aceleradora do solar";white-space:pre;font-family:Poppins,Arial,sans-serif;font-size:7.5pt;color:#6B6258;margin-left:20mm;margin-top:4mm;padding-top:1.6mm;border-top:0.4mm solid #F5B21F;vertical-align:top;}
+  @bottom-right{content:"Página " counter(page) " de " counter(pages);font-family:Poppins,Arial,sans-serif;font-size:7.5pt;color:#6B6258;margin-right:20mm;margin-top:4mm;padding-top:1.6mm;border-top:0.4mm solid #F5B21F;vertical-align:top;}
+}
+@page capa{margin:0;@bottom-right{content:none;border:none;}@bottom-left{content:none;border:none;}}
+body{margin:0;font-family:Poppins,Arial,sans-serif;font-size:9.5pt;line-height:1.57;color:#1E1E1E;text-rendering:geometricPrecision;}
+.capa{page:capa;width:210mm;height:297mm;background:#160B04;text-align:center;position:relative;z-index:2;}
+.capa-logo{width:87mm;margin-top:79mm;}
+.capa h1{font-size:18pt;font-weight:700;line-height:1.3;margin:0;}
+.capa .t1{color:#fff;margin-top:8.5mm;}
+.capa .t2{color:#F5B21F;margin-top:3.6mm;}
+.capa-faixa{background:#F5B21F;color:#160B04;font-weight:700;font-size:11pt;line-height:5.7mm;margin:9.5mm 22.9mm 0;}
+.capa-sub{color:#D9CFC3;font-size:9.5pt;margin-top:15mm;}
+.corpo{width:100%;border-collapse:collapse;}
+.corpo>thead>tr>td{padding:0;}
+.cab{height:19.4mm;background:#160B04;border-bottom:0.9mm solid #F5B21F;position:relative;margin-bottom:10.4mm;}
+.cab-logo{position:absolute;left:20.4mm;top:1.7mm;height:13.6mm;}
+.cab-txt{position:absolute;right:20mm;bottom:2.4mm;color:#F5B21F;font-weight:700;font-size:7.5pt;letter-spacing:2pt;line-height:1;}
+.corpo>tbody>tr>td{padding:0 20mm;}
+p{margin:0 0 7pt;text-align:justify;break-inside:avoid;}
+.n{color:#C98A0E;font-weight:700;}
+.rotulo{color:#C98A0E;font-weight:700;font-size:8pt;letter-spacing:2pt;margin:0 0 3pt;}
+h2.titulo{font-size:15pt;font-weight:700;color:#160B04;line-height:1.45;margin:0 0 12pt;}
+h3{font-size:10pt;font-weight:700;color:#160B04;margin:8pt 0 5pt -2mm;padding-left:3.1mm;border-left:0.9mm solid #F5B21F;line-height:1.5;}
+.bloco{break-inside:avoid;}
+.nova-pagina{break-before:page;}
+/* padding no lugar de parte da margem: o Chromium zera a margem de cima
+   do bloco que abre página, e o modelo mantém ~4mm abaixo do cabeçalho */
+.secao-esp{margin-top:5.5mm;padding-top:4mm;}
+table.secao{width:100%;border-collapse:collapse;table-layout:fixed;margin:0 0 6.4mm;}
+.secao td{height:11mm;padding:0;vertical-align:middle;font-weight:700;color:#160B04;}
+.secao-num{width:15.9mm;background:#160B04;color:#F5B21F !important;font-size:15pt;text-align:center;}
+.secao-tit{background:#F5B21F;font-size:12pt;letter-spacing:0.5pt;text-transform:uppercase;padding-left:4mm !important;}
+table.dia{width:100%;border-collapse:collapse;table-layout:fixed;margin:0 0 7.2mm;break-inside:avoid;}
+.dia-rot{width:33.4mm;background:#160B04;text-align:center;vertical-align:middle;}
+.dia-num{color:#fff;font-size:7.5pt;letter-spacing:1pt;line-height:1.4;}
+.dia-nome{color:#F5B21F;font-size:15pt;font-weight:700;text-transform:uppercase;line-height:1.4;}
+.dia-cont{background:#FDF4E1;border-bottom:0.45mm solid #F5B21F;padding:4mm 4.3mm 3.4mm;vertical-align:top;}
+.dia-tit{font-size:10pt;font-weight:700;color:#160B04;line-height:1.5;margin-bottom:4pt;}
+.dia-cont ul{list-style:none;margin:0;padding:0;}
+.dia-cont li{font-size:9pt;line-height:1.54;margin:0 0 2pt;padding-left:6.3mm;position:relative;}
+.dia-cont li:before{content:"\\25BA";color:#C98A0E;font-size:6pt;position:absolute;left:0.6mm;top:0.2mm;}
+table.invest{width:100%;border-collapse:collapse;table-layout:fixed;margin:7.2mm 0 6mm;break-inside:avoid;}
+.invest td{height:21.4mm;vertical-align:middle;padding:0 4.3mm;}
+.invest-esq{width:63.5mm;background:#160B04;}
+.invest-rot{color:#fff;font-size:7.5pt;letter-spacing:1.5pt;line-height:1.4;}
+.invest-valor{color:#F5B21F;font-size:20pt;font-weight:700;line-height:1.3;}
+.invest-dir{background:#F5B21F;color:#160B04;padding-left:5mm !important;}
+.invest-dest{font-size:11pt;font-weight:700;line-height:1.4;}
+.invest-det{font-size:9pt;line-height:1.4;}
+.lista-parcelas{margin:0 0 7pt;padding-left:6mm;}
+.lista-parcelas li{margin-bottom:2pt;}
+.alineas{margin:0 0 10pt 6.3mm;}
+.alineas p{margin-bottom:5pt;}
+.fecho{break-inside:avoid;}
+.data{text-align:right;margin:4mm 0 0;}
+table.assinaturas{width:100%;border-collapse:collapse;margin-top:24mm;}
+.assinaturas td{width:50%;vertical-align:top;text-align:center;font-size:9pt;line-height:1.55;}
+.assinaturas td:first-child{padding-right:7mm;}
+.assinaturas td:last-child{padding-left:7mm;}
+.ass-linha{border-top:0.55mm solid #160B04;padding-top:3.6mm;}
+.ass-papel{color:#C98A0E;font-weight:700;font-size:8.5pt;letter-spacing:1.5pt;}
+.ass-nome{color:#160B04;font-weight:700;}
+.ass-info{color:#6B6258;}
+</style></head><body>
+<div class="capa">
+  ${logoImg("capa-logo")}
+  <h1 class="t1">CONTRATO DE PRESTAÇÃO DE SERVIÇOS</h1>
+  <h1 class="t2">DE ACELERAÇÃO COMERCIAL</h1>
+  <div class="capa-faixa">Programa de 3 meses  •  Encontros semanais em grupo</div>
+  <div class="capa-sub">Estruturação comercial: do time de vendas às estratégias de fechamento</div>
+</div>
+<table class="corpo"><thead><tr><td><div class="cab">${logoImg("cab-logo")}<div class="cab-txt">CONTRATO DE ACELERAÇÃO COMERCIAL</div></div></td></tr></thead><tbody><tr><td>
+
+<div class="rotulo">QUALIFICAÇÃO DAS PARTES</div>
+<h2 class="titulo">Contrato de Prestação de Serviços de Aceleração Comercial – Fast Start</h2>
+
+<h3>CONTRATANTE</h3>
+<p><strong>${nomeCliente}</strong>, ${qualificacao}.</p>
+
+<h3>CONTRATADO</h3>
+<p><strong>BENEDITO JOÃO VIEGAS DE MATOS</strong>, pessoa física, brasileiro, casado, CPF nº 925.437.152-15, escritório comercial localizado na Rua Municipalidade, Edifício Mirai Offices, sala 216, bairro Umarizal, Belém/PA.</p>
+<p>As partes acima qualificadas têm entre si justo e contratado o presente instrumento de Prestação de Serviços de Aceleração Comercial, denominado <strong>FAST START</strong>, que se regerá pelas cláusulas e condições a seguir.</p>
+
+<div class="bloco">${secao("01", "Objeto")}
+${p("1.1", "O presente contrato tem por objeto a participação da CONTRATANTE no programa de aceleração comercial <strong>FAST START</strong>, com duração de 3 (três) meses, voltado à estruturação comercial da empresa, abrangendo desde a construção do time de vendas até a implantação de estratégias comerciais.")}</div>
+${p("1.2", "O programa será executado por meio de encontros semanais <strong>em grupo</strong>, realizados de forma remota (online e ao vivo), com a seguinte estrutura:")}
+${dia("1.2.1", "Terças", "Recrutamento, Treinamento e Acompanhamento de Novos Vendedores", [
+  "Estruturação do processo de recrutamento e seleção de vendedores;",
+  "Treinamento e integração (onboarding) de novos vendedores;",
+  "Acompanhamento da evolução e da performance dos vendedores contratados."
+])}
+${dia("1.2.2", "Quintas", "Funil Comercial e Implantação de Estratégias de Vendas", [
+  "Construção e análise do funil comercial e de seus indicadores;",
+  "Definição e implantação de estratégias de vendas e de canais de aquisição de clientes;",
+  "Acompanhamento da execução das estratégias implantadas."
+])}
+${dia("1.2.3", "Quintas", "Treinamento de Apresentação de Proposta Comercial", [
+  "Treinamento da equipe na apresentação de propostas comerciais;",
+  "Técnicas de condução de reunião, contorno de objeções e fechamento."
+])}
+${dia("1.2.4", "Bônus", "Plataforma de Gestão Financeira", [
+  "Disponibilização à CONTRATANTE de acesso a uma plataforma de gestão financeira durante a vigência deste contrato, para apoio ao controle financeiro da operação."
+])}
+${p("1.3", "Os encontros serão realizados em grupo, com a participação de outras empresas também inscritas no programa. Os dias e horários poderão ser ajustados pelo CONTRATADO mediante comunicação prévia aos participantes, preservada a quantidade de encontros prevista.")}
+${p("1.4", "Os serviços serão prestados de maneira autônoma e independente, sem vínculo empregatício entre as partes, sendo a CONTRATANTE responsável pela execução e implementação das estratégias apresentadas, bem como pelo cumprimento dos prazos e das metas estabelecidas.")}
+${p("1.5", "O CONTRATADO assume obrigação de meio, e não de resultado. O programa não garante faturamento, volume de vendas ou lucro específicos, uma vez que os resultados dependem da dedicação, da execução e das condições de mercado da CONTRATANTE.")}
+
+<div class="bloco">${secao("02", "Prazo de vigência")}
+${p("2.1", "O presente contrato terá vigência de 3 (três) meses, contados a partir da data de início do programa, informada pelo CONTRATADO à CONTRATANTE no momento da inscrição.")}</div>
+${p("2.2", "O acesso à plataforma de gestão financeira e aos encontros em grupo será mantido durante todo o período de vigência e encerrado automaticamente ao seu término.")}
+${p("2.3", "O contrato poderá ser prorrogado ou convertido em outro programa do CONTRATADO, mediante acordo entre as partes, formalizado por aditivo contratual ou novo instrumento.")}
+
+<div class="bloco">${secao("03", "Investimento e condições de pagamento")}
+<table class="invest"><tr>
+  <td class="invest-esq"><div class="invest-rot">INVESTIMENTO</div><div class="invest-valor">${valorTotalTexto}</div></td>
+  <td class="invest-dir"><div class="invest-dest">${esc(pagamento.destaque)}</div><div class="invest-det">${esc(pagamento.detalhe)}</div></td>
+</tr></table></div>
+${p("3.1", `Pela participação no programa FAST START, a CONTRATANTE pagará ao CONTRATADO o valor total de <strong>${valorTotalTexto} (${esc(valorExtenso(contrato.valorTotal))})</strong>, ${esc(pagamento.clausula)}`)}
+${pagamento.lista.replace("<ul>", '<ul class="lista-parcelas">')}
+${p("3.2", "O acesso aos encontros e à plataforma de gestão financeira será liberado após a confirmação do pagamento.")}
+${p("3.3", "A ausência da CONTRATANTE ou de sua equipe em qualquer encontro não gera direito a reposição individual, abatimento ou devolução de valores. Sempre que disponível, a gravação do encontro poderá ser disponibilizada aos participantes.")}
+
+<div class="bloco">${secao("04", "Obrigações das partes")}
+<h3>4.1  Obrigações do CONTRATADO</h3>
+${p("4.1.1", "Conduzir os encontros semanais em grupo previstos na Cláusula 1, com alto grau de excelência técnica e adotando as melhores práticas de mercado em gestão e estruturação comercial.")}</div>
+${p("4.1.2", "Disponibilizar os materiais de apoio, modelos e ferramentas utilizados nos encontros, bem como o acesso à plataforma de gestão financeira durante a vigência do contrato.")}
+${p("4.1.3", "Informar com antecedência os dias, horários e links de acesso aos encontros, bem como eventuais alterações de agenda.")}
+${p("4.1.4", "Manter confidencialidade sobre as informações estratégicas, operacionais e comerciais da CONTRATANTE, nos termos da Cláusula 6.")}
+${p("4.1.5", "Garantir que os serviços sejam prestados com independência técnica, sem qualquer subordinação hierárquica à CONTRATANTE.")}
+<div class="bloco"><h3>4.2  Obrigações da CONTRATANTE</h3>
+${p("4.2.1", "Efetuar os pagamentos nos prazos e condições estabelecidos.")}</div>
+${p("4.2.2", "Participar dos encontros com o gestor responsável e, quando pertinente, com a equipe comercial, garantindo pontualidade e engajamento.")}
+${p("4.2.3", "Executar as tarefas, implantações e estratégias definidas nos encontros, sendo responsável pela sua implementação na empresa.")}
+${p("4.2.4", "Fornecer as informações e os indicadores comerciais necessários ao acompanhamento do programa.")}
+${p("4.2.5", "Manter conduta respeitosa e colaborativa com o CONTRATADO e com os demais participantes do grupo.")}
+${p("4.2.6", "Utilizar a plataforma de gestão financeira de acordo com seus termos de uso, sendo vedado o compartilhamento do acesso com terceiros não vinculados à empresa.")}
+
+<div class="bloco">${secao("05", "Propriedade intelectual e uso de imagem")}
+${p("5.1", "Todo o conteúdo do programa FAST START – incluindo metodologias, aulas, gravações, apresentações, planilhas, modelos e materiais de apoio – é de propriedade exclusiva do CONTRATADO, sendo concedida à CONTRATANTE apenas licença de uso interno, pessoal e intransferível.")}</div>
+${p("5.2", "É vedado à CONTRATANTE gravar, reproduzir, revender, distribuir ou compartilhar o conteúdo do programa com terceiros, sob pena de rescisão imediata e de responder por perdas e danos.")}
+${p("5.3", "A CONTRATANTE autoriza a gravação dos encontros em grupo para fins de disponibilização aos participantes. A divulgação de depoimentos, imagem ou resultados da CONTRATANTE em materiais de marketing do CONTRATADO dependerá de autorização prévia e expressa.")}
+
+<div class="bloco">${secao("06", "Confidencialidade")}
+${p("6.1", "O CONTRATADO manterá sigilo sobre as informações estratégicas, comerciais, operacionais e financeiras da CONTRATANTE às quais tiver acesso em razão deste contrato (\"Informações Confidenciais\"), não as divulgando nem utilizando para fim diverso da execução do programa.")}</div>
+${p("6.2", "Por se tratar de programa em grupo, a CONTRATANTE compromete-se a manter sigilo sobre as informações de outras empresas participantes compartilhadas durante os encontros, não podendo divulgá-las ou utilizá-las em benefício próprio ou de terceiros.")}
+${p("6.3", "As obrigações de confidencialidade não se aplicam às informações que:")}
+${alineas([
+  ["a", "já eram de conhecimento público ou se tornarem públicas sem violação deste contrato;"],
+  ["b", "forem comprovadamente desenvolvidas de forma independente, sem uso das Informações Confidenciais;"],
+  ["c", "forem exigidas por determinação judicial, administrativa ou regulatória, hipótese em que a parte notificará previamente a outra, na extensão permitida pela lei."]
+])}
+${p("6.4", "O dever de confidencialidade permanecerá vigente durante o contrato e por 5 (cinco) anos após seu término, independentemente do motivo.")}
+${p("6.5", "Em caso de violação desta cláusula, a parte prejudicada poderá adotar as medidas legais cabíveis, incluindo a rescisão imediata do contrato e a indenização por perdas e danos.")}
+
+<div class="bloco nova-pagina">${secao("07", "Rescisão e cancelamento")}
+${p("7.1", "A CONTRATANTE poderá desistir do programa em até 7 (sete) dias corridos contados da assinatura deste contrato, com devolução integral dos valores pagos, desde que não tenha participado de nenhum encontro.")}</div>
+${p("7.2", "Após esse prazo, ou após a participação em qualquer encontro, por se tratar de programa em grupo com vagas e agenda previamente reservadas, não haverá devolução do valor pago, salvo disposição expressa em contrário entre as partes.")}
+${p("7.3", "O contrato será rescindido de pleno direito, independentemente de notificação judicial ou extrajudicial, nas seguintes hipóteses:")}
+${alineas([
+  ["a", "inadimplemento de qualquer obrigação por uma das partes, não regularizado em prazo razoável após notificação da parte adimplente;"],
+  ["b", "violação das cláusulas de propriedade intelectual ou de confidencialidade;"],
+  ["c", "conduta desrespeitosa ou prejudicial ao grupo por parte da CONTRATANTE;"],
+  ["d", "decretação de falência ou recuperação judicial ou extrajudicial de qualquer das partes que comprometa o cumprimento do contrato;"],
+  ["e", "caso fortuito ou força maior que inviabilize, de forma definitiva, a continuidade do programa."]
+])}
+${p("7.4", "Na hipótese de o CONTRATADO deixar de entregar o programa por motivo a ele imputável, a CONTRATANTE terá direito à devolução proporcional aos encontros não realizados.")}
+
+<div class="bloco">${secao("08", "Disposições gerais")}
+${p("8.1", "O CONTRATADO poderá contar com profissionais de sua equipe ou convidados para a condução de encontros, permanecendo integralmente responsável pela qualidade, sigilo e cumprimento das obrigações deste contrato.")}</div>
+${p("8.2", "Para dirimir quaisquer questões oriundas deste contrato que não possam ser resolvidas de forma consensual, fica eleito o Foro da Comarca de Belém/PA, com renúncia expressa a qualquer outro, por mais privilegiado que seja.")}
+${p("8.3", "O presente contrato poderá ser formalizado e assinado eletronicamente, por plataforma reconhecida no mercado que assegure a autenticidade, a integridade e a validade jurídica do documento, nos termos da Medida Provisória nº 2.200-2/2001, da Lei nº 14.063/2020 e do Código Civil. As assinaturas eletrônicas terão o mesmo valor legal das assinaturas manuscritas.")}
+
+<div class="fecho">
+${p("8.4", "E, por estarem justas e contratadas, as partes firmam o presente contrato, que passa a vigorar a partir da data de sua assinatura.")}
+<p class="data">Belém/PA, ${esc(dataExtenso(contrato.dataContrato || hojeStr()))}.</p>
+<table class="assinaturas"><tr>
+  <td><div class="ass-linha"><div class="ass-papel">CONTRATANTE</div>${assinaturaContratante}</div></td>
+  <td><div class="ass-linha"><div class="ass-papel">CONTRATADO</div><div class="ass-nome">BENEDITO JOÃO VIEGAS DE MATOS</div><div class="ass-info">CPF: 925.437.152-15</div></div></td>
+</tr></table>
+</div>
+
+</td></tr></tbody></table>
+</body></html>`;
+}
+
 function calcularParcelas(valorTotal, forma, valorEntrada, numParcelas, diaVencimento, dataPrimeira, parcelasPersonalizadas) {
   if (forma === "avista") {
     return [{ numero: 1, valor: valorTotal, vencimento: dataPrimeira }];
+  }
+  // Cartão: a operadora repassa tudo de uma vez, já sem a taxa — vira UM
+  // recebimento líquido na data informada, não N parcelas.
+  if (forma === "cartao") {
+    return [{ numero: 1, valor: valorLiquidoCartao(valorTotal, numParcelas), vencimento: dataPrimeira }];
   }
   if (forma === "personalizada") {
     return (parcelasPersonalizadas || []).map((p, i) => ({ numero: i + 1, valor: p.valor, vencimento: p.vencimento }));
@@ -2360,6 +2717,7 @@ function lerParcelasPersonalizadasForm() {
 
 function descricaoFormaPagamento(forma, valorEntrada, numParcelas) {
   if (forma === "avista") return "À vista";
+  if (forma === "cartao") return numParcelas > 1 ? `Cartão de crédito em ${numParcelas}x sem juros` : "Cartão de crédito à vista";
   if (forma === "personalizada") return `${numParcelas}x personalizadas`;
   return `Entrada de ${fmtMoeda(valorEntrada)} + ${numParcelas}x`;
 }
@@ -2373,10 +2731,13 @@ function lerFormularioContrato() {
       : parseMoeda(document.getElementById("mct-valor").value),
     forma,
     valorEntrada: parseMoeda(document.getElementById("mct-entrada").value),
-    numParcelas: forma === "personalizada" ? parcelasPersonalizadas.length : (parseInt(document.getElementById("mct-numparcelas").value, 10) || 1),
+    numParcelas: forma === "personalizada" ? parcelasPersonalizadas.length
+      : forma === "cartao" ? (parseInt(document.getElementById("mct-cartao-parcelas").value, 10) || 1)
+      : (parseInt(document.getElementById("mct-numparcelas").value, 10) || 1),
     diaVencimento: parseInt(document.getElementById("mct-diavencimento").value, 10) || 10,
     dataPrimeira: document.getElementById("mct-primeiraparcela").value || hojeStr(),
     parcelasPersonalizadas,
+    produto: document.getElementById("mct-produto").value,
     tipoContrato: document.getElementById("mct-tipo-contrato").value,
     comissaoPct: parseMoeda(document.getElementById("mct-comissao-pct").value) || 4,
     comissaoPiso: parseMoeda(document.getElementById("mct-comissao-piso").value) || 400000,
@@ -2386,6 +2747,11 @@ function lerFormularioContrato() {
 
 function atualizarPreviewParcelas() {
   if (document.getElementById("mct-forma").value === "entrada_parcelas") aplicarPadraoEntradaParcelas();
+  // Bloco do cartão aparece aqui (e não só no "change" da forma) porque o
+  // fechamento pelo funil e o limpar trocam a forma direto no .value.
+  const ehCartao = document.getElementById("mct-forma").value === "cartao";
+  document.getElementById("mct-bloco-cartao").style.display = ehCartao ? "flex" : "none";
+  document.getElementById("mct-primeiraparcela-rotulo").textContent = ehCartao ? "Data do recebimento do cartão" : "Data da 1ª parcela";
   const f = lerFormularioContrato();
   if (f.forma === "personalizada") {
     document.getElementById("mct-valor").value = f.valorTotal ? String(f.valorTotal.toFixed(2)).replace(".", ",") : "";
@@ -2395,6 +2761,7 @@ function atualizarPreviewParcelas() {
   let texto;
   if (f.forma === "avista") texto = `À vista: ${fmtMoeda(parcelas[0].valor)} em ${fmtData(parcelas[0].vencimento)}.`;
   else if (f.forma === "personalizada") texto = `${parcelas.length}x personalizadas, total ${fmtMoeda(f.valorTotal)}.`;
+  else if (f.forma === "cartao") texto = `Cliente paga ${fmtMoeda(f.valorTotal)} em ${f.numParcelas}x no cartão. Taxa de ${String(taxaCartao(f.numParcelas)).replace(".", ",")}%: entra ${fmtMoeda(parcelas[0].valor)} no caixa em ${fmtData(parcelas[0].vencimento)}.`;
   else texto = `Entrada de ${fmtMoeda(parcelas[0].valor)} em ${fmtData(parcelas[0].vencimento)} + ${f.numParcelas}x de ~${fmtMoeda(parcelas[1] ? parcelas[1].valor : 0)}, todo dia ${f.diaVencimento}.`;
   document.getElementById("mct-preview-parcelas").textContent = texto;
 }
@@ -2435,11 +2802,37 @@ document.getElementById("mct-tipo-contrato").addEventListener("change", (e) => {
   document.getElementById("mct-bloco-comissao").style.display = e.target.value === "consultoria_comissao" ? "block" : "none";
 });
 
+// Preço de tabela do Fast Start (2026-10-19), só pra sugerir no formulário.
+const PRECO_FAST_START = 4997;
+document.getElementById("mct-cartao-parcelas").innerHTML = Array.from({ length: 18 }, (_, i) => i + 1)
+  .map((n) => `<option value="${n}">${n === 1 ? "1x (à vista)" : `${n}x`} — taxa ${String(taxaCartao(n)).replace(".", ",")}%</option>`).join("");
+document.getElementById("mct-cartao-parcelas").value = 12;
+document.getElementById("mct-cartao-parcelas").addEventListener("change", atualizarPreviewParcelas);
+// Fast Start tem um modelo só (sem "tipo de contrato") e é o único que
+// aceita cartão — o texto de pagamento da Jornada fala em depósito e
+// vencimentos, não em link de cartão.
+function aplicarProdutoContrato() {
+  const ehFastStart = document.getElementById("mct-produto").value === "fast_start";
+  const forma = document.getElementById("mct-forma");
+  const valor = document.getElementById("mct-valor");
+  document.getElementById("mct-bloco-tipo").style.display = ehFastStart ? "none" : "block";
+  document.getElementById("mct-bloco-comissao").style.display = !ehFastStart && document.getElementById("mct-tipo-contrato").value === "consultoria_comissao" ? "block" : "none";
+  const opcaoCartao = forma.querySelector('option[value="cartao"]');
+  opcaoCartao.hidden = !ehFastStart;
+  opcaoCartao.disabled = !ehFastStart;
+  if (!ehFastStart && forma.value === "cartao") { forma.value = "avista"; forma.dispatchEvent(new Event("change")); }
+  if (ehFastStart && !valor.value) valor.value = PRECO_FAST_START.toFixed(2).replace(".", ",");
+  atualizarPreviewParcelas();
+}
+document.getElementById("mct-produto").addEventListener("change", aplicarProdutoContrato);
+
 function limparFormularioContrato() {
   ["mct-valor", "mct-entrada", "mct-telefone", "mct-email", "mct-cpfcnpj", "mct-endereco-busca", "mct-representante-nome", "mct-representante-cpf", "mct-comissao-pct", "mct-comissao-piso", "mct-comissao-kwp"].forEach((id) => (document.getElementById(id).value = ""));
   atualizarBlocoRepresentanteContrato();
   document.getElementById("mct-tipo-contrato").value = "padrao";
   document.getElementById("mct-bloco-comissao").style.display = "none";
+  document.getElementById("mct-produto").value = "jornada";
+  document.getElementById("mct-cartao-parcelas").value = 12;
   comboContrato.reset();
   parcelamentoAutoPreenchido = true;
   document.getElementById("mct-numparcelas").value = 1;
@@ -2449,6 +2842,7 @@ function limparFormularioContrato() {
   document.getElementById("mct-linha-parcelamento").style.display = "none";
   document.getElementById("mct-bloco-personalizadas").style.display = "none";
   limparParcelasPersonalizadas();
+  aplicarProdutoContrato();
   document.getElementById("mct-preview-parcelas").textContent = "";
 }
 
@@ -2465,6 +2859,11 @@ function preencherCamposFaltantesContrato(clienteId) {
   document.getElementById("mct-representante-nome").value = cliente ? (cliente.representanteNome || "") : "";
   document.getElementById("mct-representante-cpf").value = cliente ? (cliente.representanteCpf || "") : "";
   atualizarBlocoRepresentanteContrato();
+  // O produto do lead já vem marcado; dá pra trocar antes de gerar.
+  if (cliente) {
+    document.getElementById("mct-produto").value = produtoDe(cliente);
+    aplicarProdutoContrato();
+  }
 }
 wireMascaraCpfCnpj("mct-cpfcnpj");
 wireMascaraCpfCnpj("mct-representante-cpf");
@@ -2546,7 +2945,8 @@ async function gerarContrato() {
     // Lançar um contrato antigo hoje não deveria contar como faturamento
     // deste mês.
     const dataContrato = document.getElementById("mct-data-contrato").value || hojeStr();
-    const ehComissao = f.tipoContrato === "consultoria_comissao";
+    const ehFastStart = f.produto === "fast_start";
+    const ehComissao = !ehFastStart && f.tipoContrato === "consultoria_comissao";
     const contratoRef = await addDoc(collection(db, "contratos"), {
       oportunidadeId: pendingContratoOportunidadeId || null,
       clienteId: cliente.id, clienteNome: cliente.nome,
@@ -2554,8 +2954,12 @@ async function gerarContrato() {
       valorEntrada: f.forma === "entrada_parcelas" ? f.valorEntrada : 0,
       numParcelas: f.forma === "avista" ? 1 : f.numParcelas,
       diaVencimento: f.diaVencimento, dataContrato,
-      tipoContrato: f.tipoContrato,
+      produto: f.produto,
+      tipoContrato: ehFastStart ? null : f.tipoContrato,
       ...(ehComissao ? { comissaoPct: f.comissaoPct, comissaoPiso: f.comissaoPiso, comissaoKwp: f.comissaoKwp } : {}),
+      // A taxa fica gravada no contrato: se a tabela da maquininha mudar
+      // depois, o histórico continua mostrando o que foi cobrado na época.
+      ...(f.forma === "cartao" ? { taxaCartaoPct: taxaCartao(f.numParcelas), valorLiquidoCartao: parcelasCalc[0].valor } : {}),
       dataGeracao: serverTimestamp(), pdfUrl: null, pdfFileId: null, status: "ativo"
     });
 
@@ -2597,13 +3001,14 @@ async function gerarContrato() {
     pendingContratoEtapaFechamentoId = null;
     mostrarToast("Contrato criado.");
 
-    gerarPdfContratoEmSegundoPlano(contratoRef.id, cliente.nome, montarHtmlContrato(
+    gerarPdfContratoEmSegundoPlano(contratoRef.id, cliente.nome, f.produto, (logo) => montarHtmlContrato(
       clienteParaPdf,
       {
         valorTotal: f.valorTotal, formaPagamento: f.forma, valorEntrada: f.valorEntrada, numParcelas: f.numParcelas, dataContrato,
-        tipoContrato: f.tipoContrato, comissaoPct: f.comissaoPct, comissaoPiso: f.comissaoPiso, comissaoKwp: f.comissaoKwp
+        produto: f.produto, tipoContrato: f.tipoContrato, comissaoPct: f.comissaoPct, comissaoPiso: f.comissaoPiso, comissaoKwp: f.comissaoKwp
       },
-      parcelasCalc
+      parcelasCalc,
+      logo
     ));
   } catch (err) {
     mostrarErro("Não foi possível gerar o contrato: " + err.message);
@@ -2613,11 +3018,12 @@ async function gerarContrato() {
 // Roda depois que o modal já fechou — por isso não é "await"ado por
 // gerarContrato(). O pequeno atraso antes do "Gerando PDF..." é só pra dar
 // tempo do toast "Contrato criado." aparecer antes de ser substituído.
-async function gerarPdfContratoEmSegundoPlano(contratoId, clienteNome, htmlContrato) {
+async function gerarPdfContratoEmSegundoPlano(contratoId, clienteNome, produto, montarHtml) {
   await new Promise((resolve) => setTimeout(resolve, 1500));
   mostrarToast(`Gerando PDF do contrato de ${clienteNome}...`);
   try {
-    const resp = await chamarAppsScript("gerarContratoPDF", { html: htmlContrato, clienteNome });
+    const logo = produto === "fast_start" ? await carregarLogoFastStart() : null;
+    const resp = await chamarAppsScript("gerarContratoPDF", { html: montarHtml(logo), clienteNome });
     await updateDoc(doc(db, "contratos", contratoId), { pdfUrl: resp.url, pdfFileId: resp.fileId || null });
     mostrarToast(`PDF do contrato de ${clienteNome} criado.`);
   } catch (err) {
@@ -2644,15 +3050,17 @@ document.getElementById("contr-busca").addEventListener("input", (e) => {
 });
 
 function formaPagamentoLabel(c) {
+  if (c.formaPagamento === "cartao") return `Cartão ${c.numParcelas}x`;
   return c.formaPagamento === "avista" ? "À vista" : c.formaPagamento === "personalizada" ? `${c.numParcelas}x personalizadas` : `Entrada + ${c.numParcelas}x`;
 }
 function statusContrato(c) { return c.status === "cancelado" ? "cancelado" : "ativo"; }
 
 function renderTabelaContratos() {
   const termoBusca = STATE.buscaContratos.trim().toLowerCase();
-  const contratosVisiveis = !termoBusca ? STATE.contratos : STATE.contratos.filter((c) => {
+  const doProduto = STATE.contratos.filter((c) => passaFiltroProduto(produtoDe(c)));
+  const contratosVisiveis = !termoBusca ? doProduto : doProduto.filter((c) => {
     const alvo = [
-      c.clienteNome, String(c.valorTotal || ""), fmtMoeda(c.valorTotal), formaPagamentoLabel(c),
+      c.clienteNome, PRODUTOS[produtoDe(c)], String(c.valorTotal || ""), fmtMoeda(c.valorTotal), formaPagamentoLabel(c),
       statusContrato(c) === "cancelado" ? "cancelado" : "ativo", fmtData(dataContratoDe(c))
     ].join(" ").toLowerCase();
     return alvo.includes(termoBusca);
@@ -2683,13 +3091,14 @@ function renderTabelaContratos() {
     const links = linksPdfDrive(c.pdfFileId);
     return `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheContrato('${c.id}')">
       <td>${esc(c.clienteNome)}</td>
+      <td>${esc(PRODUTOS[produtoDe(c)])}</td>
       <td class="num">${fmtMoeda(c.valorTotal)}</td>
       <td>${formaPagamentoLabel(c)}</td>
       <td>${pagas}/${parcelasDoContrato.length}</td>
       <td>${fmtData(dataContratoDe(c))}</td>
       <td>${links ? `<a href="${esc(links.download)}" onclick="event.stopPropagation()">Baixar PDF</a>` : c.pdfUrl ? `<a href="${esc(c.pdfUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Ver PDF</a>` : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.gerarPdfContratoExistente('${c.id}')">Gerar PDF</button>`}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="6"><div class="empty">${termoBusca ? "Nenhum contrato encontrado pra essa busca." : "Nenhum contrato ainda."}</div></td></tr>`;
+  }).join("") || `<tr><td colspan="7"><div class="empty">${termoBusca ? "Nenhum contrato encontrado pra essa busca." : STATE.filtroProduto !== "todos" ? `Nenhum contrato de ${esc(PRODUTOS[STATE.filtroProduto])} ainda.` : "Nenhum contrato ainda."}</div></td></tr>`;
 }
 
 async function excluirContrato(id) {
@@ -2732,7 +3141,8 @@ function abrirDetalheContrato(id) {
   const pagas = parcelasDoContrato.filter((p) => p.status === "realizado").length;
   const links = linksPdfDrive(c.pdfFileId);
   const campos = [
-    ["Tipo de contrato", c.tipoContrato === "consultoria_comissao" ? "Consultoria com comissão variável" : "Padrão — Assessoria Empresarial"],
+    ["Produto", esc(PRODUTOS[produtoDe(c)])],
+    ...(produtoDe(c) === "jornada" ? [["Tipo de contrato", c.tipoContrato === "consultoria_comissao" ? "Consultoria com comissão variável" : "Padrão — Assessoria Empresarial"]] : []),
     ["Valor total", esc(fmtMoeda(c.valorTotal))],
     ["Forma de pagamento", esc(descricaoFormaPagamento(c.formaPagamento, c.valorEntrada, c.numParcelas))],
     ["Parcelas pagas", `${pagas}/${parcelasDoContrato.length}`],
@@ -2740,6 +3150,9 @@ function abrirDetalheContrato(id) {
     ["Lançado no sistema em", esc(fmtDataHora(c.dataGeracao))],
     ["Status", esc(c.status === "cancelado" ? "Cancelado" : "Ativo")]
   ];
+  if (c.formaPagamento === "cartao" && c.taxaCartaoPct != null) {
+    campos.push(["Taxa do cartão", `${esc(String(c.taxaCartaoPct).replace(".", ","))}% — entra ${esc(fmtMoeda(c.valorLiquidoCartao))} no caixa`]);
+  }
   if (c.tipoContrato === "consultoria_comissao") {
     campos.push(["Comissão variável", `${esc(String(c.comissaoPct ?? 4))}% sobre o que exceder ${esc(fmtMoeda(c.comissaoPiso ?? 400000))}/mês (projetos até ${esc(String(c.comissaoKwp ?? 60))} kWp)`]);
   }
@@ -2794,8 +3207,9 @@ async function gerarPdfContratoExistente(id) {
   const cliente = STATE.clientes.find((x) => x.id === c.clienteId) || { nome: c.clienteNome };
   const parcelasDoContrato = STATE.parcelas.filter((p) => p.contratoId === id).sort((a, b) => a.numero - b.numero);
   try {
+    const logo = produtoDe(c) === "fast_start" ? await carregarLogoFastStart() : null;
     const resp = await chamarAppsScript("gerarContratoPDF", {
-      html: montarHtmlContrato(cliente, c, parcelasDoContrato),
+      html: montarHtmlContrato(cliente, c, parcelasDoContrato, logo),
       clienteNome: c.clienteNome
     });
     await updateDoc(doc(db, "contratos", id), { pdfUrl: resp.url, pdfFileId: resp.fileId || null });
@@ -2820,7 +3234,7 @@ async function enviarContratoParaAssinatura(id) {
   try {
     const resp = await chamarAppsScript("enviarParaAssinatura", {
       fileId: c.pdfFileId, clienteNome: c.clienteNome, clienteEmail: cliente.email,
-      nomeDocumento: `Contrato - ${c.clienteNome}`
+      nomeDocumento: `Contrato ${produtoDe(c) === "fast_start" ? "Fast Start " : ""}- ${c.clienteNome}`
     });
     await updateDoc(doc(db, "contratos", id), {
       autentiqueDocId: resp.autentiqueDocId || null,
@@ -3351,21 +3765,31 @@ function renderFinanceiro() {
   if (!podeVer("financeiro")) return;
   const periodo = STATE.periodoFinanceiro;
 
-  const faturamentoPeriodo = STATE.contratos
+  // Filtro de produto: o lado da receita (contrato e parcela, que herda o
+  // produto do contrato) segue a barra do topo. Entrada avulsa e despesa
+  // não têm produto: com um produto escolhido, entrada avulsa sai da conta
+  // e despesa continua somando tudo (o KPI avisa).
+  const comFiltro = STATE.filtroProduto !== "todos";
+  const contratosDoProduto = STATE.contratos.filter((c) => passaFiltroProduto(produtoDe(c)));
+  const idsContratosDoProduto = new Set(contratosDoProduto.map((c) => c.id));
+  const parcelasDoProduto = STATE.parcelas.filter((p) => idsContratosDoProduto.has(p.contratoId));
+  const entradasDoProduto = comFiltro ? [] : STATE.entradas;
+
+  const faturamentoPeriodo = contratosDoProduto
     .filter((c) => dataContratoDe(c).slice(0, 7) === periodo)
     .reduce((s, c) => s + (Number(c.valorTotal) || 0), 0);
 
-  const parcelasDoPeriodo = STATE.parcelas.filter((p) => (p.vencimento || "").slice(0, 7) === periodo);
-  const entradasDoPeriodo = STATE.entradas.filter((e) => (e.data || "").slice(0, 7) === periodo);
+  const parcelasDoPeriodo = parcelasDoProduto.filter((p) => (p.vencimento || "").slice(0, 7) === periodo);
+  const entradasDoPeriodo = entradasDoProduto.filter((e) => (e.data || "").slice(0, 7) === periodo);
   // Caixa esperado/realizado soma parcelas de contrato + entradas avulsas
   // (lançadas manualmente, sem vir de nenhum contrato) — as duas são
   // dinheiro entrando, só a origem é diferente.
   const fluxoEsperado = parcelasDoPeriodo.filter((p) => p.status === "esperado").reduce((s, p) => s + (Number(p.valor) || 0), 0)
     + entradasDoPeriodo.filter((e) => e.status === "esperado").reduce((s, e) => s + (Number(e.valor) || 0), 0);
-  const fluxoRealizado = STATE.parcelas
+  const fluxoRealizado = parcelasDoProduto
     .filter((p) => p.status === "realizado" && (p.dataPagamento || "").slice(0, 7) === periodo)
     .reduce((s, p) => s + (Number(p.valor) || 0), 0)
-    + STATE.entradas
+    + entradasDoProduto
       .filter((e) => e.status === "realizado" && (e.dataPagamento || "").slice(0, 7) === periodo)
       .reduce((s, e) => s + (Number(e.valor) || 0), 0);
 
@@ -3396,13 +3820,13 @@ function renderFinanceiro() {
     <div class="kpi-card"><div class="label">Faturamento do período</div><div class="value">${fmtMoeda(faturamentoPeriodo)}</div><div class="sub">venda fechada no mês</div></div>
     <div class="kpi-card"><div class="label">Caixa esperado</div><div class="value">${fmtMoeda(fluxoEsperado)}</div><div class="sub">parcelas + entradas a vencer no mês</div></div>
     <div class="kpi-card positive"><div class="label">Caixa realizado</div><div class="value">${fmtMoeda(fluxoRealizado)}</div><div class="sub">parcelas + entradas pagas no mês</div></div>
-    <div class="kpi-card negative"><div class="label">Despesas do mês</div><div class="value">${fmtMoeda(despesasMes)}</div></div>
-    <div class="kpi-card ${lucroOperacional >= 0 ? "positive" : "negative"}"><div class="label">Lucro operacional</div><div class="value">${fmtMoeda(lucroOperacional)}</div><div class="sub">caixa realizado − despesas</div></div>
+    <div class="kpi-card negative"><div class="label">Despesas do mês</div><div class="value">${fmtMoeda(despesasMes)}</div>${comFiltro ? `<div class="sub">de todos os produtos — despesa não é separada por produto</div>` : ""}</div>
+    <div class="kpi-card ${lucroOperacional >= 0 ? "positive" : "negative"}"><div class="label">Lucro operacional</div><div class="value">${fmtMoeda(lucroOperacional)}</div><div class="sub">${comFiltro ? `caixa de ${esc(PRODUTOS[STATE.filtroProduto])} − despesas de todos` : "caixa realizado − despesas"}</div></div>
     <div class="kpi-card negative"><div class="label">Outros custos</div><div class="value">${fmtMoeda(outrosCustos)}</div><div class="sub">impostos e taxas</div></div>
     <div class="kpi-card ${saldoEstimado >= 0 ? "positive" : "negative"}"><div class="label">Saldo estimado</div><div class="value">${fmtMoeda(saldoEstimado)}</div><div class="sub">lucro operacional − outros custos</div></div>
   `;
 
-  const vencidas = STATE.parcelas.filter((p) => p.status === "esperado" && p.vencimento && p.vencimento < hojeStr()).sort((a, b) => a.vencimento.localeCompare(b.vencimento));
+  const vencidas = parcelasDoProduto.filter((p) => p.status === "esperado" && p.vencimento && p.vencimento < hojeStr()).sort((a, b) => a.vencimento.localeCompare(b.vencimento));
   document.getElementById("tabela-parcelas-vencidas").innerHTML = vencidas.map((p) => `<tr class="linha-clicavel" onclick="window.__jm.abrirDetalheParcela('${p.id}')">
     <td>${esc(p.clienteNome)}</td><td>${p.numero === 0 ? "Entrada" : "Parcela " + p.numero}</td>
     <td>${fmtData(p.vencimento)}</td><td class="num">${fmtMoeda(p.valor)}</td>
@@ -3933,6 +4357,7 @@ document.getElementById("btn-novo-cliente").addEventListener("click", () => {
   pendingClienteId = null;
   document.getElementById("modal-cliente-titulo").textContent = "Novo cliente";
   ["mc-nome", "mc-telefone", "mc-email", "mc-cpfcnpj", "mc-endereco-busca", "mc-representante-nome", "mc-representante-cpf", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
+  document.getElementById("mc-produto").value = STATE.filtroProduto === "todos" ? "jornada" : STATE.filtroProduto;
   atualizarBlocoRepresentanteCliente();
   abrirModal("modal-cliente");
 });
@@ -3950,6 +4375,7 @@ function editarCliente(id) {
   document.getElementById("mc-representante-cpf").value = c.representanteCpf || "";
   atualizarBlocoRepresentanteCliente();
   document.getElementById("mc-origem").value = c.origem || "";
+  document.getElementById("mc-produto").value = produtoDe(c);
   document.getElementById("mc-obs").value = c.observacoes || "";
   abrirModal("modal-cliente");
 }
@@ -3970,6 +4396,7 @@ function abrirClienteEmbutido(onSalvar, { clienteId, nomeInicial } = {}) {
     pendingClienteId = null;
     document.getElementById("modal-cliente-titulo").textContent = "Novo cliente";
     ["mc-nome", "mc-telefone", "mc-email", "mc-cpfcnpj", "mc-endereco-busca", "mc-representante-nome", "mc-representante-cpf", "mc-origem", "mc-obs"].forEach((id) => (document.getElementById(id).value = ""));
+    document.getElementById("mc-produto").value = STATE.filtroProduto === "todos" ? "jornada" : STATE.filtroProduto;
   atualizarBlocoRepresentanteCliente();
     if (nomeInicial) document.getElementById("mc-nome").value = nomeInicial;
     abrirModal("modal-cliente");
@@ -3993,6 +4420,7 @@ document.getElementById("btn-salvar-cliente").addEventListener("click", async ()
     representanteNome: document.getElementById("mc-representante-nome").value.trim(),
     representanteCpf: document.getElementById("mc-representante-cpf").value.trim(),
     origem: document.getElementById("mc-origem").value.trim(),
+    produto: document.getElementById("mc-produto").value,
     observacoes: document.getElementById("mc-obs").value.trim()
   };
   try {
@@ -4037,6 +4465,7 @@ function abrirDetalheCliente(id, aoFechar) {
         ["CPF do representante", esc(c.representanteCpf || "—")]
       ] : []),
       ["Origem", esc(c.origem || "—")],
+      ["Produto", esc(PRODUTOS[produtoDe(c)])],
       ["Observações", esc(c.observacoes || "—")]
     ],
     onEditar: () => editarCliente(id),
@@ -4051,13 +4480,17 @@ document.getElementById("cli-busca").addEventListener("input", (e) => {
 
 function renderTabelaClientes() {
   const termoBusca = STATE.buscaClientes.trim().toLowerCase();
-  const clientesVisiveis = !termoBusca ? STATE.clientes : STATE.clientes.filter((c) => {
+  // Cliente pode ter comprado os dois produtos (Fast Start e depois a
+  // Jornada): aparece no filtro de qualquer produto que tenha contrato.
+  const idsComContratoDoProduto = new Set(STATE.contratos.filter((c) => passaFiltroProduto(produtoDe(c))).map((c) => c.clienteId));
+  const doProduto = STATE.clientes.filter((c) => passaFiltroProduto(produtoDe(c)) || idsComContratoDoProduto.has(c.id));
+  const clientesVisiveis = !termoBusca ? doProduto : doProduto.filter((c) => {
     const alvo = [c.nome, c.telefone, c.email, c.origem].join(" ").toLowerCase();
     return alvo.includes(termoBusca);
   });
 
   const idsComContratoAtivo = new Set(
-    STATE.contratos.filter((c) => statusContrato(c) === "ativo" && c.clienteId).map((c) => c.clienteId)
+    STATE.contratos.filter((c) => statusContrato(c) === "ativo" && c.clienteId && passaFiltroProduto(produtoDe(c))).map((c) => c.clienteId)
   );
   const clientesComContratoAtivo = clientesVisiveis.filter((c) => idsComContratoAtivo.has(c.id));
   const clientesSemContrato = clientesVisiveis.filter((c) => !idsComContratoAtivo.has(c.id));
@@ -4475,6 +4908,9 @@ async function iniciarListeners() {
   onSnapshot(query(collection(db, "clientes"), orderBy("createdAt", "desc")), { includeMetadataChanges: true }, (snap) => {
     STATE.clientes = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderTabelaClientes();
+    // Agendamento e Vendas filtram pelo produto do cliente
+    renderKanbanAgendamento();
+    renderKanbanVendas();
     rastrearSincronizacao("clientes", snap);
   }, (err) => mostrarErro("Erro de conexão (clientes): " + err.message));
 
@@ -4509,6 +4945,7 @@ async function iniciarListeners() {
     renderTabelaContratos();
     renderTabelaClientes();
     renderFinanceiro();
+    renderKanbanAdministrativo(); // o card administrativo filtra pelo produto do contrato
     rastrearSincronizacao("contratos", snap);
   }, (err) => mostrarErro("Erro de conexão (contratos): " + err.message));
 

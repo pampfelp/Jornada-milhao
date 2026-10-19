@@ -245,6 +245,10 @@ tbody tr.linha-clicavel{cursor:pointer;}
   .view-toggle{width:100%;}
   .view-toggle-btn{flex:1;padding:8px 6px;font-size:12px;}
 }
+/* Filtro global de produto, acima do cabeçalho de toda tela */
+.filtro-produto-barra{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px;}
+.filtro-produto-rotulo{font-size:11px;font-weight:700;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.06em;}
+.filtro-produto-barra .hint{margin:0;}
 
 /* ══════════════ KANBAN (funis de agendamento/vendas/administrativo) ══════════════ */
 .kanban-toolbar{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap;}
