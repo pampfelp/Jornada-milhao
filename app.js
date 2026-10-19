@@ -2376,9 +2376,10 @@ async function carregarLogoFastStart() {
 }
 
 // Cláusula 3 e quadro "Investimento" do Fast Start. "À vista" é o texto
-// literal do modelo; cartão e parcelado são redação nova (pedido de
-// 2026-10-19: a cláusula segue a forma de pagamento do formulário).
-function condicaoPagamentoFastStart(contrato, parcelas) {
+// literal do modelo; o cartão é redação nova (pedido de 2026-10-19: a
+// cláusula segue a forma de pagamento do formulário, que no Fast Start só
+// oferece à vista ou cartão — ver FORMAS_POR_PRODUTO).
+function condicaoPagamentoFastStart(contrato) {
   const forma = contrato.formaPagamento;
   const n = contrato.numParcelas || 1;
   const nExtenso = n === 2 ? "duas" : numeroInteiroExtenso(n);
@@ -2387,30 +2388,19 @@ function condicaoPagamentoFastStart(contrato, parcelas) {
       return {
         destaque: "Cartão de crédito à vista",
         detalhe: "No ato da assinatura, por link de pagamento.",
-        clausula: "em pagamento único no cartão de crédito, no ato da assinatura deste contrato, por meio de link de pagamento enviado pelo CONTRATADO.",
-        lista: ""
+        clausula: "em pagamento único no cartão de crédito, no ato da assinatura deste contrato, por meio de link de pagamento enviado pelo CONTRATADO."
       };
     }
     return {
       destaque: `${n}x sem juros no cartão de crédito`,
       detalhe: "No ato da assinatura, por link de pagamento.",
-      clausula: `em ${n} (${nExtenso}) parcelas sem juros no cartão de crédito, cobradas no ato da assinatura deste contrato por meio de link de pagamento enviado pelo CONTRATADO.`,
-      lista: ""
-    };
-  }
-  if (forma === "entrada_parcelas" || forma === "personalizada") {
-    return {
-      destaque: forma === "entrada_parcelas" ? `Entrada + ${n} parcelas` : `${n} parcelas`,
-      detalhe: "Via PIX ou transferência bancária, nas datas da cláusula 3.1.",
-      clausula: "via PIX ou transferência bancária para a conta indicada pelo CONTRATADO, conforme o detalhamento abaixo:",
-      lista: construirTabelaParcelasHtml(parcelas, forma)
+      clausula: `em ${n} (${nExtenso}) parcelas sem juros no cartão de crédito, cobradas no ato da assinatura deste contrato por meio de link de pagamento enviado pelo CONTRATADO.`
     };
   }
   return {
     destaque: "Pagamento único",
     detalhe: "No ato da assinatura, via PIX ou transferência bancária.",
-    clausula: "em pagamento único, no ato da assinatura deste contrato, via PIX ou transferência bancária para a conta indicada pelo CONTRATADO.",
-    lista: ""
+    clausula: "em pagamento único, no ato da assinatura deste contrato, via PIX ou transferência bancária para a conta indicada pelo CONTRATADO."
   };
 }
 
@@ -2419,7 +2409,7 @@ function montarHtmlContratoFastStart(cliente, contrato, parcelas, logo) {
   const ehPj = apenasDigitos(cliente.cpfCnpj).length > 11;
   const contato = [cliente.email && `e-mail ${esc(cliente.email)}`, cliente.telefone && `telefone ${esc(cliente.telefone)}`].filter(Boolean).join(", ");
   const qualificacao = construirQualificacaoContratante(cliente) + (contato ? `, ${contato}` : "");
-  const pagamento = condicaoPagamentoFastStart(contrato, parcelas);
+  const pagamento = condicaoPagamentoFastStart(contrato);
   const valorTotalTexto = esc(fmtMoeda(contrato.valorTotal));
   const logoImg = (classe) => logo ? `<img class="${classe}" src="${logo}" alt="Fast Start">` : "";
   const assinaturaContratante = ehPj
@@ -2490,8 +2480,6 @@ table.invest{width:100%;border-collapse:collapse;table-layout:fixed;margin:7.2mm
 .invest-dir{background:#F5B21F;color:#160B04;padding-left:5mm !important;}
 .invest-dest{font-size:11pt;font-weight:700;line-height:1.4;}
 .invest-det{font-size:9pt;line-height:1.4;}
-.lista-parcelas{margin:0 0 7pt;padding-left:6mm;}
-.lista-parcelas li{margin-bottom:2pt;}
 .alineas{margin:0 0 10pt 6.3mm;}
 .alineas p{margin-bottom:5pt;}
 .fecho{break-inside:avoid;}
@@ -2559,7 +2547,6 @@ ${p("2.3", "O contrato poderá ser prorrogado ou convertido em outro programa do
   <td class="invest-dir"><div class="invest-dest">${esc(pagamento.destaque)}</div><div class="invest-det">${esc(pagamento.detalhe)}</div></td>
 </tr></table></div>
 ${p("3.1", `Pela participação no programa FAST START, a CONTRATANTE pagará ao CONTRATADO o valor total de <strong>${valorTotalTexto} (${esc(valorExtenso(contrato.valorTotal))})</strong>, ${esc(pagamento.clausula)}`)}
-${pagamento.lista.replace("<ul>", '<ul class="lista-parcelas">')}
 ${p("3.2", "O acesso aos encontros e à plataforma de gestão financeira será liberado após a confirmação do pagamento.")}
 ${p("3.3", "A ausência da CONTRATANTE ou de sua equipe em qualquer encontro não gera direito a reposição individual, abatimento ou devolução de valores. Sempre que disponível, a gravação do encontro poderá ser disponibilizada aos participantes.")}
 
@@ -2808,19 +2795,27 @@ document.getElementById("mct-cartao-parcelas").innerHTML = Array.from({ length: 
   .map((n) => `<option value="${n}">${n === 1 ? "1x (à vista)" : `${n}x`} — taxa ${String(taxaCartao(n)).replace(".", ",")}%</option>`).join("");
 document.getElementById("mct-cartao-parcelas").value = 12;
 document.getElementById("mct-cartao-parcelas").addEventListener("change", atualizarPreviewParcelas);
-// Fast Start tem um modelo só (sem "tipo de contrato") e é o único que
-// aceita cartão — o texto de pagamento da Jornada fala em depósito e
-// vencimentos, não em link de cartão.
+// Fast Start tem um modelo só (sem "tipo de contrato") e só se vende à
+// vista (PIX) ou no cartão parcelado — decisão dele em 2026-10-19, sem
+// entrada + parcelas. O cartão, por sua vez, é só do Fast Start: o texto
+// de pagamento da Jornada fala em depósito e vencimentos, não em link.
+const FORMAS_POR_PRODUTO = {
+  jornada: ["avista", "entrada_parcelas", "personalizada"],
+  fast_start: ["avista", "cartao"]
+};
 function aplicarProdutoContrato() {
-  const ehFastStart = document.getElementById("mct-produto").value === "fast_start";
+  const produto = document.getElementById("mct-produto").value;
+  const ehFastStart = produto === "fast_start";
   const forma = document.getElementById("mct-forma");
   const valor = document.getElementById("mct-valor");
   document.getElementById("mct-bloco-tipo").style.display = ehFastStart ? "none" : "block";
   document.getElementById("mct-bloco-comissao").style.display = !ehFastStart && document.getElementById("mct-tipo-contrato").value === "consultoria_comissao" ? "block" : "none";
-  const opcaoCartao = forma.querySelector('option[value="cartao"]');
-  opcaoCartao.hidden = !ehFastStart;
-  opcaoCartao.disabled = !ehFastStart;
-  if (!ehFastStart && forma.value === "cartao") { forma.value = "avista"; forma.dispatchEvent(new Event("change")); }
+  const permitidas = FORMAS_POR_PRODUTO[produto];
+  forma.querySelectorAll("option").forEach((o) => {
+    o.hidden = !permitidas.includes(o.value);
+    o.disabled = o.hidden;
+  });
+  if (!permitidas.includes(forma.value)) { forma.value = "avista"; forma.dispatchEvent(new Event("change")); }
   if (ehFastStart && !valor.value) valor.value = PRECO_FAST_START.toFixed(2).replace(".", ",");
   atualizarPreviewParcelas();
 }
