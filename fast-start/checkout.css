@@ -83,10 +83,7 @@ fieldset.cartao{min-width:0}
 .campo input,.campo select{width:100%;min-width:0;height:44px;border-radius:11px;border:1px solid var(--line);background:var(--campo);padding:0 13px;color:var(--ink);outline:none;transition:border-color .2s,box-shadow .2s;-webkit-appearance:none;appearance:none}
 .campo input:not(:placeholder-shown),.campo select{border-color:rgba(245,178,31,.45)}
 .campo input:focus,.campo select:focus{border-color:var(--ambar);box-shadow:0 0 0 3px var(--ambar-soft)}
-.campo .tag,.campo .bandeira{position:absolute;right:13px;bottom:0;height:44px;display:flex;align-items:center;gap:4px}
-.campo .bandeira{right:8px}
-.campo select{padding-right:36px}
-.campo .seta-select{position:absolute;right:13px;bottom:15px;width:14px;height:14px;pointer-events:none}
+.campo .tag{position:absolute;right:13px;bottom:0;height:44px;display:flex;align-items:center;gap:4px}
 .linha{display:flex;gap:10px}
 .linha .campo{flex:1}
 .linha .campo.estreito{flex:0 0 92px}
@@ -105,10 +102,6 @@ fieldset.cartao{min-width:0}
 .abas{display:flex;gap:6px;margin:12px 0;padding:4px;border-radius:12px;background:var(--campo);border:1px solid var(--line)}
 .abas button{flex:1;height:36px;border:0;border-radius:9px;background:transparent;display:flex;align-items:center;justify-content:center;gap:7px;cursor:pointer;transition:background .25s,color .25s}
 .abas button[aria-selected="true"]{background:var(--ambar)}
-.forma[data-forma-painel="cartao"] .campo{margin-bottom:8px;gap:5px}
-.forma[data-forma-painel="cartao"] .campo input,.forma[data-forma-painel="cartao"] .campo select{height:40px}
-.forma[data-forma-painel="cartao"] .campo .tag,.forma[data-forma-painel="cartao"] .campo .bandeira{height:40px}
-.forma[data-forma-painel="cartao"] .campo .seta-select{bottom:13px}
 .qr{width:188px;height:188px;margin:4px auto 0;border-radius:14px;background:#fff center/164px no-repeat;box-shadow:0 0 0 1px var(--line)}
 .copia{display:flex;align-items:center;gap:10px;margin-top:14px;height:44px;border-radius:11px;border:1px solid var(--line);background:var(--campo);padding:0 6px 0 13px}
 .copia .codigo{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -181,7 +174,6 @@ body.com-janela::after{content:"";position:fixed;inset:0;z-index:5;background:rg
 .parte em .ic-svg{width:11px;height:11px;stroke-width:3}
 .selo-aut > .ic-svg{width:22px;height:22px;stroke-width:1.8;color:var(--ambar)}
 .abas .ic-svg{width:16px;height:16px;stroke-width:1.8}
-.campo .seta-select{color:var(--ink-soft)}
 .qr{background-image:url("qr-demonstracao.svg")}
 .btn .ic-svg{width:18px;height:18px;stroke-width:2.4}
 .btn.sec .ic-svg{stroke-width:2.2}
@@ -210,7 +202,6 @@ input,select,button,textarea{font-family:var(--font)}
 .campo input,.campo select{font-size:14px;color:var(--ink)}
 .campo input::placeholder{color:var(--ink-faint);opacity:1}
 .campo .tag{font-size:10.5px;color:var(--ambar)}
-.campo .bandeira span{font-size:11px;font-weight:800;font-style:italic;letter-spacing:.04em;color:var(--ink)}
 .campo select option{background:var(--bg);color:var(--ink)}
 
 .resumo b{display:block;font-size:13px;font-weight:600}
@@ -260,10 +251,6 @@ input,select,button,textarea{font-family:var(--font)}
 }
 
 /* ajustes da conferência de fidelidade */
-.tela[data-tela="pagamento"] > .cartao{margin-top:14px;padding:14px 16px}
-.campo .bandeira span{background:var(--panel-2);border:1px solid var(--line);padding:3px 7px;border-radius:5px}
-.campo .seta-select{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.tela[data-tela="pagamento"] > .cartao:has([data-forma-painel="pix"]:not([hidden])){margin-top:18px;padding:16px}
 .janela-aut{height:62dvh}
 @media (min-width:1200px){ .janela-aut{height:auto} }
 .rodape.coluna .btn{flex:1 1 100%}
@@ -272,7 +259,7 @@ input,select,button,textarea{font-family:var(--font)}
 
 /* ============ estados: erro e animação da confirmação ============ */
 .campo.com-erro input{border-color:#E8734F;box-shadow:0 0 0 3px rgba(232,115,79,.16)}
-.campo.com-erro .tag,.campo.com-erro .bandeira{display:none}
+.campo.com-erro .tag{display:none}
 .campo .erro{font-size:11px;line-height:1.4;color:#F2967A}
 .btn[disabled]{filter:saturate(.6) brightness(.85);cursor:progress}
 
@@ -336,3 +323,14 @@ input,select,button,textarea{font-family:var(--font)}
 .doc .investimento span{font-size:13px;font-weight:600}
 .doc .investimento em{font-style:normal;font-size:12px;color:var(--ink-soft)}
 @media (min-width:1200px){ .pagina-doc .doc{padding-top:36px} }
+
+/* ============ pagamento pelo Link de Pagamento (imagens M05c e M05d) ============ */
+.forma[data-forma-painel="cartao"] .resumo{margin-top:4px}
+.veu.aguardando .selo > .ic-svg,.veu.aguardando .faisca,.veu.aguardando .prox{display:none}
+.veu.aguardando .selo{background:none}
+.veu.aguardando .selo::before{border-color:var(--line);border-top-color:var(--ambar);box-shadow:none;animation:girar-selo 1s linear infinite}
+@keyframes girar-selo{to{transform:rotate(360deg)}}
+/* celular: o formulário ocupa a tela inteira e o rodapé do site fica abaixo da dobra (imagem M07b) */
+@media (max-width:1199px){ .painel{min-height:calc(100vh - 80px);min-height:calc(100dvh - 80px)} }
+/* computador: a primeira linha (apresentação + painel) ocupa a tela; o rodapé fica abaixo */
+@media (min-width:1200px){ .pagina{grid-template-rows:minmax(calc(100vh - 72px),auto) auto} }

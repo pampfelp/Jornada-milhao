@@ -11,7 +11,8 @@ const MODO_DEMONSTRACAO = true;
 const ICONE = {
   seta: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   caneta: '<path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 6l3 3"/>',
-  cadeado: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'
+  cadeado: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  fora: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'
 };
 const svg = (nome) => `<svg class="ic-svg" viewBox="0 0 24 24" aria-hidden="true">${ICONE[nome]}</svg>`;
 
@@ -62,8 +63,8 @@ function atualizarBotao() {
   let botao = ["seta", "Continuar", "dir"], texto = "";
   if (atual === "contrato") botao = ["caneta", "Assinar contrato", "esq"];
   if (atual === "pagamento") {
-    botao = ["cadeado", "Pagar R$ 4.997,00", "esq"];
-    texto = forma === "cartao" ? "Processado pela PicPay. O cartão não fica no nosso site." : "Pagamento processado pela PicPay.";
+    botao = ["fora", "Pagar com cartão", "dir"];
+    texto = forma === "cartao" ? "Processado pela PicPay. O cartão não passa pelo nosso site." : "Pagamento processado pela PicPay.";
   }
   avancar.hidden = atual === "pagamento" && forma === "pix";
   const [icone, rotulo, lado] = botao;
@@ -94,22 +95,16 @@ const MASCARAS = {
   cnpj: (v) => mascarar(v, "##.###.###/####-##"),
   cep: (v) => mascarar(v, "#####-###"),
   representanteCpf: (v) => mascarar(v, "###.###.###-##"),
-  whatsapp: (v) => mascarar(v, digitos(v).length > 10 ? "(##) # ####-####" : "(##) ####-####"),
-  "cc-numero": (v) => mascarar(v, digitos(v).startsWith("3") ? "#### ###### #####" : "#### #### #### ####"),
-  "cc-validade": (v) => mascarar(v, "##/##"),
-  "cc-cvv": (v) => digitos(v).slice(0, 4),
-  "cc-cpf": (v) => mascarar(v, "###.###.###-##")
+  whatsapp: (v) => mascarar(v, digitos(v).length > 10 ? "(##) # ####-####" : "(##) ####-####")
 };
 form.addEventListener("input", (ev) => {
   const el = ev.target;
   const chave = el.name || el.id;
   if (MASCARAS[chave]) el.value = MASCARAS[chave](el.value);
-  if (el.id === "cc-nome") el.value = el.value.toUpperCase();
   limparErro(el);
   if (chave === "cnpj" && digitos(el.value).length === 14) buscarCnpj(el.value);
   if (chave === "cnpj") $(".campo .tag").hidden = true;
   if (chave === "cep" && digitos(el.value).length === 8) buscarCep(el.value);
-  if (chave === "cc-numero") mostrarBandeira(el.value);
   guardar();
 });
 
@@ -136,25 +131,6 @@ function cnpjValido(v) {
   };
   return calc(12) === Number(d[12]) && calc(13) === Number(d[13]);
 }
-function luhn(v) {
-  const d = digitos(v);
-  if (d.length < 13) return false;
-  let s = 0;
-  for (let i = 0; i < d.length; i++) {
-    let n = Number(d[d.length - 1 - i]);
-    if (i % 2) { n *= 2; if (n > 9) n -= 9; }
-    s += n;
-  }
-  return s % 10 === 0;
-}
-function validadeOk(v) {
-  const [m, a] = String(v).split("/").map(Number);
-  if (!m || m > 12 || a === undefined || isNaN(a)) return false;
-  const hoje = new Date();
-  const ano = 2000 + a;
-  return ano > hoje.getFullYear() || (ano === hoje.getFullYear() && m >= hoje.getMonth() + 1);
-}
-
 const REGRAS = {
   empresa: [
     ["cnpj", (v) => cnpjValido(v) || (digitos(v) ? "Confira o CNPJ: os números não fecham." : "Informe o CNPJ.")],
@@ -169,13 +145,6 @@ const REGRAS = {
     ["representanteCpf", (v) => cpfValido(v) || (digitos(v) ? "Confira o CPF: os números não fecham." : "Informe o CPF.")],
     ["email", (v) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.trim()) || "Confira o e-mail."],
     ["whatsapp", (v) => [10, 11].includes(digitos(v).length) || "Informe o WhatsApp com DDD."]
-  ],
-  cartao: [
-    ["#cc-numero", (v) => luhn(v) || "Confira o número do cartão."],
-    ["#cc-nome", (v) => v.trim().length > 3 || "Escreva o nome como está no cartão."],
-    ["#cc-validade", (v) => validadeOk(v) || "Validade no formato MM/AA, ainda não vencida."],
-    ["#cc-cvv", (v) => digitos(v).length >= 3 || "O CVV tem 3 ou 4 números."],
-    ["#cc-cpf", (v) => cpfValido(v) || "Confira o CPF do titular."]
   ]
 };
 
@@ -261,22 +230,6 @@ function titulo(s) {
     .replace(/\s(De|Da|Do|Das|Dos|E)\s/g, (m) => m.toLowerCase());
 }
 
-function bandeiraDe(v) {
-  const d = digitos(v);
-  if (/^4/.test(d)) return "VISA";
-  if (/^(5[1-5]|2(2[2-9]|[3-6]\d|7[01]|720))/.test(d)) return "MASTER";
-  if (/^3[47]/.test(d)) return "AMEX";
-  if (/^(606282|3841)/.test(d)) return "HIPER";
-  if (/^(4011|4312|4389|4514|4576|5041|5066|5067|509|6277|6362|6363|650|6516|6550)/.test(d)) return "ELO";
-  return "";
-}
-function mostrarBandeira(v) {
-  const nome = digitos(v).length >= 6 ? bandeiraDe(v) : "";
-  const el = $(".bandeira");
-  el.hidden = !nome;
-  el.firstElementChild.textContent = nome;
-}
-
 /* ============ textos que dependem do que a pessoa digitou ============ */
 
 function nomeCurto() {
@@ -335,7 +288,6 @@ form.addEventListener("submit", (ev) => {
   } else if (atual === "contrato") {
     assinar();
   } else if (atual === "pagamento" && forma === "cartao") {
-    if (!validar("cartao")) return;
     pagarCartao();
   }
 });
@@ -356,17 +308,27 @@ function contratoAssinado() {
 }
 
 function pagarCartao() {
-  const btn = $('[data-acao="avancar"]');
-  ocupado = true;
-  btn.disabled = true;
-  btn.innerHTML = `${svg("cadeado")}Processando...`;
-  // produção: o SDK da PicPay transforma o cartão em token e o Code.gs cobra.
-  setTimeout(() => {
-    ocupado = false;
-    btn.disabled = false;
-    ["#cc-numero", "#cc-nome", "#cc-validade", "#cc-cvv", "#cc-cpf"].forEach((s) => ($(s).value = ""));
-    mostrarTela("final");
-  }, MODO_DEMONSTRACAO ? 1200 : 0);
+  if (MODO_DEMONSTRACAO) {
+    confirmandoPagamento();
+    setTimeout(() => { fecharConfirmando(); mostrarTela("final"); }, 1800);
+    return;
+  }
+  // produção: o Code.gs cria o Link de Pagamento (cartão até 12x) com
+  // redirect_url pra esta página e devolve o link; a pessoa vai até a PicPay
+  // e volta com ?retorno=..., quando confirmandoPagamento() espera o status.
+}
+
+function confirmandoPagamento() {
+  const veu = $("#confirma");
+  veu.classList.add("aguardando");
+  $(".titulo", veu).textContent = "Confirmando seu pagamento";
+  $(".msg", veu).textContent = "Você voltou da PicPay. Assim que o pagamento for confirmado, sua vaga aparece aqui. Leva alguns segundos.";
+  veu.hidden = false;
+}
+function fecharConfirmando() {
+  const veu = $("#confirma");
+  veu.hidden = true;
+  veu.classList.remove("aguardando");
 }
 
 $('[data-acao="voltar"]').addEventListener("click", () => {
@@ -419,15 +381,14 @@ const PREVIA = {
   "contrato-assinado": { tela: "contrato", confirma: ["Contrato assinado", "Pronto, Mariana. As duas assinaturas estão registradas na Autentique e a cópia vai para o seu e-mail. Só falta garantir a vaga.", "Próximo: Pagamento"], feitas: 3 },
   "cartao": { tela: "pagamento", forma: "cartao" },
   "pix": { tela: "pagamento", forma: "pix" },
+  "confirmando": { tela: "pagamento", forma: "cartao", confirmando: true },
   "final": { tela: "final" }
 };
 const EXEMPLO = {
   cnpj: "12.345.678/0001-90", razaoSocial: "Sol do Norte Energia Ltda", cep: "66055-100", numero: "216",
   endereco: "Av. Visconde de Souza Franco, Umarizal", cidade: "Belém / PA",
   representanteNome: "Mariana Costa Albuquerque", representanteCpf: "123.456.789-00",
-  email: "mariana@soldonorte.com.br", whatsapp: "(91) 9 8123-4567",
-  "#cc-numero": "4111 1111 1111 1111", "#cc-nome": "MARIANA C ALBUQUERQUE", "#cc-validade": "08/29",
-  "#cc-cvv": "•••", "#cc-cpf": "123.456.789-00"
+  email: "mariana@soldonorte.com.br", whatsapp: "(91) 9 8123-4567"
 };
 
 const params = new URLSearchParams(location.search);
@@ -437,7 +398,6 @@ if (params.has("exemplo")) {
     if (el) el.value = valor;
   }
   $(".campo .tag").hidden = false;
-  mostrarBandeira(EXEMPLO["#cc-numero"]);
 }
 const previa = PREVIA[params.get("estado")];
 if (previa) {
@@ -449,6 +409,7 @@ if (previa) {
     [$(".titulo", veu).textContent, $(".msg", veu).textContent, $(".prox-txt", veu).textContent] = previa.confirma;
     veu.hidden = false;
   }
+  if (previa.confirmando) confirmandoPagamento();
   if (previa.autentique) { $("#janela-aut").hidden = false; document.body.classList.add("com-janela"); }
 } else {
   mostrarTela(recuperar(), { focar: false });

@@ -256,11 +256,33 @@ m08 = f"""<div class="tela doc"><div class="topo"><img src="logo.png" alt="Fast 
 <h3>Para que usamos</h3>
 <p>Para preencher e assinar o contrato, cobrar o investimento, emitir documentos e falar com você sobre o programa.</p></div>"""
 
+# ================= pagamento pelo Link de Pagamento da PicPay =================
+I_EXT = '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'
+I_ESCUDO = '<path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/>'
+m05c = f"""<div class="tela">{TOPO}{etapas(3)}
+<div class="cab compacto"><div class="passo">Etapa 4 de 4</div><h1>Último passo pra garantir sua vaga</h1></div>
+<div class="cartao"><div class="preco"><small>Investimento Fast Start</small><b>R$ 4.997,00</b></div>
+{abas('cartao')}
+<div class="resumo" style="margin-top:4px">
+<div class="item">{ic(I_CARD)}<div><b>Em até 12x no cartão</b><span>Visa, Mastercard, Elo, Amex e Hipercard.</span></div></div>
+<div class="item">{ic(I_ESCUDO)}<div><b>Pagamento no ambiente da PicPay</b><span>Você digita o cartão na página segura da PicPay e, ao terminar, a página te traz de volta pra cá.</span></div></div>
+</div>
+</div>
+<div class="rodape coluna"><button class="btn prim">Pagar com cartão <svg viewBox="0 0 24 24">{I_EXT}</svg></button>
+<div class="picpay">{CAD}Processado pela PicPay. O cartão não passa pelo nosso site.</div></div></div>"""
+
+m05d = f"""<div class="tela">{TOPO}{etapas(3)}
+<div class="cab compacto"><div class="passo">Etapa 4 de 4</div><h1>Último passo pra garantir sua vaga</h1></div>
+<div class="cartao"><div class="preco"><small>Investimento Fast Start</small><b>R$ 4.997,00</b></div></div></div>
+<div class="veu"><div class="confirma"><div class="selo girando"></div>
+<h2>Confirmando seu pagamento</h2>
+<p>Você voltou da PicPay. Assim que o pagamento for confirmado, sua vaga aparece aqui. Leva alguns segundos.</p></div></div>"""
+
 for nome, corpo, pc in [("M01-empresa", m01, False), ("M02-confirmado-etapa", m02, False), ("M03-responsavel", m03, False),
                         ("M04-contrato", m04, False), ("M05-pagamento", m05, False), ("M06-vaga-garantida", m06, False),
                         ("M04a-assinar-autentique", m04a, False), ("M04b-janela-autentique", m04b, False),
                         ("M04c-contrato-assinado", m04c, False), ("M05a-cartao", m05a, False), ("M05b-pix", m05b, False),
-                        ("M07a-aviso-demonstracao", m07a, False), ("M07b-rodape", m07b, False), ("M08-privacidade", m08, False),
+                        ("M05c-cartao-link", m05c, False), ("M05d-confirmando", m05d, False), ("M07a-aviso-demonstracao", m07a, False), ("M07b-rodape", m07b, False), ("M08-privacidade", m08, False),
                         ("D01-empresa-computador", d01, True)]:
     (aqui / f"{nome}.html").write_text(tela(corpo, pc), encoding="utf-8")
     print("ok", nome)

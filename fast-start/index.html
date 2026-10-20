@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="checkout.css?v=3">
+<link rel="stylesheet" href="checkout.css?v=4">
 </head>
 <body>
 
@@ -145,24 +145,14 @@
             <button type="button" role="tab" data-forma="cartao" aria-selected="true"><svg class="ic-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M2.5 10h19M6 15h4"/></svg>Cartão</button>
             <button type="button" role="tab" data-forma="pix" aria-selected="false"><svg class="ic-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 9-9 9-9-9z"/><path d="M8.5 12h7"/></svg>Pix</button>
           </div>
-          <!-- Campos do cartão SEM name: nunca vão no envio pro nosso servidor.
-               O SDK da PicPay lê daqui e devolve só o token temporário. -->
+          <!-- Cartão pelo Link de Pagamento da PicPay: a página dela não abre
+               dentro de outro site (x-frame-options SAMEORIGIN), então a pessoa
+               vai até lá e volta pelo redirect_url. -->
           <div class="forma" data-forma-painel="cartao">
-            <label class="campo"><span>Número do cartão</span>
-              <input placeholder=" " id="cc-numero" inputmode="numeric" autocomplete="cc-number">
-              <small class="bandeira" hidden><span></span></small></label>
-            <label class="campo"><span>Nome impresso no cartão</span>
-              <input placeholder=" " id="cc-nome" autocomplete="cc-name"></label>
-            <div class="linha">
-              <label class="campo"><span>Validade</span>
-                <input id="cc-validade" inputmode="numeric" autocomplete="cc-exp" placeholder="MM/AA"></label>
-              <label class="campo"><span>CVV</span>
-                <input placeholder=" " id="cc-cvv" inputmode="numeric" autocomplete="cc-csc"></label>
-            </div>
-            <label class="campo"><span>CPF do titular</span>
-              <input placeholder=" " id="cc-cpf" inputmode="numeric" autocomplete="off"></label>
-            <label class="campo"><span>Parcelas</span>
-              <select name="parcelas"><option value="12">12x sem juros</option></select><svg class="seta-select" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></label>
+            <ul class="resumo">
+              <li><span class="ic"><svg class="ic-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M2.5 10h19M6 15h4"/></svg></span><div><b>Em até 12x no cartão</b><span>Visa, Mastercard, Elo, Amex e Hipercard.</span></div></li>
+              <li><span class="ic"><svg class="ic-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg></span><div><b>Pagamento no ambiente da PicPay</b><span>Você digita o cartão na página segura da PicPay e, ao terminar, a página te traz de volta pra cá.</span></div></li>
+            </ul>
           </div>
           <div class="forma" data-forma-painel="pix" hidden>
             <div class="qr" role="img" aria-label="QR code do Pix"></div>
@@ -221,6 +211,6 @@
 </div>
 
 <script src="contato.js?v=2" defer></script>
-<script src="checkout.js?v=3" defer></script>
+<script src="checkout.js?v=4" defer></script>
 </body>
 </html>

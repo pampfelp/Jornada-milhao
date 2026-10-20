@@ -16,7 +16,7 @@ saida.mkdir(exist_ok=True)
 
 CELULAR = [("empresa", "M01-empresa"), ("confirma-1", "M02-confirmado-etapa"), ("responsavel", "M03-responsavel"),
            ("contrato", "M04a-assinar-autentique"), ("autentique", "M04b-janela-autentique"),
-           ("contrato-assinado", "M04c-contrato-assinado"), ("cartao", "M05a-cartao"), ("pix", "M05b-pix"),
+           ("contrato-assinado", "M04c-contrato-assinado"), ("cartao", "M05c-cartao-link"), ("confirmando", "M05d-confirmando"), ("pix", "M05b-pix"),
            ("final", "M06-vaga-garantida")]
 
 def chrome(url, png, janela, escala):
