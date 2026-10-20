@@ -4,7 +4,6 @@
 // nenhum contrato vai pra Autentique e nada é cobrado. É a versão que vai ao
 // ar pra análise da PicPay. Desligar só quando o Code.gs estiver ligado.
 const MODO_DEMONSTRACAO = true;
-document.getElementById("faixa-demo").hidden = !MODO_DEMONSTRACAO;
 
 // ?estado=... abre direto numa tela (conferência visual contra telas/*.png)
 // ?exemplo=1 preenche os dados das imagens validadas
