@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="checkout.css?v=4">
+<link rel="stylesheet" href="checkout.css?v=5">
 </head>
 <body>
 
@@ -75,6 +75,8 @@
         </header>
         <fieldset class="cartao">
           <legend class="sr">Dados da empresa</legend>
+          <!-- campo isca: a pessoa não vê; robô de spam preenche e o Code.gs descarta -->
+          <input name="nao_preencher" class="sr" tabindex="-1" autocomplete="off" aria-hidden="true">
           <label class="campo"><span>CNPJ</span>
             <input placeholder=" " name="cnpj" inputmode="numeric" autocomplete="off" required>
             <small class="tag" hidden><svg class="ic-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Encontrado</small></label>
@@ -211,6 +213,6 @@
 </div>
 
 <script src="contato.js?v=2" defer></script>
-<script src="checkout.js?v=4" defer></script>
+<script src="checkout.js?v=5" defer></script>
 </body>
 </html>

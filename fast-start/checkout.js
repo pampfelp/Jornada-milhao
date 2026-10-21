@@ -1,9 +1,15 @@
 // Checkout Fast Start.
 //
-// MODO_DEMONSTRACAO: o fluxo inteiro funciona na tela, mas nada é gravado,
-// nenhum contrato vai pra Autentique e nada é cobrado. É a versão que vai ao
-// ar pra análise da PicPay. Desligar só quando o Code.gs estiver ligado.
-const MODO_DEMONSTRACAO = true;
+// Modos:
+//   demonstracao (padrão) — o fluxo anda na tela, nada é gravado nem cobrado.
+//   teste (?modo=teste)   — fala com o Code.gs de verdade, que usa o
+//                           ambiente de teste da PicPay (PICPAY_AMBIENTE =
+//                           sandbox) e grava cliente/card com "(TESTE)".
+// A assinatura na Autentique ainda é simulada nos dois.
+const params = new URLSearchParams(location.search);
+const MODO = params.get("modo") === "teste" ? "teste" : "demonstracao";
+const MODO_DEMONSTRACAO = MODO === "demonstracao";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzdJNroawGvXFRMELv_VeLqVTkENBtq6Veou3n3nST5vjjiNqF70L-r-ZLFNT-GupRN_w/exec";
 
 // ?estado=... abre direto numa tela (conferência visual contra telas/*.png)
 // ?exemplo=1 preenche os dados das imagens validadas
@@ -48,7 +54,12 @@ function mostrarTela(tela, { focar = true } = {}) {
   $('[data-acao="voltar"]').hidden = etapa === 1 || etapa === 4;
   atualizarBotao();
   if (tela === "contrato") preencherContrato();
-  if (tela === "final") preencherFinal();
+  if (tela === "pagamento" && !MODO_DEMONSTRACAO) prepararPagamento().then(() => { if (forma === "pix") vigiarPagamento(5000, 0); });
+  if (tela === "final") {
+    preencherFinal();
+    clearInterval(vigia);
+    try { sessionStorage.removeItem(CHAVE_INSCRICAO); } catch { /* sem armazenamento */ }
+  }
   guardar();
   if (focar) {
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -78,6 +89,9 @@ function trocarForma(nova) {
   $$("[data-forma]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.forma === nova)));
   $$("[data-forma-painel]").forEach((p) => (p.hidden = p.dataset.formaPainel !== nova));
   atualizarBotao();
+  if (!MODO_DEMONSTRACAO && atual === "pagamento") {
+    if (nova === "pix") vigiarPagamento(5000, 0); else clearInterval(vigia);
+  }
 }
 
 /* ============ máscaras ============ */
@@ -281,10 +295,13 @@ form.addEventListener("submit", (ev) => {
       "Próximo: Responsável", () => mostrarTela("responsavel"));
   } else if (atual === "responsavel") {
     if (!validar("responsavel")) return;
-    marcarFeita(2);
-    confirmar(`Tudo certo, ${primeiroNome()}`,
-      "Já deixamos o contrato preenchido com os seus dados. Confira e assine na próxima etapa.",
-      "Próximo: Contrato", () => mostrarTela("contrato"));
+    registrar().then((ok) => {
+      if (!ok) return;
+      marcarFeita(2);
+      confirmar(`Tudo certo, ${primeiroNome()}`,
+        "Já deixamos o contrato preenchido com os seus dados. Confira e assine na próxima etapa.",
+        "Próximo: Contrato", () => mostrarTela("contrato"));
+    });
   } else if (atual === "contrato") {
     assinar();
   } else if (atual === "pagamento" && forma === "cartao") {
@@ -313,9 +330,118 @@ function pagarCartao() {
     setTimeout(() => { fecharConfirmando(); mostrarTela("final"); }, 1800);
     return;
   }
-  // produção: o Code.gs cria o Link de Pagamento (cartão até 12x) com
-  // redirect_url pra esta página e devolve o link; a pessoa vai até a PicPay
-  // e volta com ?retorno=..., quando confirmandoPagamento() espera o status.
+  // A página do cartão é da PicPay; ela devolve a pessoa pra cá com
+  // ?retorno=<inscrição> (ver esperarRetorno).
+  ocupado = true;
+  carregando("Abrindo a PicPay...");
+  prepararPagamento().then((p) => {
+    if (p && p.link) { location.href = p.link; return; }
+    ocupado = false;
+    carregando("");
+    atualizarBotao();
+  });
+}
+
+/* ============ servidor (Code.gs) ============ */
+
+const CHAVE_INSCRICAO = "fast-start-inscricao-id";
+function inscricao() {
+  try { return JSON.parse(sessionStorage.getItem(CHAVE_INSCRICAO) || "null") || {}; } catch { return {}; }
+}
+
+async function chamar(action, payload) {
+  const resp = await fetch(APPS_SCRIPT_URL, { method: "POST", body: JSON.stringify({ action, ...payload }) });
+  const json = await resp.json();
+  if (!json.ok) throw new Error(json.erro || "Não deu certo agora.");
+  return json;
+}
+
+function avisar(texto) {
+  const nota = $(".rodape .nota");
+  nota.classList.toggle("aviso", !!texto);
+  if (texto) { nota.hidden = false; nota.textContent = texto; }
+}
+function carregando(texto) {
+  const btn = $('[data-acao="avancar"]');
+  btn.disabled = !!texto;
+  if (texto) btn.textContent = texto;
+}
+
+async function registrar() {
+  if (MODO_DEMONSTRACAO) return true;
+  ocupado = true;
+  carregando("Salvando...");
+  try {
+    const dados = Object.fromEntries(GUARDADOS.map((n) => [n, campo(n).value]));
+    const r = await chamar("fsRegistrar", { dados, site: campo("nao_preencher").value, ...inscricao() });
+    sessionStorage.setItem(CHAVE_INSCRICAO, JSON.stringify({ inscricaoId: r.inscricaoId, chave: r.chave }));
+    return true;
+  } catch (e) {
+    carregando("");
+    atualizarBotao();
+    avisar(`Não conseguimos salvar agora: ${e.message.replace(/\.$/, "")}. Tente de novo em instantes.`);
+    return false;
+  } finally {
+    ocupado = false;
+    carregando("");
+  }
+}
+
+let pagamento = null;
+async function prepararPagamento() {
+  if (MODO_DEMONSTRACAO) return null;
+  if (pagamento) return pagamento;
+  try {
+    const r = await chamar("fsPagamento", inscricao());
+    if (r.pago) { mostrarTela("final"); return null; }
+    pagamento = r;
+    desenharPix(r.brcode);
+    return r;
+  } catch (e) {
+    avisar(`O pagamento não abriu agora: ${e.message.replace(/\.$/, "")}. Tente de novo em instantes.`);
+    return null;
+  }
+}
+
+// QR do Pix desenhado aqui a partir do código copia e cola que a PicPay devolve.
+function desenharPix(brcode) {
+  if (!brcode) return;
+  $(".copia .codigo").textContent = brcode;
+  const pintar = () => {
+    const qr = window.qrcode(0, "M");
+    qr.addData(brcode);
+    qr.make();
+    const caixa = $(".qr");
+    caixa.style.backgroundImage = "none";
+    caixa.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+  };
+  if (window.qrcode) { pintar(); return; }
+  const s = document.createElement("script");
+  s.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js";
+  s.onload = pintar;
+  document.head.append(s);
+}
+
+let vigia = null;
+function vigiarPagamento(intervalo, limite, aoDesistir) {
+  clearInterval(vigia);
+  const inicio = Date.now();
+  vigia = setInterval(async () => {
+    try {
+      const r = await chamar("fsStatus", inscricao());
+      if (r.pago) { clearInterval(vigia); fecharConfirmando(); mostrarTela("final"); return; }
+    } catch { /* tenta de novo no próximo ciclo */ }
+    if (limite && Date.now() - inicio > limite) { clearInterval(vigia); aoDesistir?.(); }
+  }, intervalo);
+}
+
+function esperarRetorno() {
+  mostrarTela("pagamento", { focar: false });
+  confirmandoPagamento();
+  vigiarPagamento(4000, 3 * 60 * 1000, () => {
+    fecharConfirmando();
+    avisar("Ainda não recebemos a confirmação da PicPay. Se você já pagou, fica tranquilo: a equipe confere e chama você no WhatsApp.");
+  });
 }
 
 function confirmandoPagamento() {
@@ -391,7 +517,6 @@ const EXEMPLO = {
   email: "mariana@soldonorte.com.br", whatsapp: "(91) 9 8123-4567"
 };
 
-const params = new URLSearchParams(location.search);
 if (params.has("exemplo")) {
   for (const [chave, valor] of Object.entries(EXEMPLO)) {
     const el = chave.startsWith("#") ? $(chave) : campo(chave);
@@ -411,6 +536,9 @@ if (previa) {
   }
   if (previa.confirmando) confirmandoPagamento();
   if (previa.autentique) { $("#janela-aut").hidden = false; document.body.classList.add("com-janela"); }
+} else if (params.has("retorno") && !MODO_DEMONSTRACAO) {
+  recuperar();
+  esperarRetorno();
 } else {
   mostrarTela(recuperar(), { focar: false });
 }

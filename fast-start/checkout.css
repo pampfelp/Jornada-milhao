@@ -334,3 +334,4 @@ input,select,button,textarea{font-family:var(--font)}
 @media (max-width:1199px){ .painel{min-height:calc(100vh - 80px);min-height:calc(100dvh - 80px)} }
 /* computador: a primeira linha (apresentação + painel) ocupa a tela; o rodapé fica abaixo */
 @media (min-width:1200px){ .pagina{grid-template-rows:minmax(calc(100vh - 72px),auto) auto} }
+.nota.aviso{color:#F2967A}

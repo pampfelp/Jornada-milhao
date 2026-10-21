@@ -180,6 +180,17 @@ service cloud.firestore {
       allow delete: if fClientes();
     }
 
+    // Estado do checkout público do Fast Start (fast-start/). Só o Code.gs
+    // escreve, pela conta-robô; a página pública nunca fala com o Firestore
+    // (crença 12). A equipe de vendas lê.
+    match /inscricoesFastStart/{id} {
+      allow read: if fClientes() || temPapel(['automacao']);
+      allow create, update: if temPapel(['automacao'])
+                    && request.resource.data.status in ['dados', 'aguardando_pagamento', 'pago']
+                    && request.resource.data.chave is string;
+      allow delete: if gestao();
+    }
+
     match /agendamentos/{id} {
       allow read: if fFunis();
       allow create: if (fFunis() || temPapel(['automacao']))

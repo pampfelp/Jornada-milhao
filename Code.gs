@@ -35,6 +35,8 @@
  *      que busca a resposta completa na API da YayForms e cria um lead
  *      novo direto no Funil de Agendamento (etapa inicial), com o nome do
  *      formulário guardado no campo "Origem" do cliente.
+ *   6. Checkout do Fast Start ("fsRegistrar", "fsPagamento", "fsStatus")
+ *      — ver a seção FAST START no fim deste arquivo.
  *
  * ESCOPO — SÓ CRIAÇÃO de evento na Agenda, SÓ CRIAÇÃO de arquivo no Drive:
  * nenhuma ação aqui lê, edita ou apaga evento da Agenda, nem apaga arquivo
@@ -115,6 +117,9 @@ function rotear_(body) {
       case "criarEventoAgenda": return acaoCriarEventoAgenda_(body.calendarId, body.clienteNome, body.clienteEmail, body.observacoes, body.inicio, body.duracaoMinutos);
       case "gerarContratoPDF": return acaoGerarContratoPDF_(body.html, body.clienteNome);
       case "enviarParaAssinatura": return acaoEnviarParaAssinatura_(body.fileId, body.clienteNome, body.clienteEmail, body.nomeDocumento);
+      case "fsRegistrar": return acaoFsRegistrar_(body);
+      case "fsPagamento": return acaoFsPagamento_(body);
+      case "fsStatus": return acaoFsStatus_(body);
       default: return { ok: false, erro: "Ação desconhecida: " + body.action };
     }
   } catch (err) {
@@ -828,4 +833,345 @@ function acaoLancarRotinasDiarias_() {
   } catch (err) {
     console.error("Erro na acaoLancarRotinasDiarias_:", String(err));
   }
+}
+
+// ══════════════ FAST START: CHECKOUT (inscrição + Link de Pagamento PicPay) ══════════════
+//
+// A página pública fast-start/ (GitHub Pages) não grava no Firestore: ela
+// manda os dados pra cá (crença 12), e este script grava pela conta-robô.
+//
+//   fsRegistrar        etapa 2 concluída: cria o cliente (produto Fast
+//                      Start) e o card no Funil de Agendamento (quem parar
+//                      aqui já é lead pra SDR) e a inscrição em
+//                      inscricoesFastStart, que guarda o estado do checkout.
+//   fsPagamento        etapa 4: cria (uma vez só) o Link de Pagamento da
+//                      PicPay com cartão até 12x e Pix, e devolve o link e o
+//                      código Pix (brcode).
+//   fsStatus           a página pergunta se já pagou; aqui se consulta a
+//                      própria PicPay (nunca se confia no navegador). Pago
+//                      vira status "pago" na inscrição + uma tarefa pra
+//                      equipe gerar o contrato e lançar o recebimento.
+//   verificarPendentesFastStart (gatilho a cada 15 min): mesma consulta pra
+//                      quem pagou e fechou a aba antes de voltar.
+//
+// Script Properties: PICPAY_CLIENT_ID, PICPAY_CLIENT_SECRET e
+// PICPAY_AMBIENTE ("sandbox" ou "producao"). As credenciais do Link de
+// Pagamento saem do Painel PicPay Empresas > Integrações (o secret aparece
+// uma vez só). Em sandbox, cliente e card nascem com "(TESTE)" no nome.
+//
+// Webhook da PicPay não é usado: Apps Script não lê o header authorization
+// que ela manda, e a URL de notificação não aceita query string. A consulta
+// ativa (fsStatus + gatilho) cobre o mesmo caso.
+
+var FS_VALOR_CENTAVOS_ = 499700;
+var FS_PARCELAS_MAX_ = 12;
+var FS_PAGINA_ = "https://pampfelp.github.io/Jornada-milhao/fast-start/";
+var FS_COLECAO_ = "inscricoesFastStart";
+var FS_CAMPOS_ = ["cnpj", "razaoSocial", "cep", "numero", "endereco", "cidade", "representanteNome", "representanteCpf", "email", "whatsapp"];
+
+function picpayConfig_() {
+  var p = PropertiesService.getScriptProperties();
+  var amb = String(p.getProperty("PICPAY_AMBIENTE") || "sandbox").toLowerCase();
+  var producao = amb === "producao" || amb === "produção" || amb === "production";
+  return {
+    clientId: p.getProperty("PICPAY_CLIENT_ID"),
+    clientSecret: p.getProperty("PICPAY_CLIENT_SECRET"),
+    urlToken: producao ? "https://ecommerce-api.svc.picpay.com/oauth2/token" : "https://api.ms.qa.limbo.work/oauth2/token",
+    urlApi: producao ? "https://ecommerce-api.svc.picpay.com/v1" : "https://api.ms.qa.limbo.work/sandbox/v1",
+    ambiente: producao ? "producao" : "sandbox"
+  };
+}
+
+// Token da PicPay vale 5 minutos; guardado por 4 pra não pedir a cada chamada.
+function picpayToken_() {
+  var cfg = picpayConfig_();
+  if (!cfg.clientId || !cfg.clientSecret) throw new Error("PICPAY_CLIENT_ID ou PICPAY_CLIENT_SECRET ausente nas Script Properties.");
+  var cache = CacheService.getScriptCache();
+  var chave = "PICPAY_TOKEN_" + cfg.ambiente;
+  var guardado = cache.get(chave);
+  if (guardado) return guardado;
+  var resp = UrlFetchApp.fetch(cfg.urlToken, {
+    method: "post", contentType: "application/json", muteHttpExceptions: true,
+    payload: JSON.stringify({ grant_type: "client_credentials", client_id: cfg.clientId, client_secret: cfg.clientSecret })
+  });
+  var json = {};
+  try { json = JSON.parse(resp.getContentText()); } catch (err) {}
+  if (resp.getResponseCode() !== 200 || !json.access_token) {
+    throw new Error("PicPay recusou as credenciais (" + resp.getResponseCode() + ", ambiente " + cfg.ambiente + ").");
+  }
+  cache.put(chave, json.access_token, 240);
+  return json.access_token;
+}
+
+function picpay_(metodo, caminho, corpo) {
+  var cfg = picpayConfig_();
+  var opcoes = { method: metodo, muteHttpExceptions: true, headers: { Authorization: "Bearer " + picpayToken_(), Accept: "application/json" } };
+  if (corpo) { opcoes.contentType = "application/json"; opcoes.payload = JSON.stringify(corpo); }
+  var resp = UrlFetchApp.fetch(cfg.urlApi + caminho, opcoes);
+  var json = {};
+  try { json = JSON.parse(resp.getContentText() || "{}"); } catch (err) {}
+  return { status: resp.getResponseCode(), json: json };
+}
+
+// ── validação (a mesma da página; aqui é a que vale) ──
+
+function fsDigitos_(v) { return String(v || "").replace(/\D/g, ""); }
+
+function fsCpfValido_(v) {
+  var d = fsDigitos_(v);
+  if (d.length !== 11 || /^(\d)\1+$/.test(d)) return false;
+  for (var t = 9; t <= 10; t++) {
+    var s = 0;
+    for (var i = 0; i < t; i++) s += Number(d[i]) * (t + 1 - i);
+    if (((s * 10) % 11) % 10 !== Number(d[t])) return false;
+  }
+  return true;
+}
+
+function fsCnpjValido_(v) {
+  var d = fsDigitos_(v);
+  if (d.length !== 14 || /^(\d)\1+$/.test(d)) return false;
+  function calc(n) {
+    var pesos = n === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+    var s = 0;
+    for (var i = 0; i < pesos.length; i++) s += Number(d[i]) * pesos[i];
+    var r = s % 11;
+    return r < 2 ? 0 : 11 - r;
+  }
+  return calc(12) === Number(d[12]) && calc(13) === Number(d[13]);
+}
+
+function fsLimparDados_(dados) {
+  var limpo = {};
+  FS_CAMPOS_.forEach(function (c) { limpo[c] = String((dados && dados[c]) || "").trim().slice(0, 200); });
+  var problemas = [];
+  if (!fsCnpjValido_(limpo.cnpj)) problemas.push("CNPJ");
+  if (limpo.razaoSocial.length < 3) problemas.push("razão social");
+  if (fsDigitos_(limpo.cep).length !== 8) problemas.push("CEP");
+  if (!limpo.endereco || !limpo.numero || !limpo.cidade) problemas.push("endereço");
+  if (limpo.representanteNome.split(/\s+/).length < 2) problemas.push("nome completo");
+  if (!fsCpfValido_(limpo.representanteCpf)) problemas.push("CPF");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(limpo.email)) problemas.push("e-mail");
+  var tel = fsDigitos_(limpo.whatsapp).length;
+  if (tel !== 10 && tel !== 11) problemas.push("WhatsApp");
+  return { dados: limpo, problemas: problemas };
+}
+
+// ── Firestore: ler e atualizar um documento (a criação já existe acima) ──
+
+function lerDocumentoFirestore_(colecao, id) {
+  var url = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents/" + colecao + "/" + encodeURIComponent(id) + "?key=" + FIRESTORE_API_KEY_;
+  var resp = UrlFetchApp.fetch(url, { headers: { Authorization: "Bearer " + obterIdTokenRobo_() }, muteHttpExceptions: true });
+  if (resp.getResponseCode() === 404) return null;
+  var json = JSON.parse(resp.getContentText());
+  if (json.error) throw new Error("Firestore (" + colecao + "): " + json.error.message);
+  var saida = {};
+  Object.keys(json.fields || {}).forEach(function (k) {
+    var f = json.fields[k];
+    saida[k] = f.stringValue != null ? f.stringValue : f.booleanValue != null ? f.booleanValue
+             : f.doubleValue != null ? f.doubleValue : f.integerValue != null ? Number(f.integerValue)
+             : f.timestampValue != null ? f.timestampValue : null;
+  });
+  return saida;
+}
+
+function atualizarDocumentoFirestore_(colecao, id, dados) {
+  var fields = {};
+  var mascara = [];
+  Object.keys(dados).forEach(function (k) { fields[k] = valorFirestore_(dados[k]); mascara.push("updateMask.fieldPaths=" + encodeURIComponent(k)); });
+  fields.updatedAt = { timestampValue: new Date().toISOString() };
+  mascara.push("updateMask.fieldPaths=updatedAt");
+  var url = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents/" + colecao + "/" + encodeURIComponent(id) + "?key=" + FIRESTORE_API_KEY_ + "&" + mascara.join("&");
+  var resp = UrlFetchApp.fetch(url, {
+    method: "patch", contentType: "application/json",
+    headers: { Authorization: "Bearer " + obterIdTokenRobo_() },
+    payload: JSON.stringify({ fields: fields }), muteHttpExceptions: true
+  });
+  var json = JSON.parse(resp.getContentText());
+  if (json.error) throw new Error("Firestore (" + colecao + "): " + json.error.message);
+}
+
+function fsPrimeiraEtapa_(colecaoConfig, padrao) {
+  var url = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents/" + colecaoConfig + "?key=" + FIRESTORE_API_KEY_ + "&pageSize=100";
+  var resp = UrlFetchApp.fetch(url, { headers: { Authorization: "Bearer " + obterIdTokenRobo_() }, muteHttpExceptions: true });
+  var docs = (JSON.parse(resp.getContentText()).documents) || [];
+  var melhor = null;
+  docs.forEach(function (d) {
+    var o = d.fields && d.fields.ordem;
+    var ordem = o ? Number(o.integerValue != null ? o.integerValue : o.doubleValue) : 999999;
+    if (!melhor || ordem < melhor.ordem) melhor = { id: d.name.split("/").pop(), ordem: ordem };
+  });
+  return melhor ? melhor.id : padrao;
+}
+
+// A inscrição só é mexida por quem tem a chave que ela recebeu ao nascer
+// (fica na sessão do navegador de quem preencheu).
+function fsCarregar_(body) {
+  if (!body.inscricaoId || !body.chave) return null;
+  var insc = lerDocumentoFirestore_(FS_COLECAO_, String(body.inscricaoId));
+  if (!insc || insc.chave !== String(body.chave)) return null;
+  return insc;
+}
+
+// ── ações chamadas pela página ──
+
+function acaoFsRegistrar_(body) {
+  if (body.site) return { ok: true, inscricaoId: "", chave: "" }; // honeypot: robô preencheu o campo escondido
+  var v = fsLimparDados_(body.dados);
+  if (v.problemas.length) return { ok: false, erro: "Confira: " + v.problemas.join(", ") + "." };
+  var d = v.dados;
+  var teste = picpayConfig_().ambiente !== "producao";
+  var sufixo = teste ? " (TESTE)" : "";
+
+  var existente = fsCarregar_(body);
+  if (existente) {
+    // Voltou e corrigiu algum dado: a inscrição guarda a versão nova. O
+    // cliente já criado continua como nasceu (o robô só cria, não edita).
+    var patch = {};
+    FS_CAMPOS_.forEach(function (c) { patch[c] = d[c]; });
+    atualizarDocumentoFirestore_(FS_COLECAO_, body.inscricaoId, patch);
+    return { ok: true, inscricaoId: body.inscricaoId, chave: body.chave };
+  }
+
+  var enderecoCompleto = d.endereco + ", " + d.numero + " - " + d.cidade + " - CEP " + d.cep;
+  var nome = d.razaoSocial + sufixo;
+  var clienteId = criarDocumentoFirestore_("clientes", {
+    nome: nome, telefone: d.whatsapp, email: d.email, cpfCnpj: d.cnpj, endereco: enderecoCompleto,
+    representanteNome: d.representanteNome, representanteCpf: d.representanteCpf,
+    origem: "Checkout Fast Start" + sufixo, produto: "fast_start", observacoes: ""
+  });
+  var hoje = Utilities.formatDate(new Date(), "America/Belem", "dd/MM/yyyy HH:mm");
+  var agendamentoId = criarDocumentoFirestore_("agendamentos", {
+    clienteId: clienteId, clienteNome: nome, telefone: d.whatsapp, email: d.email,
+    data: "", hora: "", etapa: fsPrimeiraEtapa_("etapasAgendamentoConfig", ""),
+    convertido: false, enviadoAgenda: false, motivoPerda: "", formCompleto: false,
+    observacoes: "Checkout Fast Start: preencheu empresa e responsável em " + hoje + ".\n" +
+                 "Representante: " + d.representanteNome + " (" + d.email + ").\n" +
+                 "Se não pagar, é lead pra recuperar. Pagamento confirmado vira tarefa pra equipe."
+  });
+  var chave = Utilities.getUuid();
+  var doc = { status: "dados", chave: chave, clienteId: clienteId, agendamentoId: agendamentoId, ambiente: teste ? "sandbox" : "producao" };
+  FS_CAMPOS_.forEach(function (c) { doc[c] = d[c]; });
+  var inscricaoId = criarDocumentoFirestore_(FS_COLECAO_, doc);
+  return { ok: true, inscricaoId: inscricaoId, chave: chave };
+}
+
+function acaoFsPagamento_(body) {
+  var insc = fsCarregar_(body);
+  if (!insc) return { ok: false, erro: "Inscrição não encontrada. Recarregue a página." };
+  if (insc.status === "pago") return { ok: true, pago: true };
+  var hoje = Utilities.formatDate(new Date(), "America/Belem", "yyyy-MM-dd");
+  if (insc.link && insc.brcode && insc.linkExpiraEm && insc.linkExpiraEm > hoje) {
+    return { ok: true, link: insc.link, brcode: insc.brcode };
+  }
+  var expiraTexto = Utilities.formatDate(new Date(Date.now() + 3 * 24 * 3600 * 1000), "America/Belem", "yyyy-MM-dd");
+  var r = picpay_("post", "/paymentlink/create", {
+    charge: {
+      name: "Fast Start",
+      description: ("Inscrição Fast Start - " + insc.razaoSocial).slice(0, 120),
+      order_number: String(body.inscricaoId).slice(0, 15),
+      redirect_url: FS_PAGINA_ + "?retorno=" + encodeURIComponent(body.inscricaoId) + (insc.ambiente === "sandbox" ? "&modo=teste" : ""),
+      payment: { methods: ["CREDIT_CARD", "BRCODE"], brcode_arrangements: ["PIX"] },
+      amounts: { product: FS_VALOR_CENTAVOS_ }
+    },
+    options: { allow_create_pix_key: true, card_max_installment_number: FS_PARCELAS_MAX_, expired_at: expiraTexto }
+  });
+  if (r.status !== 201 && r.status !== 200) {
+    var msg = r.json && r.json.error && r.json.error.message;
+    return { ok: false, erro: "A PicPay não criou o pagamento" + (msg ? ": " + msg : " (" + r.status + ")") + "." };
+  }
+  var link = r.json.link || "";
+  atualizarDocumentoFirestore_(FS_COLECAO_, body.inscricaoId, {
+    status: "aguardando_pagamento", link: link, linkId: link.split("/").pop(), brcode: r.json.brcode || "", linkExpiraEm: expiraTexto
+  });
+  return { ok: true, link: link, brcode: r.json.brcode || "" };
+}
+
+function acaoFsStatus_(body) {
+  var insc = fsCarregar_(body);
+  if (!insc) return { ok: false, erro: "Inscrição não encontrada." };
+  return { ok: true, pago: fsConferirPagamento_(body.inscricaoId, insc) };
+}
+
+// Pergunta à PicPay se o link desta inscrição tem transação paga. Se tiver
+// e ainda não estava marcado, marca como pago e cria a tarefa pra equipe.
+// O lock impede que duas consultas ao mesmo tempo criem duas tarefas.
+function fsConferirPagamento_(inscricaoId, insc) {
+  if (insc.status === "pago") return true;
+  if (!insc.linkId) return false;
+  var r = picpay_("get", "/paymentlink/" + encodeURIComponent(insc.linkId) + "/transactions");
+  var pagas = ((r.json && r.json.transactions) || []).filter(function (t) { return t.status === "PAYED"; });
+  if (!pagas.length) return false;
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var atual = lerDocumentoFirestore_(FS_COLECAO_, inscricaoId);
+    if (atual.status === "pago") return true;
+    var tx = pagas[0];
+    var valor = Number(tx.amount || 0);
+    var quando = Utilities.formatDate(new Date(), "America/Belem", "dd/MM/yyyy HH:mm");
+    atualizarDocumentoFirestore_(FS_COLECAO_, inscricaoId, {
+      status: "pago", pagoEm: new Date().toISOString(), transacaoId: tx.id || "", valorPagoCentavos: valor
+    });
+    criarDocumentoFirestore_("tarefas", {
+      titulo: "Fast Start pago: " + atual.razaoSocial + (atual.ambiente === "sandbox" ? " (TESTE)" : ""),
+      descricao: "Pagamento confirmado pela PicPay em " + quando + " (R$ " + (valor / 100).toFixed(2).replace(".", ",") + ").\n" +
+                 "Empresa: " + atual.razaoSocial + " - CNPJ " + atual.cnpj + "\n" +
+                 "Representante: " + atual.representanteNome + " - " + atual.email + " - " + atual.whatsapp + "\n" +
+                 "Fazer: gerar o contrato do Fast Start no sistema, lançar o recebimento e mandar a data de início no WhatsApp.\n" +
+                 "Inscrição " + inscricaoId + ", link PicPay " + atual.linkId + ".",
+      responsavelUid: "", etapa: fsPrimeiraEtapa_("etapasTarefaConfig", "a_fazer"),
+      dataReferencia: Utilities.formatDate(new Date(), "America/Belem", "yyyy-MM-dd"), prazo: "", subtarefas: []
+    });
+    return true;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Rode uma vez no editor (▶) pra ligar a conferência a cada 15 minutos.
+function instalarTriggerFastStart() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "verificarPendentesFastStart") return;
+  }
+  ScriptApp.newTrigger("verificarPendentesFastStart").timeBased().everyMinutes(15).create();
+}
+
+function verificarPendentesFastStart() {
+  try {
+    var url = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents:runQuery?key=" + FIRESTORE_API_KEY_;
+    var resp = UrlFetchApp.fetch(url, {
+      method: "post", contentType: "application/json", muteHttpExceptions: true,
+      headers: { Authorization: "Bearer " + obterIdTokenRobo_() },
+      payload: JSON.stringify({ structuredQuery: {
+        from: [{ collectionId: FS_COLECAO_ }],
+        where: { fieldFilter: { field: { fieldPath: "status" }, op: "EQUAL", value: { stringValue: "aguardando_pagamento" } } },
+        limit: 50
+      } })
+    });
+    (JSON.parse(resp.getContentText()) || []).forEach(function (linha) {
+      if (!linha.document) return;
+      var id = linha.document.name.split("/").pop();
+      var insc = lerDocumentoFirestore_(FS_COLECAO_, id);
+      if (insc) fsConferirPagamento_(id, insc);
+    });
+  } catch (err) {
+    console.error("verificarPendentesFastStart:", String(err));
+  }
+}
+
+// Rode no editor (▶) pra testar as credenciais da PicPay sem passar pela
+// página: cria um link de R$ 1,00 e mostra no log se deu certo.
+function testarPicPay() {
+  var cfg = picpayConfig_();
+  var r = picpay_("post", "/paymentlink/create", {
+    charge: { name: "Teste de integração", description: "Teste", order_number: "teste" + Date.now().toString().slice(-8),
+              redirect_url: FS_PAGINA_, payment: { methods: ["CREDIT_CARD", "BRCODE"], brcode_arrangements: ["PIX"] },
+              amounts: { product: 100 } },
+    options: { allow_create_pix_key: true, card_max_installment_number: 1,
+               expired_at: Utilities.formatDate(new Date(Date.now() + 24 * 3600 * 1000), "America/Belem", "yyyy-MM-dd") }
+  });
+  console.log("Ambiente: " + cfg.ambiente + " | status " + r.status + " | link: " + (r.json.link || JSON.stringify(r.json)));
 }
