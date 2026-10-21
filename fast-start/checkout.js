@@ -1,13 +1,13 @@
 // Checkout Fast Start.
 //
 // Modos:
-//   demonstracao (padrão) — o fluxo anda na tela, nada é gravado nem cobrado.
-//   teste (?modo=teste)   — fala com o Code.gs de verdade, que usa o
-//                           ambiente de teste da PicPay (PICPAY_AMBIENTE =
-//                           sandbox) e grava cliente/card com "(TESTE)".
-// A assinatura na Autentique ainda é simulada nos dois.
+//   real (padrão, desde 2026-10-21) — fala com o Code.gs. Se a cobrança e o
+//       contrato são de verdade ou de teste quem decide é PICPAY_AMBIENTE,
+//       nas Script Properties ("producao" ou "sandbox"), não a página.
+//   demonstracao (?modo=demonstracao) — o fluxo anda na tela, nada é
+//       gravado, assinado nem cobrado. Serve pra mostrar a página.
 const params = new URLSearchParams(location.search);
-const MODO = params.get("modo") === "teste" ? "teste" : "demonstracao";
+const MODO = params.get("modo") === "demonstracao" ? "demonstracao" : "real";
 const MODO_DEMONSTRACAO = MODO === "demonstracao";
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzdJNroawGvXFRMELv_VeLqVTkENBtq6Veou3n3nST5vjjiNqF70L-r-ZLFNT-GupRN_w/exec";
 
