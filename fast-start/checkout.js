@@ -314,11 +314,50 @@ form.addEventListener("submit", (ev) => {
   }
 });
 
-// Assinatura simulada em todos os modos até a Autentique entrar: Code.gs
-// gera o PDF, cria o documento, assina pelo Benedito e devolve o link
-// exclusivo do cliente, que abre em #janela-aut.
-function assinar() {
-  contratoAssinado();
+// Demonstração: assinatura simulada. Teste e produção: o Code.gs gera o
+// contrato, cria o documento na Autentique já assinado pelo contratado e
+// devolve o link exclusivo do representante, que abre em #janela-aut. A
+// página pergunta ao Code.gs, a cada 4 s, se ele já assinou.
+let vigiaContrato = null;
+async function assinar() {
+  if (MODO_DEMONSTRACAO) { contratoAssinado(); return; }
+  ocupado = true;
+  carregando("Preparando o contrato...");
+  try {
+    const r = await chamar("fsContrato", inscricao());
+    if (r.assinado) { contratoAssinado(); return; }
+    abrirJanelaAutentique(r.link);
+  } catch (e) {
+    avisar(`O contrato não abriu agora: ${e.message.replace(/\.$/, "")}. Tente de novo em instantes.`);
+  } finally {
+    ocupado = false;
+    carregando("");
+    atualizarBotao();
+  }
+}
+
+function abrirJanelaAutentique(link) {
+  const janela = $("#janela-aut");
+  const quadro = $("iframe", janela);
+  if (quadro.src !== link) quadro.src = link;
+  $(".janela-fora", janela).href = link;
+  janela.hidden = false;
+  document.body.classList.add("com-janela");
+  clearInterval(vigiaContrato);
+  vigiaContrato = setInterval(async () => {
+    try {
+      const r = await chamar("fsContratoStatus", inscricao());
+      if (r.assinado) {
+        clearInterval(vigiaContrato);
+        fecharJanelaAutentique();
+        contratoAssinado();
+      }
+    } catch { /* tenta de novo no próximo ciclo */ }
+  }, 4000);
+}
+function fecharJanelaAutentique() {
+  $("#janela-aut").hidden = true;
+  document.body.classList.remove("com-janela");
 }
 function contratoAssinado() {
   marcarFeita(3);

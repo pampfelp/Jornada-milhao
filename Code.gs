@@ -35,7 +35,8 @@
  *      que busca a resposta completa na API da YayForms e cria um lead
  *      novo direto no Funil de Agendamento (etapa inicial), com o nome do
  *      formulário guardado no campo "Origem" do cliente.
- *   6. Checkout do Fast Start ("fsRegistrar", "fsPagamento", "fsStatus")
+ *   6. Checkout do Fast Start ("fsRegistrar", "fsContrato", "fsContratoStatus",
+ *      "fsPagamento", "fsStatus")
  *      — ver a seção FAST START no fim deste arquivo.
  *
  * ESCOPO — SÓ CRIAÇÃO de evento na Agenda, SÓ CRIAÇÃO de arquivo no Drive:
@@ -120,6 +121,8 @@ function rotear_(body) {
       case "fsRegistrar": return acaoFsRegistrar_(body);
       case "fsPagamento": return acaoFsPagamento_(body);
       case "fsStatus": return acaoFsStatus_(body);
+      case "fsContrato": return acaoFsContrato_(body);
+      case "fsContratoStatus": return acaoFsContratoStatus_(body);
       default: return { ok: false, erro: "Ação desconhecida: " + body.action };
     }
   } catch (err) {
@@ -1071,6 +1074,7 @@ function acaoFsPagamento_(body) {
   var insc = fsCarregar_(body);
   if (!insc) return { ok: false, erro: "Inscrição não encontrada. Recarregue a página." };
   if (insc.status === "pago") return { ok: true, pago: true };
+  if (!insc.contratoAssinadoEm) return { ok: false, erro: "Assine o contrato antes do pagamento." };
   var hoje = Utilities.formatDate(new Date(), "America/Belem", "yyyy-MM-dd");
   if (insc.link && insc.brcode && insc.linkExpiraEm && insc.linkExpiraEm > hoje) {
     return { ok: true, link: insc.link, brcode: insc.brcode };
@@ -1185,4 +1189,365 @@ function testarPicPay() {
                expired_at: Utilities.formatDate(new Date(Date.now() + 24 * 3600 * 1000), "America/Belem", "yyyy-MM-dd") }
   });
   console.log("Ambiente: " + cfg.ambiente + " | status " + r.status + " | link: " + (r.json.link || JSON.stringify(r.json)));
+}
+
+// ── Fast Start: contrato e assinatura na Autentique (etapa 3) ──
+//
+// O contrato é montado AQUI, a partir dos dados validados da inscrição,
+// nunca na página: se a página mandasse o HTML, dava pra alterar cláusula
+// no navegador e a assinatura do contratado seria aplicada sozinha nesse
+// texto. Por isso o modelo existe em duas cópias (esta e a do app.js,
+// montarHtmlContratoFastStart); mudou o texto lá, muda aqui na mesma sessão.
+//
+//   fsContrato        gera o PDF, cria o documento na Autentique com dois
+//                     signatários (a conta dona do AUTENTIQUE_API_TOKEN, que
+//                     assina na hora pelo signDocument, e o representante,
+//                     que recebe link próprio) e devolve o link dele.
+//   fsContratoStatus  pergunta à Autentique se o representante já assinou.
+//
+// Assinatura de teste: quando PICPAY_AMBIENTE não é "producao", o documento
+// nasce em sandbox na Autentique (não gasta crédito, some em alguns dias).
+
+var FS_LOGO_URL_ = "https://pampfelp.github.io/Jornada-milhao/fast-start-logo.png";
+// Cláusula 3 e quadro "Investimento" com o texto aprovado por ele em
+// 2026-10-20 (página de termos): a forma é escolhida depois, no pagamento.
+var FS_PAGAMENTO_CONTRATO_ = {
+  destaque: "À vista no Pix ou em até 12x sem juros no cartão",
+  detalhe: "Na inscrição, pela página de pagamento processada pela PicPay.",
+  clausula: "à vista via PIX ou em até 12 (doze) parcelas sem juros no cartão de crédito, conforme a opção escolhida na página de inscrição, no ato da contratação."
+};
+
+function fsEsc_(s) {
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function fsDataExtenso_() {
+  var meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+  var d = new Date();
+  var dia = Number(Utilities.formatDate(d, "America/Belem", "d"));
+  var mes = Number(Utilities.formatDate(d, "America/Belem", "M"));
+  return dia + " de " + meses[mes - 1] + " de " + Utilities.formatDate(d, "America/Belem", "yyyy");
+}
+
+function fsQualificacao_(cliente) {
+  var texto = "pessoa jurídica de direito privado, inscrita no CNPJ sob o nº " + fsEsc_(cliente.cpfCnpj) +
+              ", com sede em " + fsEsc_(cliente.endereco);
+  if (cliente.representanteNome) {
+    texto += ", neste ato representada por " + fsEsc_(cliente.representanteNome);
+    if (cliente.representanteCpf) texto += ", portador(a) do CPF nº " + fsEsc_(cliente.representanteCpf);
+  }
+  return texto;
+}
+
+function fsClienteDaInscricao_(insc) {
+  return {
+    nome: insc.razaoSocial, cpfCnpj: insc.cnpj, email: insc.email, telefone: insc.whatsapp,
+    endereco: insc.endereco + ", " + insc.numero + " - " + insc.cidade + " - CEP " + insc.cep,
+    representanteNome: insc.representanteNome, representanteCpf: insc.representanteCpf
+  };
+}
+
+function fsLogoDataUri_() {
+  try {
+    var resp = UrlFetchApp.fetch(FS_LOGO_URL_, { muteHttpExceptions: true });
+    if (resp.getResponseCode() !== 200) return "";
+    return "data:image/png;base64," + Utilities.base64Encode(resp.getBlob().getBytes());
+  } catch (err) {
+    return "";
+  }
+}
+
+function autentique_(query, variaveis) {
+  var token = PropertiesService.getScriptProperties().getProperty("AUTENTIQUE_API_TOKEN");
+  if (!token) throw new Error("Configure AUTENTIQUE_API_TOKEN nas Script Properties.");
+  var resp = UrlFetchApp.fetch(AUTENTIQUE_GRAPHQL_URL_, {
+    method: "post", contentType: "application/json", muteHttpExceptions: true,
+    headers: { Authorization: "Bearer " + token },
+    payload: JSON.stringify({ query: query, variables: variaveis || {} })
+  });
+  var json = JSON.parse(resp.getContentText());
+  if (json.errors && json.errors.length) throw new Error("Autentique: " + json.errors.map(function (e) { return e.message; }).join("; "));
+  return json.data;
+}
+
+function acaoFsContrato_(body) {
+  var insc = fsCarregar_(body);
+  if (!insc) return { ok: false, erro: "Inscrição não encontrada. Recarregue a página." };
+  if (insc.contratoAssinadoEm) return { ok: true, assinado: true };
+  if (insc.contratoLink) return { ok: true, link: insc.contratoLink };
+
+  var token = PropertiesService.getScriptProperties().getProperty("AUTENTIQUE_API_TOKEN");
+  if (!token) return { ok: false, erro: "Assinatura indisponível agora." };
+  var sandbox = picpayConfig_().ambiente !== "producao";
+
+  var cliente = fsClienteDaInscricao_(insc);
+  var html = fsMontarContratoHtml_(cliente, fsLogoDataUri_());
+  var nome = "Contrato Fast Start - " + insc.razaoSocial + (sandbox ? " (TESTE)" : "");
+  var pdf = Utilities.newBlob(html, "text/html", nome + ".html").getAs("application/pdf").setName(nome + ".pdf");
+  var arquivo = getContratosFolder_().createFile(pdf);
+
+  // Dono do token: precisa estar na lista pra o signDocument assinar por ele.
+  var dono = autentique_("query { me { name email } }").me;
+
+  var query = "mutation CreateDocumentMutation($document: DocumentInput!, $signers: [SignerInput!]!, $file: Upload!) { " +
+    "createDocument(document: $document, signers: $signers, file: $file, sandbox: " + (sandbox ? "true" : "false") + ") { " +
+    "id signatures { public_id name email link { short_link } } } }";
+  var variables = {
+    document: { name: nome },
+    signers: [
+      { email: dono.email, action: "SIGN" },
+      { name: insc.representanteNome, action: "SIGN", configs: { cpf: fsDigitos_(insc.representanteCpf) } }
+    ],
+    file: null
+  };
+  var resp = UrlFetchApp.fetch(AUTENTIQUE_GRAPHQL_URL_, {
+    method: "post", muteHttpExceptions: true,
+    headers: { Authorization: "Bearer " + token },
+    payload: { operations: JSON.stringify({ query: query, variables: variables }), map: JSON.stringify({ file: ["variables.file"] }), file: arquivo.getBlob() }
+  });
+  var json = JSON.parse(resp.getContentText());
+  if (json.errors && json.errors.length) return { ok: false, erro: "Autentique: " + json.errors.map(function (e) { return e.message; }).join("; ") };
+  var docAut = json.data.createDocument;
+  var doRepresentante = (docAut.signatures || []).filter(function (s) { return !s.email && s.link && s.link.short_link; })[0];
+  if (!doRepresentante) return { ok: false, erro: "A Autentique não devolveu o link de assinatura." };
+
+  autentique_("mutation SignDocument($id: UUID!) { signDocument(id: $id) }", { id: docAut.id });
+
+  atualizarDocumentoFirestore_(FS_COLECAO_, body.inscricaoId, {
+    contratoDocId: docAut.id, contratoPublicId: doRepresentante.public_id,
+    contratoLink: doRepresentante.link.short_link, contratoPdfId: arquivo.getId()
+  });
+  return { ok: true, link: doRepresentante.link.short_link };
+}
+
+function acaoFsContratoStatus_(body) {
+  var insc = fsCarregar_(body);
+  if (!insc) return { ok: false, erro: "Inscrição não encontrada." };
+  if (insc.contratoAssinadoEm) return { ok: true, assinado: true };
+  if (!insc.contratoDocId) return { ok: true, assinado: false };
+  var doc = autentique_("query Doc($id: UUID!) { document(id: $id) { signatures { public_id signed { created_at } } } }", { id: insc.contratoDocId }).document;
+  var dele = (doc.signatures || []).filter(function (s) { return s.public_id === insc.contratoPublicId; })[0];
+  if (!dele || !dele.signed) return { ok: true, assinado: false };
+  atualizarDocumentoFirestore_(FS_COLECAO_, body.inscricaoId, { contratoAssinadoEm: dele.signed.created_at || new Date().toISOString() });
+  return { ok: true, assinado: true };
+}
+
+// Rode no editor (▶): mostra no log de quem é a conta da Autentique. É essa
+// conta que assina como CONTRATADO em todo contrato do checkout.
+function testarAutentique() {
+  var me = autentique_("query { me { name email cpf } }").me;
+  console.log("Conta da Autentique: " + me.name + " <" + me.email + ">" + (me.cpf ? " CPF final " + String(me.cpf).slice(-4) : ""));
+}
+
+
+// Modelo do contrato Fast Start: cópia de montarHtmlContratoFastStart (app.js),
+// trocando só os dados do contrato pelos da inscrição (valor fixo R$ 4.997,00
+// e a cláusula 3 aprovada pra página de inscrição).
+function fsMontarContratoHtml_(cliente, logo) {
+  const nomeCliente = fsEsc_(cliente.nome);
+  const ehPj = fsDigitos_(cliente.cpfCnpj).length > 11;
+  const contato = [cliente.email && `e-mail ${fsEsc_(cliente.email)}`, cliente.telefone && `telefone ${fsEsc_(cliente.telefone)}`].filter(Boolean).join(", ");
+  const qualificacao = fsQualificacao_(cliente) + (contato ? `, ${contato}` : "");
+  const pagamento = FS_PAGAMENTO_CONTRATO_;
+  const valorTotalTexto = "R$ 4.997,00";
+  const logoImg = (classe) => logo ? `<img class="${classe}" src="${logo}" alt="Fast Start">` : "";
+  const assinaturaContratante = ehPj
+    ? `<div class="ass-nome">Razão social: ${nomeCliente}</div>
+       ${cliente.representanteNome ? `<div class="ass-info">Representante: ${fsEsc_(cliente.representanteNome)}</div>` : ""}
+       ${cliente.representanteCpf ? `<div class="ass-info">CPF: ${fsEsc_(cliente.representanteCpf)}</div>` : ""}`
+    : `<div class="ass-nome">Nome: ${nomeCliente}</div>
+       <div class="ass-info">CPF: ${fsEsc_(cliente.cpfCnpj || "—")}</div>`;
+  const secao = (num, titulo) => `<div class="secao-esp"><table class="secao"><tr><td class="secao-num">${num}</td><td class="secao-tit">${titulo}</td></tr></table></div>`;
+  const p = (num, texto) => `<p><span class="n">${num}</span>  ${texto}</p>`;
+  const dia = (num, rotulo, titulo, itens) => `<table class="dia"><tr>
+    <td class="dia-rot"><div class="dia-num">${num}</div><div class="dia-nome">${rotulo}</div></td>
+    <td class="dia-cont"><div class="dia-tit">${titulo}</div><ul>${itens.map((i) => `<li>${i}</li>`).join("")}</ul></td>
+  </tr></table>`;
+  const alineas = (itens) => `<div class="alineas">${itens.map(([l, t]) => `<p><span class="n">${l})</span>  ${t}</p>`).join("")}</div>`;
+
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Contrato Fast Start - ${nomeCliente}</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box;}
+@page{size:A4;margin:0 0 22mm 0;
+  @bottom-left{content:"FAST START  \\2022  A primeira aceleradora do solar";white-space:pre;font-family:Poppins,Arial,sans-serif;font-size:7.5pt;color:#6B6258;margin-left:20mm;margin-top:4mm;padding-top:1.6mm;border-top:0.4mm solid #F5B21F;vertical-align:top;}
+  @bottom-right{content:"Página " counter(page) " de " counter(pages);font-family:Poppins,Arial,sans-serif;font-size:7.5pt;color:#6B6258;margin-right:20mm;margin-top:4mm;padding-top:1.6mm;border-top:0.4mm solid #F5B21F;vertical-align:top;}
+}
+@page capa{margin:0;@bottom-right{content:none;border:none;}@bottom-left{content:none;border:none;}}
+body{margin:0;font-family:Poppins,Arial,sans-serif;font-size:9.5pt;line-height:1.57;color:#1E1E1E;text-rendering:geometricPrecision;}
+.capa{page:capa;width:210mm;height:297mm;background:#160B04;text-align:center;position:relative;z-index:2;}
+.capa-logo{width:87mm;margin-top:79mm;}
+.capa h1{font-size:18pt;font-weight:700;line-height:1.3;margin:0;}
+.capa .t1{color:#fff;margin-top:8.5mm;}
+.capa .t2{color:#F5B21F;margin-top:3.6mm;}
+.capa-faixa{background:#F5B21F;color:#160B04;font-weight:700;font-size:11pt;line-height:5.7mm;margin:9.5mm 22.9mm 0;}
+.capa-sub{color:#D9CFC3;font-size:9.5pt;margin-top:15mm;}
+.corpo{width:100%;border-collapse:collapse;}
+.corpo>thead>tr>td{padding:0;}
+.cab{height:19.4mm;background:#160B04;border-bottom:0.9mm solid #F5B21F;position:relative;margin-bottom:10.4mm;}
+.cab-logo{position:absolute;left:20.4mm;top:1.7mm;height:13.6mm;}
+.cab-txt{position:absolute;right:20mm;bottom:2.4mm;color:#F5B21F;font-weight:700;font-size:7.5pt;letter-spacing:2pt;line-height:1;}
+.corpo>tbody>tr>td{padding:0 20mm;}
+p{margin:0 0 7pt;text-align:justify;break-inside:avoid;}
+.n{color:#C98A0E;font-weight:700;}
+.rotulo{color:#C98A0E;font-weight:700;font-size:8pt;letter-spacing:2pt;margin:0 0 3pt;}
+h2.titulo{font-size:15pt;font-weight:700;color:#160B04;line-height:1.45;margin:0 0 12pt;}
+h3{font-size:10pt;font-weight:700;color:#160B04;margin:8pt 0 5pt -2mm;padding-left:3.1mm;border-left:0.9mm solid #F5B21F;line-height:1.5;}
+.bloco{break-inside:avoid;}
+.nova-pagina{break-before:page;}
+/* padding no lugar de parte da margem: o Chromium zera a margem de cima
+   do bloco que abre página, e o modelo mantém ~4mm abaixo do cabeçalho */
+.secao-esp{margin-top:5.5mm;padding-top:4mm;}
+table.secao{width:100%;border-collapse:collapse;table-layout:fixed;margin:0 0 6.4mm;}
+.secao td{height:11mm;padding:0;vertical-align:middle;font-weight:700;color:#160B04;}
+.secao-num{width:15.9mm;background:#160B04;color:#F5B21F !important;font-size:15pt;text-align:center;}
+.secao-tit{background:#F5B21F;font-size:12pt;letter-spacing:0.5pt;text-transform:uppercase;padding-left:4mm !important;}
+table.dia{width:100%;border-collapse:collapse;table-layout:fixed;margin:0 0 7.2mm;break-inside:avoid;}
+.dia-rot{width:33.4mm;background:#160B04;text-align:center;vertical-align:middle;}
+.dia-num{color:#fff;font-size:7.5pt;letter-spacing:1pt;line-height:1.4;}
+.dia-nome{color:#F5B21F;font-size:15pt;font-weight:700;text-transform:uppercase;line-height:1.4;}
+.dia-cont{background:#FDF4E1;border-bottom:0.45mm solid #F5B21F;padding:4mm 4.3mm 3.4mm;vertical-align:top;}
+.dia-tit{font-size:10pt;font-weight:700;color:#160B04;line-height:1.5;margin-bottom:4pt;}
+.dia-cont ul{list-style:none;margin:0;padding:0;}
+.dia-cont li{font-size:9pt;line-height:1.54;margin:0 0 2pt;padding-left:6.3mm;position:relative;}
+.dia-cont li:before{content:"\\25BA";color:#C98A0E;font-size:6pt;position:absolute;left:0.6mm;top:0.2mm;}
+table.invest{width:100%;border-collapse:collapse;table-layout:fixed;margin:7.2mm 0 6mm;break-inside:avoid;}
+.invest td{height:21.4mm;vertical-align:middle;padding:0 4.3mm;}
+.invest-esq{width:63.5mm;background:#160B04;}
+.invest-rot{color:#fff;font-size:7.5pt;letter-spacing:1.5pt;line-height:1.4;}
+.invest-valor{color:#F5B21F;font-size:20pt;font-weight:700;line-height:1.3;}
+.invest-dir{background:#F5B21F;color:#160B04;padding-left:5mm !important;}
+.invest-dest{font-size:11pt;font-weight:700;line-height:1.4;}
+.invest-det{font-size:9pt;line-height:1.4;}
+.alineas{margin:0 0 10pt 6.3mm;}
+.alineas p{margin-bottom:5pt;}
+.fecho{break-inside:avoid;}
+.data{text-align:right;margin:4mm 0 0;}
+table.assinaturas{width:100%;border-collapse:collapse;margin-top:24mm;}
+.assinaturas td{width:50%;vertical-align:top;text-align:center;font-size:9pt;line-height:1.55;}
+.assinaturas td:first-child{padding-right:7mm;}
+.assinaturas td:last-child{padding-left:7mm;}
+.ass-linha{border-top:0.55mm solid #160B04;padding-top:3.6mm;}
+.ass-papel{color:#C98A0E;font-weight:700;font-size:8.5pt;letter-spacing:1.5pt;}
+.ass-nome{color:#160B04;font-weight:700;}
+.ass-info{color:#6B6258;}
+</style></head><body>
+<div class="capa">
+  ${logoImg("capa-logo")}
+  <h1 class="t1">CONTRATO DE PRESTAÇÃO DE SERVIÇOS</h1>
+  <h1 class="t2">DE ACELERAÇÃO COMERCIAL</h1>
+  <div class="capa-faixa">Programa de 3 meses  •  Encontros semanais em grupo</div>
+  <div class="capa-sub">Estruturação comercial: do time de vendas às estratégias de fechamento</div>
+</div>
+<table class="corpo"><thead><tr><td><div class="cab">${logoImg("cab-logo")}<div class="cab-txt">CONTRATO DE ACELERAÇÃO COMERCIAL</div></div></td></tr></thead><tbody><tr><td>
+
+<div class="rotulo">QUALIFICAÇÃO DAS PARTES</div>
+<h2 class="titulo">Contrato de Prestação de Serviços de Aceleração Comercial – Fast Start</h2>
+
+<h3>CONTRATANTE</h3>
+<p><strong>${nomeCliente}</strong>, ${qualificacao}.</p>
+
+<h3>CONTRATADO</h3>
+<p><strong>BENEDITO JOÃO VIEGAS DE MATOS</strong>, pessoa física, brasileiro, casado, CPF nº 925.437.152-15, escritório comercial localizado na Rua Municipalidade, Edifício Mirai Offices, sala 216, bairro Umarizal, Belém/PA.</p>
+<p>As partes acima qualificadas têm entre si justo e contratado o presente instrumento de Prestação de Serviços de Aceleração Comercial, denominado <strong>FAST START</strong>, que se regerá pelas cláusulas e condições a seguir.</p>
+
+<div class="bloco">${secao("01", "Objeto")}
+${p("1.1", "O presente contrato tem por objeto a participação da CONTRATANTE no programa de aceleração comercial <strong>FAST START</strong>, com duração de 3 (três) meses, voltado à estruturação comercial da empresa, abrangendo desde a construção do time de vendas até a implantação de estratégias comerciais.")}</div>
+${p("1.2", "O programa será executado por meio de encontros semanais <strong>em grupo</strong>, realizados de forma remota (online e ao vivo), com a seguinte estrutura:")}
+${dia("1.2.1", "Terças", "Recrutamento, Treinamento e Acompanhamento de Novos Vendedores", [
+  "Estruturação do processo de recrutamento e seleção de vendedores;",
+  "Treinamento e integração (onboarding) de novos vendedores;",
+  "Acompanhamento da evolução e da performance dos vendedores contratados."
+])}
+${dia("1.2.2", "Quintas", "Funil Comercial e Implantação de Estratégias de Vendas", [
+  "Construção e análise do funil comercial e de seus indicadores;",
+  "Definição e implantação de estratégias de vendas e de canais de aquisição de clientes;",
+  "Acompanhamento da execução das estratégias implantadas."
+])}
+${dia("1.2.3", "Quintas", "Treinamento de Apresentação de Proposta Comercial", [
+  "Treinamento da equipe na apresentação de propostas comerciais;",
+  "Técnicas de condução de reunião, contorno de objeções e fechamento."
+])}
+${dia("1.2.4", "Bônus", "Plataforma de Gestão Financeira", [
+  "Disponibilização à CONTRATANTE de acesso a uma plataforma de gestão financeira durante a vigência deste contrato, para apoio ao controle financeiro da operação."
+])}
+${p("1.3", "Os encontros serão realizados em grupo, com a participação de outras empresas também inscritas no programa. Os dias e horários poderão ser ajustados pelo CONTRATADO mediante comunicação prévia aos participantes, preservada a quantidade de encontros prevista.")}
+${p("1.4", "Os serviços serão prestados de maneira autônoma e independente, sem vínculo empregatício entre as partes, sendo a CONTRATANTE responsável pela execução e implementação das estratégias apresentadas, bem como pelo cumprimento dos prazos e das metas estabelecidas.")}
+${p("1.5", "O CONTRATADO assume obrigação de meio, e não de resultado. O programa não garante faturamento, volume de vendas ou lucro específicos, uma vez que os resultados dependem da dedicação, da execução e das condições de mercado da CONTRATANTE.")}
+
+<div class="bloco">${secao("02", "Prazo de vigência")}
+${p("2.1", "O presente contrato terá vigência de 3 (três) meses, contados a partir da data de início do programa, informada pelo CONTRATADO à CONTRATANTE no momento da inscrição.")}</div>
+${p("2.2", "O acesso à plataforma de gestão financeira e aos encontros em grupo será mantido durante todo o período de vigência e encerrado automaticamente ao seu término.")}
+${p("2.3", "O contrato poderá ser prorrogado ou convertido em outro programa do CONTRATADO, mediante acordo entre as partes, formalizado por aditivo contratual ou novo instrumento.")}
+
+<div class="bloco">${secao("03", "Investimento e condições de pagamento")}
+<table class="invest"><tr>
+  <td class="invest-esq"><div class="invest-rot">INVESTIMENTO</div><div class="invest-valor">${valorTotalTexto}</div></td>
+  <td class="invest-dir"><div class="invest-dest">${fsEsc_(pagamento.destaque)}</div><div class="invest-det">${fsEsc_(pagamento.detalhe)}</div></td>
+</tr></table></div>
+${p("3.1", `Pela participação no programa FAST START, a CONTRATANTE pagará ao CONTRATADO o valor total de <strong>${valorTotalTexto} (quatro mil, novecentos e noventa e sete reais)</strong>, ${fsEsc_(pagamento.clausula)}`)}
+${p("3.2", "O acesso aos encontros e à plataforma de gestão financeira será liberado após a confirmação do pagamento.")}
+${p("3.3", "A ausência da CONTRATANTE ou de sua equipe em qualquer encontro não gera direito a reposição individual, abatimento ou devolução de valores. Sempre que disponível, a gravação do encontro poderá ser disponibilizada aos participantes.")}
+
+<div class="bloco">${secao("04", "Obrigações das partes")}
+<h3>4.1  Obrigações do CONTRATADO</h3>
+${p("4.1.1", "Conduzir os encontros semanais em grupo previstos na Cláusula 1, com alto grau de excelência técnica e adotando as melhores práticas de mercado em gestão e estruturação comercial.")}</div>
+${p("4.1.2", "Disponibilizar os materiais de apoio, modelos e ferramentas utilizados nos encontros, bem como o acesso à plataforma de gestão financeira durante a vigência do contrato.")}
+${p("4.1.3", "Informar com antecedência os dias, horários e links de acesso aos encontros, bem como eventuais alterações de agenda.")}
+${p("4.1.4", "Manter confidencialidade sobre as informações estratégicas, operacionais e comerciais da CONTRATANTE, nos termos da Cláusula 6.")}
+${p("4.1.5", "Garantir que os serviços sejam prestados com independência técnica, sem qualquer subordinação hierárquica à CONTRATANTE.")}
+<div class="bloco"><h3>4.2  Obrigações da CONTRATANTE</h3>
+${p("4.2.1", "Efetuar os pagamentos nos prazos e condições estabelecidos.")}</div>
+${p("4.2.2", "Participar dos encontros com o gestor responsável e, quando pertinente, com a equipe comercial, garantindo pontualidade e engajamento.")}
+${p("4.2.3", "Executar as tarefas, implantações e estratégias definidas nos encontros, sendo responsável pela sua implementação na empresa.")}
+${p("4.2.4", "Fornecer as informações e os indicadores comerciais necessários ao acompanhamento do programa.")}
+${p("4.2.5", "Manter conduta respeitosa e colaborativa com o CONTRATADO e com os demais participantes do grupo.")}
+${p("4.2.6", "Utilizar a plataforma de gestão financeira de acordo com seus termos de uso, sendo vedado o compartilhamento do acesso com terceiros não vinculados à empresa.")}
+
+<div class="bloco">${secao("05", "Propriedade intelectual e uso de imagem")}
+${p("5.1", "Todo o conteúdo do programa FAST START – incluindo metodologias, aulas, gravações, apresentações, planilhas, modelos e materiais de apoio – é de propriedade exclusiva do CONTRATADO, sendo concedida à CONTRATANTE apenas licença de uso interno, pessoal e intransferível.")}</div>
+${p("5.2", "É vedado à CONTRATANTE gravar, reproduzir, revender, distribuir ou compartilhar o conteúdo do programa com terceiros, sob pena de rescisão imediata e de responder por perdas e danos.")}
+${p("5.3", "A CONTRATANTE autoriza a gravação dos encontros em grupo para fins de disponibilização aos participantes. A divulgação de depoimentos, imagem ou resultados da CONTRATANTE em materiais de marketing do CONTRATADO dependerá de autorização prévia e expressa.")}
+
+<div class="bloco">${secao("06", "Confidencialidade")}
+${p("6.1", "O CONTRATADO manterá sigilo sobre as informações estratégicas, comerciais, operacionais e financeiras da CONTRATANTE às quais tiver acesso em razão deste contrato (\"Informações Confidenciais\"), não as divulgando nem utilizando para fim diverso da execução do programa.")}</div>
+${p("6.2", "Por se tratar de programa em grupo, a CONTRATANTE compromete-se a manter sigilo sobre as informações de outras empresas participantes compartilhadas durante os encontros, não podendo divulgá-las ou utilizá-las em benefício próprio ou de terceiros.")}
+${p("6.3", "As obrigações de confidencialidade não se aplicam às informações que:")}
+${alineas([
+  ["a", "já eram de conhecimento público ou se tornarem públicas sem violação deste contrato;"],
+  ["b", "forem comprovadamente desenvolvidas de forma independente, sem uso das Informações Confidenciais;"],
+  ["c", "forem exigidas por determinação judicial, administrativa ou regulatória, hipótese em que a parte notificará previamente a outra, na extensão permitida pela lei."]
+])}
+${p("6.4", "O dever de confidencialidade permanecerá vigente durante o contrato e por 5 (cinco) anos após seu término, independentemente do motivo.")}
+${p("6.5", "Em caso de violação desta cláusula, a parte prejudicada poderá adotar as medidas legais cabíveis, incluindo a rescisão imediata do contrato e a indenização por perdas e danos.")}
+
+<div class="bloco nova-pagina">${secao("07", "Rescisão e cancelamento")}
+${p("7.1", "A CONTRATANTE poderá desistir do programa em até 7 (sete) dias corridos contados da assinatura deste contrato, com devolução integral dos valores pagos, desde que não tenha participado de nenhum encontro.")}</div>
+${p("7.2", "Após esse prazo, ou após a participação em qualquer encontro, por se tratar de programa em grupo com vagas e agenda previamente reservadas, não haverá devolução do valor pago, salvo disposição expressa em contrário entre as partes.")}
+${p("7.3", "O contrato será rescindido de pleno direito, independentemente de notificação judicial ou extrajudicial, nas seguintes hipóteses:")}
+${alineas([
+  ["a", "inadimplemento de qualquer obrigação por uma das partes, não regularizado em prazo razoável após notificação da parte adimplente;"],
+  ["b", "violação das cláusulas de propriedade intelectual ou de confidencialidade;"],
+  ["c", "conduta desrespeitosa ou prejudicial ao grupo por parte da CONTRATANTE;"],
+  ["d", "decretação de falência ou recuperação judicial ou extrajudicial de qualquer das partes que comprometa o cumprimento do contrato;"],
+  ["e", "caso fortuito ou força maior que inviabilize, de forma definitiva, a continuidade do programa."]
+])}
+${p("7.4", "Na hipótese de o CONTRATADO deixar de entregar o programa por motivo a ele imputável, a CONTRATANTE terá direito à devolução proporcional aos encontros não realizados.")}
+
+<div class="bloco">${secao("08", "Disposições gerais")}
+${p("8.1", "O CONTRATADO poderá contar com profissionais de sua equipe ou convidados para a condução de encontros, permanecendo integralmente responsável pela qualidade, sigilo e cumprimento das obrigações deste contrato.")}</div>
+${p("8.2", "Para dirimir quaisquer questões oriundas deste contrato que não possam ser resolvidas de forma consensual, fica eleito o Foro da Comarca de Belém/PA, com renúncia expressa a qualquer outro, por mais privilegiado que seja.")}
+${p("8.3", "O presente contrato poderá ser formalizado e assinado eletronicamente, por plataforma reconhecida no mercado que assegure a autenticidade, a integridade e a validade jurídica do documento, nos termos da Medida Provisória nº 2.200-2/2001, da Lei nº 14.063/2020 e do Código Civil. As assinaturas eletrônicas terão o mesmo valor legal das assinaturas manuscritas.")}
+
+<div class="fecho">
+${p("8.4", "E, por estarem justas e contratadas, as partes firmam o presente contrato, que passa a vigorar a partir da data de sua assinatura.")}
+<p class="data">Belém/PA, ${fsDataExtenso_()}.</p>
+<table class="assinaturas"><tr>
+  <td><div class="ass-linha"><div class="ass-papel">CONTRATANTE</div>${assinaturaContratante}</div></td>
+  <td><div class="ass-linha"><div class="ass-papel">CONTRATADO</div><div class="ass-nome">BENEDITO JOÃO VIEGAS DE MATOS</div><div class="ass-info">CPF: 925.437.152-15</div></div></td>
+</tr></table>
+</div>
+
+</td></tr></tbody></table>
+</body></html>`;
 }
