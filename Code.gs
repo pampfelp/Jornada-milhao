@@ -862,6 +862,9 @@ function acaoLancarRotinasDiarias_() {
 // PICPAY_SANDBOX_CLIENT_ID e PICPAY_SANDBOX_CLIENT_SECRET (teste). As
 // credenciais saem do Painel PicPay Empresas > Integrações (o secret aparece
 // uma vez só). Em sandbox, cliente e card nascem com "(TESTE)" no nome.
+// O link de teste da página (?modo=teste) manda teste:true e força sandbox
+// na PicPay e na Autentique só pra aquela inscrição, mesmo com produção
+// ligada: dá pra testar sempre sem gastar.
 //
 // Webhook da PicPay não é usado: Apps Script não lê o header authorization
 // que ela manda, e a URL de notificação não aceita query string. A consulta
@@ -876,11 +879,13 @@ var FS_CAMPOS_ = ["cnpj", "razaoSocial", "cep", "numero", "endereco", "cidade", 
 // Produção usa PICPAY_CLIENT_ID/SECRET (card "Link de Pagamento - API" do
 // painel); sandbox usa PICPAY_SANDBOX_CLIENT_ID/SECRET (card "Credenciais de
 // teste"). Uma não funciona no ambiente da outra: dá 401 invalid_client.
-// Trocar de ambiente é mudar só PICPAY_AMBIENTE.
-function picpayConfig_() {
+// PICPAY_AMBIENTE é o padrão do link normal. O link de teste
+// (?modo=teste) pede "sandbox" e cada inscrição guarda o ambiente em que
+// nasceu (insc.ambiente), então produção e teste convivem ao mesmo tempo.
+function picpayConfig_(ambiente) {
   var p = PropertiesService.getScriptProperties();
   var limpo = function (k) { return String(p.getProperty(k) || "").trim(); };
-  var amb = limpo("PICPAY_AMBIENTE").toLowerCase() || "sandbox";
+  var amb = String(ambiente || limpo("PICPAY_AMBIENTE") || "sandbox").toLowerCase();
   var producao = amb === "producao" || amb === "produção" || amb === "production";
   return {
     clientId: producao ? limpo("PICPAY_CLIENT_ID") : limpo("PICPAY_SANDBOX_CLIENT_ID"),
@@ -892,8 +897,8 @@ function picpayConfig_() {
 }
 
 // Token da PicPay vale 5 minutos; guardado por 4 pra não pedir a cada chamada.
-function picpayToken_() {
-  var cfg = picpayConfig_();
+function picpayToken_(ambiente) {
+  var cfg = picpayConfig_(ambiente);
   if (!cfg.clientId || !cfg.clientSecret) {
     throw new Error(cfg.ambiente === "producao"
       ? "PICPAY_CLIENT_ID ou PICPAY_CLIENT_SECRET ausente nas Script Properties."
@@ -917,9 +922,9 @@ function picpayToken_() {
   return json.access_token;
 }
 
-function picpay_(metodo, caminho, corpo) {
-  var cfg = picpayConfig_();
-  var opcoes = { method: metodo, muteHttpExceptions: true, headers: { Authorization: "Bearer " + picpayToken_(), Accept: "application/json" } };
+function picpay_(metodo, caminho, corpo, ambiente) {
+  var cfg = picpayConfig_(ambiente);
+  var opcoes = { method: metodo, muteHttpExceptions: true, headers: { Authorization: "Bearer " + picpayToken_(cfg.ambiente), Accept: "application/json" } };
   if (corpo) { opcoes.contentType = "application/json"; opcoes.payload = JSON.stringify(corpo); }
   var resp = UrlFetchApp.fetch(cfg.urlApi + caminho, opcoes);
   var json = {};
@@ -1034,7 +1039,7 @@ function acaoFsRegistrar_(body) {
   var v = fsLimparDados_(body.dados);
   if (v.problemas.length) return { ok: false, erro: "Confira: " + v.problemas.join(", ") + "." };
   var d = v.dados;
-  var teste = picpayConfig_().ambiente !== "producao";
+  var teste = body.teste === true || picpayConfig_().ambiente !== "producao";
   var sufixo = teste ? " (TESTE)" : "";
 
   var existente = fsCarregar_(body);
@@ -1090,7 +1095,7 @@ function acaoFsPagamento_(body) {
       amounts: { product: FS_VALOR_CENTAVOS_ }
     },
     options: { allow_create_pix_key: true, card_max_installment_number: FS_PARCELAS_MAX_, expired_at: expiraTexto }
-  });
+  }, insc.ambiente);
   if (r.status !== 201 && r.status !== 200) {
     var msg = r.json && r.json.error && r.json.error.message;
     return { ok: false, erro: "A PicPay não criou o pagamento" + (msg ? ": " + msg : " (" + r.status + ")") + "." };
@@ -1114,7 +1119,7 @@ function acaoFsStatus_(body) {
 function fsConferirPagamento_(inscricaoId, insc) {
   if (insc.status === "pago") return true;
   if (!insc.linkId) return false;
-  var r = picpay_("get", "/paymentlink/" + encodeURIComponent(insc.linkId) + "/transactions");
+  var r = picpay_("get", "/paymentlink/" + encodeURIComponent(insc.linkId) + "/transactions", null, insc.ambiente);
   var pagas = ((r.json && r.json.transactions) || []).filter(function (t) { return t.status === "PAYED"; });
   if (!pagas.length) return false;
 
@@ -1205,8 +1210,9 @@ function testarPicPay() {
 //                     que recebe link próprio) e devolve o link dele.
 //   fsContratoStatus  pergunta à Autentique se o representante já assinou.
 //
-// Assinatura de teste: quando PICPAY_AMBIENTE não é "producao", o documento
-// nasce em sandbox na Autentique (não gasta crédito, some em alguns dias).
+// Assinatura de teste: inscrição de teste (link ?modo=teste, ou
+// PICPAY_AMBIENTE diferente de "producao") cria o documento em sandbox na
+// Autentique (não gasta crédito, some em alguns dias).
 
 var FS_LOGO_URL_ = "https://pampfelp.github.io/Jornada-milhao/fast-start-logo.png";
 // Cláusula 3 e quadro "Investimento" com o texto aprovado por ele em
@@ -1278,7 +1284,7 @@ function acaoFsContrato_(body) {
 
   var token = PropertiesService.getScriptProperties().getProperty("AUTENTIQUE_API_TOKEN");
   if (!token) return { ok: false, erro: "Assinatura indisponível agora." };
-  var sandbox = picpayConfig_().ambiente !== "producao";
+  var sandbox = insc.ambiente !== "producao";
 
   var cliente = fsClienteDaInscricao_(insc);
   var html = fsMontarContratoHtml_(cliente, fsLogoDataUri_());
