@@ -854,9 +854,10 @@ function acaoLancarRotinasDiarias_() {
 //   verificarPendentesFastStart (gatilho a cada 15 min): mesma consulta pra
 //                      quem pagou e fechou a aba antes de voltar.
 //
-// Script Properties: PICPAY_CLIENT_ID, PICPAY_CLIENT_SECRET e
-// PICPAY_AMBIENTE ("sandbox" ou "producao"). As credenciais do Link de
-// Pagamento saem do Painel PicPay Empresas > Integrações (o secret aparece
+// Script Properties: PICPAY_AMBIENTE ("sandbox" ou "producao"),
+// PICPAY_CLIENT_ID e PICPAY_CLIENT_SECRET (produção) e
+// PICPAY_SANDBOX_CLIENT_ID e PICPAY_SANDBOX_CLIENT_SECRET (teste). As
+// credenciais saem do Painel PicPay Empresas > Integrações (o secret aparece
 // uma vez só). Em sandbox, cliente e card nascem com "(TESTE)" no nome.
 //
 // Webhook da PicPay não é usado: Apps Script não lê o header authorization
@@ -869,13 +870,18 @@ var FS_PAGINA_ = "https://pampfelp.github.io/Jornada-milhao/fast-start/";
 var FS_COLECAO_ = "inscricoesFastStart";
 var FS_CAMPOS_ = ["cnpj", "razaoSocial", "cep", "numero", "endereco", "cidade", "representanteNome", "representanteCpf", "email", "whatsapp"];
 
+// Produção usa PICPAY_CLIENT_ID/SECRET (card "Link de Pagamento - API" do
+// painel); sandbox usa PICPAY_SANDBOX_CLIENT_ID/SECRET (card "Credenciais de
+// teste"). Uma não funciona no ambiente da outra: dá 401 invalid_client.
+// Trocar de ambiente é mudar só PICPAY_AMBIENTE.
 function picpayConfig_() {
   var p = PropertiesService.getScriptProperties();
-  var amb = String(p.getProperty("PICPAY_AMBIENTE") || "sandbox").toLowerCase();
+  var limpo = function (k) { return String(p.getProperty(k) || "").trim(); };
+  var amb = limpo("PICPAY_AMBIENTE").toLowerCase() || "sandbox";
   var producao = amb === "producao" || amb === "produção" || amb === "production";
   return {
-    clientId: p.getProperty("PICPAY_CLIENT_ID"),
-    clientSecret: p.getProperty("PICPAY_CLIENT_SECRET"),
+    clientId: producao ? limpo("PICPAY_CLIENT_ID") : limpo("PICPAY_SANDBOX_CLIENT_ID"),
+    clientSecret: producao ? limpo("PICPAY_CLIENT_SECRET") : limpo("PICPAY_SANDBOX_CLIENT_SECRET"),
     urlToken: producao ? "https://ecommerce-api.svc.picpay.com/oauth2/token" : "https://api.ms.qa.limbo.work/oauth2/token",
     urlApi: producao ? "https://ecommerce-api.svc.picpay.com/v1" : "https://api.ms.qa.limbo.work/sandbox/v1",
     ambiente: producao ? "producao" : "sandbox"
@@ -885,7 +891,11 @@ function picpayConfig_() {
 // Token da PicPay vale 5 minutos; guardado por 4 pra não pedir a cada chamada.
 function picpayToken_() {
   var cfg = picpayConfig_();
-  if (!cfg.clientId || !cfg.clientSecret) throw new Error("PICPAY_CLIENT_ID ou PICPAY_CLIENT_SECRET ausente nas Script Properties.");
+  if (!cfg.clientId || !cfg.clientSecret) {
+    throw new Error(cfg.ambiente === "producao"
+      ? "PICPAY_CLIENT_ID ou PICPAY_CLIENT_SECRET ausente nas Script Properties."
+      : "PICPAY_SANDBOX_CLIENT_ID ou PICPAY_SANDBOX_CLIENT_SECRET ausente nas Script Properties.");
+  }
   var cache = CacheService.getScriptCache();
   var chave = "PICPAY_TOKEN_" + cfg.ambiente;
   var guardado = cache.get(chave);
@@ -897,7 +907,8 @@ function picpayToken_() {
   var json = {};
   try { json = JSON.parse(resp.getContentText()); } catch (err) {}
   if (resp.getResponseCode() !== 200 || !json.access_token) {
-    throw new Error("PicPay recusou as credenciais (" + resp.getResponseCode() + ", ambiente " + cfg.ambiente + ").");
+    throw new Error("PicPay recusou as credenciais (" + resp.getResponseCode() + ", ambiente " + cfg.ambiente +
+                    (json.error_description ? ": " + json.error_description : "") + ").");
   }
   cache.put(chave, json.access_token, 240);
   return json.access_token;
