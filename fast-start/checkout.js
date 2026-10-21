@@ -56,6 +56,7 @@ function mostrarTela(tela, { focar = true } = {}) {
   if (tela === "contrato") preencherContrato();
   if (tela === "pagamento" && !MODO_DEMONSTRACAO) prepararPagamento().then(() => { if (forma === "pix") vigiarPagamento(5000, 0); });
   if (tela === "final") {
+    fecharConfirmando();
     preencherFinal();
     clearInterval(vigia);
     try { sessionStorage.removeItem(CHAVE_INSCRICAO); } catch { /* sem armazenamento */ }
@@ -309,13 +310,11 @@ form.addEventListener("submit", (ev) => {
   }
 });
 
+// Assinatura simulada em todos os modos até a Autentique entrar: Code.gs
+// gera o PDF, cria o documento, assina pelo Benedito e devolve o link
+// exclusivo do cliente, que abre em #janela-aut.
 function assinar() {
-  if (MODO_DEMONSTRACAO) {
-    contratoAssinado();
-    return;
-  }
-  // produção: Code.gs gera o PDF, cria o documento na Autentique, assina pelo
-  // Benedito e devolve o link exclusivo do cliente, que abre em #janela-aut.
+  contratoAssinado();
 }
 function contratoAssinado() {
   marcarFeita(3);
