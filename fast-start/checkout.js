@@ -513,12 +513,28 @@ $('[data-acao="voltar"]').addEventListener("click", () => {
   if (i > 0 && i < 3) mostrarTela(TELAS[i - 1]);
 });
 $$("[data-forma]").forEach((b) => b.addEventListener("click", () => trocarForma(b.dataset.forma)));
+// O botão é guardado antes do await: depois dele, ev.currentTarget já é null.
+// Sem a API de área de transferência (navegador antigo ou sem permissão),
+// copia pelo jeito antigo, selecionando um campo escondido.
 $(".copia button").addEventListener("click", async (ev) => {
-  try {
-    await navigator.clipboard.writeText($(".copia .codigo").textContent.trim());
-    ev.currentTarget.textContent = "Copiado";
-    setTimeout(() => (ev.currentTarget.textContent = "Copiar"), 2000);
-  } catch { /* navegador sem permissão de copiar */ }
+  const botao = ev.currentTarget;
+  const codigo = $(".copia .codigo").textContent.trim();
+  let copiou = false;
+  try { await navigator.clipboard.writeText(codigo); copiou = true; } catch { /* tenta o jeito antigo */ }
+  if (!copiou) {
+    const campo = document.createElement("textarea");
+    campo.value = codigo;
+    campo.setAttribute("readonly", "");
+    campo.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+    document.body.append(campo);
+    campo.select();
+    campo.setSelectionRange(0, codigo.length);
+    try { copiou = document.execCommand("copy"); } catch { copiou = false; }
+    campo.remove();
+  }
+  botao.textContent = copiou ? "Copiado" : "Copie à mão";
+  if (!copiou) $(".copia").classList.add("aberta"); // mostra o código inteiro pra selecionar
+  setTimeout(() => (botao.textContent = "Copiar"), 2500);
 });
 $('[data-acao="fechar-aut"]').addEventListener("click", () => {
   $("#janela-aut").hidden = true;
