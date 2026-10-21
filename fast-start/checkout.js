@@ -257,10 +257,14 @@ function primeiroNome() { return campo("representanteNome").value.trim().split(/
 function preencherContrato() {
   $('[data-campo="razaoSocial"]').textContent = campo("razaoSocial").value.trim() || "Sua empresa";
 }
+// Voltando da PicPay em outro navegador (o app dela pode abrir o retorno
+// fora do navegador original), os dados digitados não estão aqui: o texto
+// fica sem nome em vez de sair com lacuna.
 function preencherFinal() {
-  $('[data-campo="primeiroNome"]').textContent = primeiroNome();
+  const nome = primeiroNome(), email = campo("email").value.trim();
+  $('[data-campo="primeiroNome"]').textContent = nome ? `, ${nome}` : "";
   $('[data-campo="nomeCurto"]').textContent = nomeCurto();
-  $('[data-campo="email"]').textContent = campo("email").value.trim();
+  $('[data-campo="email"]').textContent = email ? `em ${email}` : "no e-mail que você informou";
 }
 
 /* ============ confirmação entre etapas ============ */
@@ -388,7 +392,7 @@ async function registrar() {
 
 let pagamento = null;
 async function prepararPagamento() {
-  if (MODO_DEMONSTRACAO) return null;
+  if (MODO_DEMONSTRACAO || !inscricao().chave) return null;
   if (pagamento) return pagamento;
   try {
     const r = await chamar("fsPagamento", inscricao());
@@ -436,6 +440,12 @@ function vigiarPagamento(intervalo, limite, aoDesistir) {
 
 function esperarRetorno() {
   mostrarTela("pagamento", { focar: false });
+  if (!inscricao().chave) {
+    // Sem a chave desta inscrição neste navegador não dá pra perguntar o
+    // status; o gatilho de 15 min do Code.gs confere e avisa a equipe.
+    avisar("Recebemos você de volta. Assim que a PicPay confirmar o pagamento, a equipe chama você no WhatsApp.");
+    return;
+  }
   confirmandoPagamento();
   vigiarPagamento(4000, 3 * 60 * 1000, () => {
     fecharConfirmando();
