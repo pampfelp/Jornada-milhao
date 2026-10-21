@@ -896,6 +896,13 @@ function picpayConfig_(ambiente) {
   };
 }
 
+// O Cloudflare na frente da API de produção da PicPay passou a barrar (403
+// "Attention Required") a criação de link quando o pedido se identifica
+// como o Apps Script faz por padrão; com identificação própria passa
+// (testado em 2026-10-21). Por isso todo pedido à PicPay leva este
+// User-Agent.
+var PICPAY_USER_AGENT_ = "Mozilla/5.0 (compatible; JornadaCheckout/1.0; +https://pampfelp.github.io/Jornada-milhao/fast-start/)";
+
 // Token da PicPay vale 5 minutos; guardado por 4 pra não pedir a cada chamada.
 function picpayToken_(ambiente) {
   var cfg = picpayConfig_(ambiente);
@@ -910,6 +917,7 @@ function picpayToken_(ambiente) {
   if (guardado) return guardado;
   var resp = UrlFetchApp.fetch(cfg.urlToken, {
     method: "post", contentType: "application/json", muteHttpExceptions: true,
+    headers: { "User-Agent": PICPAY_USER_AGENT_ },
     payload: JSON.stringify({ grant_type: "client_credentials", client_id: cfg.clientId, client_secret: cfg.clientSecret })
   });
   var json = {};
@@ -924,11 +932,14 @@ function picpayToken_(ambiente) {
 
 function picpay_(metodo, caminho, corpo, ambiente) {
   var cfg = picpayConfig_(ambiente);
-  var opcoes = { method: metodo, muteHttpExceptions: true, headers: { Authorization: "Bearer " + picpayToken_(cfg.ambiente), Accept: "application/json" } };
+  var opcoes = { method: metodo, muteHttpExceptions: true, headers: { Authorization: "Bearer " + picpayToken_(cfg.ambiente), Accept: "application/json", "User-Agent": PICPAY_USER_AGENT_ } };
   if (corpo) { opcoes.contentType = "application/json"; opcoes.payload = JSON.stringify(corpo); }
   var resp = UrlFetchApp.fetch(cfg.urlApi + caminho, opcoes);
   var json = {};
   try { json = JSON.parse(resp.getContentText() || "{}"); } catch (err) {}
+  if (resp.getResponseCode() >= 400) {
+    console.error("PicPay " + metodo + " " + caminho + " -> " + resp.getResponseCode() + ": " + resp.getContentText().slice(0, 300));
+  }
   return { status: resp.getResponseCode(), json: json };
 }
 
@@ -1182,10 +1193,13 @@ function verificarPendentesFastStart() {
   }
 }
 
-// Rode no editor (▶) pra testar as credenciais da PicPay sem passar pela
-// página: cria um link de R$ 1,00 e mostra no log se deu certo.
+// Rode no editor (▶) pra testar a PicPay do ambiente ligado: mostra a
+// identificação (User-Agent) que sai do Apps Script, cria um link de R$ 1,00
+// e desativa na hora. "status 201" = tudo certo.
 function testarPicPay() {
   var cfg = picpayConfig_();
+  var eco = UrlFetchApp.fetch("https://httpbin.org/user-agent", { headers: { "User-Agent": PICPAY_USER_AGENT_ }, muteHttpExceptions: true });
+  console.log("User-Agent que sai daqui: " + eco.getContentText());
   var r = picpay_("post", "/paymentlink/create", {
     charge: { name: "Teste de integração", description: "Teste", order_number: "teste" + Date.now().toString().slice(-8),
               redirect_url: FS_PAGINA_, payment: { methods: ["CREDIT_CARD", "BRCODE"], brcode_arrangements: ["PIX"] },
@@ -1194,6 +1208,10 @@ function testarPicPay() {
                expired_at: Utilities.formatDate(new Date(Date.now() + 24 * 3600 * 1000), "America/Belem", "yyyy-MM-dd") }
   });
   console.log("Ambiente: " + cfg.ambiente + " | status " + r.status + " | link: " + (r.json.link || JSON.stringify(r.json)));
+  if (r.json.link) {
+    var d = picpay_("post", "/paymentlink/" + r.json.link.split("/").pop() + "/inactive", {});
+    console.log("Link de teste desativado: status " + d.status);
+  }
 }
 
 // ── Fast Start: contrato e assinatura na Autentique (etapa 3) ──
