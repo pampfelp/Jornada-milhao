@@ -51,6 +51,7 @@ function mostrarTela(tela, { focar = true } = {}) {
   const rodape = $(".rodape");
   rodape.hidden = tela === "final";
   rodape.classList.toggle("coluna", tela === "pagamento");
+  $(".nota", rodape).classList.remove("aviso");
   $('[data-acao="voltar"]').hidden = etapa === 1 || etapa === 4;
   atualizarBotao();
   if (tela === "contrato") preencherContrato();
@@ -81,6 +82,7 @@ function atualizarBotao() {
   avancar.hidden = atual === "pagamento" && forma === "pix";
   const [icone, rotulo, lado] = botao;
   avancar.innerHTML = lado === "esq" ? `${svg(icone)}${rotulo}` : `${rotulo}${svg(icone)}`;
+  if (nota.classList.contains("aviso")) return; // aviso de erro só sai ao trocar de tela
   nota.hidden = !texto;
   nota.innerHTML = texto ? `${svg("cadeado")}${texto}` : "";
 }
@@ -323,17 +325,18 @@ async function assinar() {
   if (MODO_DEMONSTRACAO) { contratoAssinado(); return; }
   ocupado = true;
   carregando("Preparando o contrato...");
+  let erro = "";
   try {
     const r = await chamar("fsContrato", inscricao());
-    if (r.assinado) { contratoAssinado(); return; }
-    abrirJanelaAutentique(r.link);
+    if (r.assinado) contratoAssinado(); else abrirJanelaAutentique(r.link);
   } catch (e) {
-    avisar(`O contrato não abriu agora: ${e.message.replace(/\.$/, "")}. Tente de novo em instantes.`);
-  } finally {
-    ocupado = false;
-    carregando("");
-    atualizarBotao();
+    erro = e.message.replace(/\.$/, "");
   }
+  ocupado = false;
+  carregando("");
+  atualizarBotao();
+  // depois do atualizarBotao, que limpa a nota
+  if (erro) avisar(`O contrato não abriu agora: ${erro}. Tente de novo em instantes.`);
 }
 
 function abrirJanelaAutentique(link) {
