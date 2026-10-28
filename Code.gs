@@ -859,8 +859,11 @@ function acaoLancarRotinasDiarias_() {
 //
 // Script Properties: PICPAY_AMBIENTE ("sandbox" ou "producao"),
 // PICPAY_CLIENT_ID e PICPAY_CLIENT_SECRET (produção) e
-// PICPAY_SANDBOX_CLIENT_ID e PICPAY_SANDBOX_CLIENT_SECRET (teste). As
-// credenciais saem do Painel PicPay Empresas > Integrações (o secret aparece
+// PICPAY_SANDBOX_CLIENT_ID e PICPAY_SANDBOX_CLIENT_SECRET (teste).
+// As chamadas da API em produção podem usar PICPAY_PROXY_URL (raiz do Worker)
+// e PICPAY_PROXY_SECRET (mesmo segredo BRIDGE_KEY configurado no Worker).
+// Essas duas propriedades nunca entram na página pública nem no Git.
+// As credenciais saem do Painel PicPay Empresas > Integrações (o secret aparece
 // uma vez só). Em sandbox, cliente e card nascem com "(TESTE)" no nome.
 // O link de teste da página (?modo=teste) manda teste:true e força sandbox
 // na PicPay e na Autentique só pra aquela inscrição, mesmo com produção
@@ -896,11 +899,9 @@ function picpayConfig_(ambiente) {
   };
 }
 
-// O Cloudflare na frente da API de produção da PicPay passou a barrar (403
-// "Attention Required") a criação de link quando o pedido se identifica
-// como o Apps Script faz por padrão; com identificação própria passa
-// (testado em 2026-10-21). Por isso todo pedido à PicPay leva este
-// User-Agent.
+// O Apps Script substitui este User-Agent (confirmado em 28/10). Na produção,
+// a ponte opcional faz as chamadas da API fora do UrlFetchApp; o token e o
+// sandbox continuam diretos. A identificação é aplicada pela ponte.
 var PICPAY_USER_AGENT_ = "Mozilla/5.0 (compatible; JornadaCheckout/1.0; +https://pampfelp.github.io/Jornada-milhao/fast-start/)";
 
 // Token da PicPay vale 5 minutos; guardado por 4 pra não pedir a cada chamada.
@@ -934,7 +935,19 @@ function picpay_(metodo, caminho, corpo, ambiente) {
   var cfg = picpayConfig_(ambiente);
   var opcoes = { method: metodo, muteHttpExceptions: true, headers: { Authorization: "Bearer " + picpayToken_(cfg.ambiente), Accept: "application/json", "User-Agent": PICPAY_USER_AGENT_ } };
   if (corpo) { opcoes.contentType = "application/json"; opcoes.payload = JSON.stringify(corpo); }
-  var resp = UrlFetchApp.fetch(cfg.urlApi + caminho, opcoes);
+  var destino = cfg.urlApi + caminho;
+  if (cfg.ambiente === "producao") {
+    var props = PropertiesService.getScriptProperties();
+    var ponte = String(props.getProperty("PICPAY_PROXY_URL") || "").trim().replace(/\/+$/, "");
+    var segredo = String(props.getProperty("PICPAY_PROXY_SECRET") || "").trim();
+    if (ponte || segredo) {
+      if (!/^https:\/\/[^/?#]+$/.test(ponte) || !segredo) throw new Error("Configuração da integração PicPay incompleta. Fale com a equipe.");
+      destino = ponte + caminho;
+      opcoes.headers["X-Bridge-Key"] = segredo;
+      opcoes.followRedirects = false;
+    }
+  }
+  var resp = UrlFetchApp.fetch(destino, opcoes);
   var json = {};
   try { json = JSON.parse(resp.getContentText() || "{}"); } catch (err) {}
   if (resp.getResponseCode() >= 400) {
@@ -1131,6 +1144,9 @@ function fsConferirPagamento_(inscricaoId, insc) {
   if (insc.status === "pago") return true;
   if (!insc.linkId) return false;
   var r = picpay_("get", "/paymentlink/" + encodeURIComponent(insc.linkId) + "/transactions", null, insc.ambiente);
+  if (r.status !== 200 || !r.json || !Array.isArray(r.json.transactions)) {
+    throw new Error("Não foi possível consultar a confirmação do pagamento agora. A equipe pode conferir seu pagamento.");
+  }
   var pagas = ((r.json && r.json.transactions) || []).filter(function (t) { return t.status === "PAYED"; });
   if (!pagas.length) return false;
 
@@ -1193,13 +1209,13 @@ function verificarPendentesFastStart() {
   }
 }
 
-// Rode no editor (▶) pra testar a PicPay do ambiente ligado: mostra a
-// identificação (User-Agent) que sai do Apps Script, cria um link de R$ 1,00
+// Rode no editor (▶) pra testar a PicPay do ambiente ligado: mostra o
+// transporte usado (direto/ponte), cria um link de R$ 1,00
 // e desativa na hora. "status 201" = tudo certo.
 function testarPicPay() {
   var cfg = picpayConfig_();
-  var eco = UrlFetchApp.fetch("https://httpbin.org/user-agent", { headers: { "User-Agent": PICPAY_USER_AGENT_ }, muteHttpExceptions: true });
-  console.log("User-Agent que sai daqui: " + eco.getContentText());
+  var usaPonte = cfg.ambiente === "producao" && !!PropertiesService.getScriptProperties().getProperty("PICPAY_PROXY_URL");
+  console.log("Transporte da API: " + (usaPonte ? "ponte" : "direto"));
   var r = picpay_("post", "/paymentlink/create", {
     charge: { name: "Teste de integração", description: "Teste", order_number: "teste" + Date.now().toString().slice(-8),
               redirect_url: FS_PAGINA_, payment: { methods: ["CREDIT_CARD", "BRCODE"], brcode_arrangements: ["PIX"] },

@@ -174,7 +174,6 @@ body.com-janela::after{content:"";position:fixed;inset:0;z-index:5;background:rg
 .parte em .ic-svg{width:11px;height:11px;stroke-width:3}
 .selo-aut > .ic-svg{width:22px;height:22px;stroke-width:1.8;color:var(--ambar)}
 .abas .ic-svg{width:16px;height:16px;stroke-width:1.8}
-.qr{background-image:url("qr-demonstracao.svg")}
 .btn .ic-svg{width:18px;height:18px;stroke-width:2.4}
 .btn.sec .ic-svg{stroke-width:2.2}
 .nota .ic-svg{width:12px;height:12px}

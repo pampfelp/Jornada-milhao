@@ -58,7 +58,10 @@ function mostrarTela(tela, { focar = true } = {}) {
   $('[data-acao="voltar"]').hidden = etapa === 1 || etapa === 4;
   atualizarBotao();
   if (tela === "contrato") preencherContrato();
-  if (tela === "pagamento" && !MODO_DEMONSTRACAO) prepararPagamento().then(() => { if (forma === "pix") vigiarPagamento(5000, 0); });
+  if (tela === "pagamento") {
+    if (MODO_DEMONSTRACAO) limparPix("Demonstração: nenhum Pix foi gerado.");
+    else prepararPagamento().then((p) => { if (p && atual === "pagamento" && forma === "pix") vigiarPagamento(5000, 0); });
+  }
   if (tela === "final") {
     fecharConfirmando();
     preencherFinal();
@@ -96,7 +99,10 @@ function trocarForma(nova) {
   $$("[data-forma-painel]").forEach((p) => (p.hidden = p.dataset.formaPainel !== nova));
   atualizarBotao();
   if (!MODO_DEMONSTRACAO && atual === "pagamento") {
-    if (nova === "pix") vigiarPagamento(5000, 0); else clearInterval(vigia);
+    clearInterval(vigia);
+    if (nova === "pix") prepararPagamento().then((p) => {
+      if (p && atual === "pagamento" && forma === "pix") vigiarPagamento(5000, 0);
+    });
   }
 }
 
@@ -436,49 +442,114 @@ async function registrar() {
 }
 
 let pagamento = null;
-async function prepararPagamento() {
-  if (MODO_DEMONSTRACAO || !inscricao().chave) return null;
-  if (pagamento) return pagamento;
-  try {
+let pagamentoEmPreparo = null;
+let codigoPix = "";
+let bibliotecaQr = null;
+const ESPERA_PIX = "Aguardando o pagamento. Esta tela atualiza sozinha.";
+function prepararPagamento() {
+  if (MODO_DEMONSTRACAO || !inscricao().chave) {
+    limparPix(MODO_DEMONSTRACAO ? "Demonstração: nenhum Pix foi gerado." : "Conclua a inscrição para gerar o Pix.");
+    return Promise.resolve(null);
+  }
+  if (pagamento) { desenharPix(pagamento.brcode); return Promise.resolve(pagamento); }
+  if (pagamentoEmPreparo) return pagamentoEmPreparo;
+  limparPix("Preparando seu Pix...");
+  avisar("");
+  pagamentoEmPreparo = (async () => { try {
     const r = await chamar("fsPagamento", inscricao());
     if (r.pago) { mostrarTela("final"); return null; }
+    if (!brcodeValido(r.brcode)) throw new Error("O código Pix recebido está incompleto ou inválido.");
     pagamento = r;
     desenharPix(r.brcode);
     return r;
   } catch (e) {
-    avisar(`O pagamento não abriu agora: ${e.message.replace(/\.$/, "")}. Tente de novo em instantes.`);
+    limparPix("Não foi possível gerar o Pix. Selecione Pix novamente para tentar.");
+    avisar(`Não foi possível gerar a cobrança: ${e.message.replace(/\.$/, "")}. Tente novamente ou fale com a equipe.`);
     return null;
+  } finally { pagamentoEmPreparo = null; } })();
+  return pagamentoEmPreparo;
+}
+
+function brcodeValido(codigo) {
+  if (typeof codigo !== "string" || codigo.includes("...") || !/6304[0-9A-F]{4}$/i.test(codigo)) return false;
+  const ler = (texto) => {
+    const campos = new Map();
+    for (let i = 0; i < texto.length;) {
+      if (!/^\d{4}$/.test(texto.slice(i, i + 4))) return null;
+      const id = texto.slice(i, i + 2), tamanho = Number(texto.slice(i + 2, i + 4));
+      i += 4;
+      if (campos.has(id) || i + tamanho > texto.length) return null;
+      campos.set(id, texto.slice(i, i + tamanho)); i += tamanho;
+    }
+    return campos;
+  };
+  const campos = ler(codigo);
+  if (!campos || campos.get("00") !== "01" || campos.get("53") !== "986" || campos.get("58") !== "BR") return false;
+  const pix = [...campos].some(([id, valor]) => Number(id) >= 26 && Number(id) <= 51 && ler(valor)?.get("00")?.toLowerCase() === "br.gov.bcb.pix");
+  if (!pix) return false;
+  let crc = 0xffff;
+  for (const byte of new TextEncoder().encode(codigo.slice(0, -4))) {
+    crc ^= byte << 8;
+    for (let bit = 0; bit < 8; bit++) crc = ((crc << 1) ^ (crc & 0x8000 ? 0x1021 : 0)) & 0xffff;
   }
+  return crc.toString(16).padStart(4, "0").toUpperCase() === codigo.slice(-4).toUpperCase();
+}
+
+function limparPix(mensagem) {
+  codigoPix = "";
+  $(".qr").innerHTML = "";
+  $(".qr").hidden = true;
+  $(".copia").classList.remove("aberta");
+  $(".copia .codigo").textContent = mensagem;
+  $(".espera").textContent = mensagem;
+  $(".copia button").disabled = true;
 }
 
 // QR do Pix desenhado aqui a partir do código copia e cola que a PicPay devolve.
 function desenharPix(brcode) {
-  if (!brcode) return;
+  if (!brcodeValido(brcode)) { limparPix("Código Pix indisponível. Selecione Pix novamente para tentar."); return; }
+  codigoPix = brcode;
   $(".copia .codigo").textContent = brcode;
+  $(".copia button").disabled = false;
+  $(".espera").textContent = ESPERA_PIX;
   const pintar = () => {
+    if (codigoPix !== brcode) return;
     const qr = window.qrcode(0, "M");
     qr.addData(brcode);
     qr.make();
     const caixa = $(".qr");
-    caixa.style.backgroundImage = "none";
     caixa.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+    caixa.hidden = false;
   };
-  if (window.qrcode) { pintar(); return; }
-  const s = document.createElement("script");
-  s.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js";
-  s.onload = pintar;
-  document.head.append(s);
+  if (!bibliotecaQr) bibliotecaQr = window.qrcode ? Promise.resolve() : new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js";
+    s.onload = resolve;
+    s.onerror = () => { s.remove(); reject(new Error("QR indisponível")); };
+    document.head.append(s);
+  });
+  bibliotecaQr.then(pintar).catch(() => {
+    bibliotecaQr = null;
+    if (codigoPix === brcode) limparPix("O QR não abriu. Selecione Pix novamente para tentar.");
+  });
 }
 
 let vigia = null;
 function vigiarPagamento(intervalo, limite, aoDesistir) {
   clearInterval(vigia);
+  if (!pagamento) return;
   const inicio = Date.now();
+  let consultaFalhou = false;
   vigia = setInterval(async () => {
     try {
       const r = await chamar("fsStatus", inscricao());
       if (r.pago) { clearInterval(vigia); fecharConfirmando(); mostrarTela("final"); return; }
-    } catch { /* tenta de novo no próximo ciclo */ }
+      if (consultaFalhou && codigoPix) $(".espera").textContent = ESPERA_PIX;
+      consultaFalhou = false;
+    } catch {
+      consultaFalhou = true;
+      if (codigoPix) $(".espera").textContent = "Não foi possível consultar o pagamento. Vamos tentar novamente automaticamente; se persistir, fale com a equipe.";
+    }
     if (limite && Date.now() - inicio > limite) { clearInterval(vigia); aoDesistir?.(); }
   }, intervalo);
 }
@@ -491,10 +562,13 @@ function esperarRetorno() {
     avisar("Recebemos você de volta. Assim que a PicPay confirmar o pagamento, a equipe chama você no WhatsApp.");
     return;
   }
-  confirmandoPagamento();
-  vigiarPagamento(4000, 3 * 60 * 1000, () => {
-    fecharConfirmando();
-    avisar("Ainda não recebemos a confirmação da PicPay. Se você já pagou, fica tranquilo: a equipe confere e chama você no WhatsApp.");
+  prepararPagamento().then((p) => {
+    if (!p || atual !== "pagamento") return;
+    confirmandoPagamento();
+    vigiarPagamento(4000, 3 * 60 * 1000, () => {
+      fecharConfirmando();
+      avisar("Ainda não recebemos a confirmação da PicPay. Se você já pagou, fica tranquilo: a equipe confere e chama você no WhatsApp.");
+    });
   });
 }
 
@@ -521,7 +595,8 @@ $$("[data-forma]").forEach((b) => b.addEventListener("click", () => trocarForma(
 // copia pelo jeito antigo, selecionando um campo escondido.
 $(".copia button").addEventListener("click", async (ev) => {
   const botao = ev.currentTarget;
-  const codigo = $(".copia .codigo").textContent.trim();
+  const codigo = codigoPix;
+  if (!brcodeValido(codigo)) return;
   let copiou = false;
   try { await navigator.clipboard.writeText(codigo); copiou = true; } catch { /* tenta o jeito antigo */ }
   if (!copiou) {

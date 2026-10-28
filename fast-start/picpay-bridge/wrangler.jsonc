@@ -1,0 +1,7 @@
+{
+  "name": "jornada-fast-start-picpay",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-28",
+  "workers_dev": true,
+  "observability": { "enabled": false }
+}
