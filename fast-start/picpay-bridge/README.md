@@ -1,14 +1,22 @@
 # Ponte PicPay do Fast Start
 
-Publicada na Cloudflare em 28/10/2026; aguarda configuração do segredo e
-validação contra a PicPay. O log do Apps Script confirmou que a tentativa de trocar o
-User-Agent não funciona: o Google substitui o header e a criação retorna 403.
+Publicada e validada em produção em 28/10/2026. O 403 na criação pelo Apps
+Script foi resolvido usando a ponte: `testarPicPay` confirmou transporte
+`ponte`, criação 201 e inativação 200. A versão 21 do Apps Script foi publicada
+na mesma implantação usada pelo checkout, às 16h29. O Google substituía o
+User-Agent configurado, por isso o override anterior não resolveu o bloqueio.
 
 A ponte encaminha somente criação de link, consulta de transações e
 inativação à origem fixa da PicPay. Exige segredo próprio e token PicPay;
 não aceita destino arbitrário, não oferece CORS nem registra credenciais.
 O client_secret permanece nas Script Properties. Sandbox e OAuth continuam
-diretos. A aceitação da requisição pela PicPay precisa ser testada após publicar.
+diretos. OAuth retornou 200; o teste complementar pela ponte confirmou criação
+201, BRCode aceito pelo validador do checkout, consulta 200 e inativação 200.
+Os dois links de R$ 1,00 criados nos testes foram inativados; não houve
+pagamento nem estorno de dinheiro. QR/cartão do cliente, retorno real e
+confirmação da primeira venda ainda precisam ser acompanhados.
+Após configurar o segredo, GET anônimo à ponte em produção foi rejeitado
+com 401, conferido pelo principal.
 
 ## Publicar
 
