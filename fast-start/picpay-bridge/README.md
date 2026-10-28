@@ -1,7 +1,7 @@
 # Ponte PicPay do Fast Start
 
-Preparada localmente em 28/10/2026. Ainda não publicada nem validada contra
-a PicPay. O log do Apps Script confirmou que a tentativa de trocar o
+Publicada na Cloudflare em 28/10/2026; aguarda configuração do segredo e
+validação contra a PicPay. O log do Apps Script confirmou que a tentativa de trocar o
 User-Agent não funciona: o Google substitui o header e a criação retorna 403.
 
 A ponte encaminha somente criação de link, consulta de transações e
