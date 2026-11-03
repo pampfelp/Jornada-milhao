@@ -1742,6 +1742,17 @@ function cobMontarTexto_(p, nome, contatos, pagamento, hoje) {
     "Pedimos a gentileza de confirmar o pagamento ou nos retornar aqui explicando a situação.\n\n" +
     "Atenciosamente,\nEquipe Jornada do Milhão";
 }
+// Nome e último sobrenome da pessoa (pedido dele, 03/11): "Maria Clara
+// Souza Lima" vira "Maria Lima". Empresa sem representante fica com o nome
+// inteiro, porque o primeiro e o último termo de uma razão social não formam
+// nome nenhum.
+function cobNomeCurto_(cliente, p) {
+  var ehPessoa = cliente && (cliente.representanteNome || String(cliente.cpfCnpj || "").replace(/\D/g, "").length <= 11);
+  var nome = String((cliente && (cliente.representanteNome || cliente.nome)) || p.clienteNome || "cliente").trim();
+  if (!ehPessoa) return nome;
+  var partes = nome.split(/\s+/);
+  return partes.length > 2 ? partes[0] + " " + partes[partes.length - 1] : nome;
+}
 function cobTelefone_(t) {
   var d = String(t || "").replace(/\D/g, "");
   if (d.length === 10 || d.length === 11) return "55" + d;
@@ -1812,7 +1823,7 @@ function cobPrepararParcela_(token, parcelaId, teste, registrar) {
   var contrato = p.contratoId ? cobLer_(token, "contratos/" + p.contratoId) : null;
   var clienteId = (contrato && contrato.clienteId) || p.clienteId;
   var cliente = clienteId ? cobLer_(token, "clientes/" + clienteId) : null;
-  var nome = (cliente && (cliente.representanteNome || cliente.nome)) || p.clienteNome || "cliente";
+  var nome = cobNomeCurto_(cliente, p);
 
   var ambiente = teste ? "sandbox" : picpayConfig_().ambiente;
   var pg = cobGarantirLink_(token, p, ambiente, hoje);
