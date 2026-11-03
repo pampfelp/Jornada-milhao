@@ -3935,8 +3935,15 @@ document.getElementById("btn-salvar-despesa").addEventListener("click", async ()
   } catch (err) { mostrarErro(err.message); }
 });
 
+// Ocorrência de recorrente apagada não volta: o mês fica marcado em
+// mesesLancados. Em 2026-11-03 cinco ocorrências de novembro sumiram assim
+// sem ninguém perceber, então a confirmação avisa.
 async function excluirDespesa(id) {
-  if (!(await confirmarAcao("Excluir este lançamento?"))) return;
+  const d = STATE.despesas.find((x) => x.id === id);
+  const aviso = d && d.origemRecorrenteId
+    ? "Excluir este lançamento? Ele veio de Custos Recorrentes e não será lançado de novo neste mês. Para mudar data ou valor, use Editar."
+    : "Excluir este lançamento?";
+  if (!(await confirmarAcao(aviso))) return;
   try { await deleteDoc(doc(db, "despesas", id)); } catch (err) { mostrarErro(err.message); }
 }
 
