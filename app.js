@@ -5,7 +5,7 @@
 import { db, APPS_SCRIPT_PROXY_URL } from "./firebase-init.js";
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, setDoc, getDocs, getDocsFromServer,
-  onSnapshot, query, orderBy, serverTimestamp, Timestamp
+  onSnapshot, query, orderBy, serverTimestamp, Timestamp, runTransaction
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import {
   AUTH, PAPEIS, SENHA_PRIMEIRO_ACESSO, iniciarAuth, mensagemErroAuth, podeVer, isAdmin, papelAtual, AREAS_CONCEDIVEIS, areasDoPapel, sessaoLiberada,
@@ -3984,6 +3984,12 @@ function abrirDetalheDespesa(id) {
 // sozinho — a checagem do mês atual roda no navegador de quem abrir o
 // sistema, toda vez que a lista de recorrentes atualiza. O mesmo mecanismo
 // atende o botão "Lançar custos do mês" pra qualquer mês, inclusive futuro.
+//
+// Cada ocorrência tem ID fixo (rec_<recorrente>_<mês>) e nasce numa
+// transação que relê o molde no servidor (2026-11-03): antes, a trava era
+// só a variável desta aba, e duas ou três abas/aparelhos abertos na virada
+// do mês (ou um com cache velho) liam mesesLancados sem o mês novo e cada
+// um criava a sua cópia — novembro saiu triplicado.
 async function lancarRecorrentesDoMes(mesRef) {
   if (lancandoRecorrentes) return 0;
   lancandoRecorrentes = true;
@@ -3994,14 +4000,22 @@ async function lancarRecorrentesDoMes(mesRef) {
       if (r.ativo === false) continue;
       if (r.mesesLancados && r.mesesLancados[mesRef]) continue;
       const dia = String(Math.min(Math.max(parseInt(r.diaVencimento, 10) || 1, 1), ultimoDia)).padStart(2, "0");
-      await addDoc(collection(db, "despesas"), {
-        descricao: r.descricao, categoria: r.categoria || "", tipo: r.tipo || "despesa",
-        valor: Number(r.valor) || 0, chavePix: r.chavePix || "",
-        data: `${mesRef}-${dia}`, origemRecorrenteId: r.id,
-        status: "esperado", dataPagamento: null, createdAt: serverTimestamp()
+      const refRec = doc(db, "despesasRecorrentes", r.id);
+      const refOcorrencia = doc(db, "despesas", `rec_${r.id}_${mesRef}`);
+      const criou = await runTransaction(db, async (tx) => {
+        const molde = await tx.get(refRec);
+        if (!molde.exists() || (molde.data().mesesLancados || {})[mesRef]) return false;
+        if ((await tx.get(refOcorrencia)).exists()) return false;
+        tx.set(refOcorrencia, {
+          descricao: r.descricao, categoria: r.categoria || "", tipo: r.tipo || "despesa",
+          valor: Number(r.valor) || 0, chavePix: r.chavePix || "",
+          data: `${mesRef}-${dia}`, origemRecorrenteId: r.id,
+          status: "esperado", dataPagamento: null, createdAt: serverTimestamp()
+        });
+        tx.update(refRec, { [`mesesLancados.${mesRef}`]: true });
+        return true;
       });
-      await updateDoc(doc(db, "despesasRecorrentes", r.id), { [`mesesLancados.${mesRef}`]: true });
-      criados++;
+      if (criou) criados++;
     }
   } catch (err) {
     // Silencioso só na checagem automática do mês corrente — o botão manual
