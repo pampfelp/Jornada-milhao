@@ -1613,11 +1613,12 @@ ${p("8.4", "E, por estarem justas e contratadas, as partes firmam o presente con
 //                     baixa no que foi pago, cria a tarefa de agradecer e,
 //                     nos horários de cobrança, manda a notificação.
 //
-// A rotina não tem ninguém logado: usa a conta de serviço do Firebase, na
-// Script Property FIREBASE_SERVICE_ACCOUNT (o .json inteiro, Firebase >
-// Configurações do projeto > Contas de serviço > Gerar nova chave privada).
-// Ela também é quem manda o push (Firebase Cloud Messaging). Sem ela, o
-// botão funciona e a baixa e as notificações ficam paradas.
+// A rotina não tem ninguém logado: usa a conta Google dona deste script, que
+// é dona do Firebase financeirojornadamilhao (ScriptApp.getOAuthToken, com
+// os escopos datastore e firebase.messaging no appsscript.json). Sem chave
+// guardada em lugar nenhum. Se um dia o script mudar de dono, a Script
+// Property FIREBASE_SERVICE_ACCOUNT (o .json de uma conta de serviço) passa
+// a valer no lugar.
 //
 // Link de teste: no ERP aberto com ?modo=teste, o link nasce no sandbox da
 // PicPay, que dá tudo como pago. Por isso só vale em parcela de cliente com
@@ -1646,6 +1647,7 @@ function cobFsUrl_(caminho) {
 }
 function cobFsPedir_(token, metodo, url, corpo) {
   var opcoes = { method: metodo, muteHttpExceptions: true, headers: { Authorization: "Bearer " + token } };
+  if (token === COB_TOKEN_CONTA_) opcoes.headers["x-goog-user-project"] = FIRESTORE_PROJECT_ID_;
   if (corpo) { opcoes.contentType = "application/json"; opcoes.payload = JSON.stringify(corpo); }
   var resp = UrlFetchApp.fetch(url, opcoes);
   var cod = resp.getResponseCode();
@@ -1861,7 +1863,7 @@ function cobDarBaixa_(token, p, tx) {
       dataReferencia: hoje, prazo: "", subtarefas: []
     });
     var cfg = fbConfig_();
-    if (cfg) cobEnviarPush_(cfg, { titulo: (atual.clienteNome || "Mentorado") + " pagou", corpo: "A " + rotulo + " já está paga no sistema. Falta agradecer.", url: COB_ERP_URL_, tag: "cob_pago_" + p._id });
+    cobEnviarPush_(cfg, { titulo: (atual.clienteNome || "Mentorado") + " pagou", corpo: "A " + rotulo + " já está paga no sistema. Falta agradecer.", url: COB_ERP_URL_, tag: "cob_pago_" + p._id });
   } finally {
     lock.releaseLock();
   }
@@ -1871,12 +1873,18 @@ function cobDarBaixa_(token, p, tx) {
 
 function fbConfig_() {
   var bruto = PropertiesService.getScriptProperties().getProperty("FIREBASE_SERVICE_ACCOUNT");
-  if (!bruto) return null;
+  if (!bruto) return { projeto: FIRESTORE_PROJECT_ID_, email: "conta dona do script", conta: true };
   var sa = JSON.parse(bruto);
   return { projeto: sa.project_id, email: sa.client_email, chave: sa.private_key };
 }
 
+// Token da conta dona do script: as chamadas precisam dizer em nome de qual
+// projeto Google contam (x-goog-user-project), senão caem no projeto padrão
+// do Apps Script, que não tem Firestore nem FCM ligados.
+var COB_TOKEN_CONTA_ = null;
+
 function fbAccessToken_(cfg) {
+  if (cfg.conta) { COB_TOKEN_CONTA_ = ScriptApp.getOAuthToken(); return COB_TOKEN_CONTA_; }
   var cache = CacheService.getScriptCache();
   var guardado = cache.get("JM_FB_TOKEN");
   if (guardado) return guardado;
@@ -1921,7 +1929,7 @@ function cobEnviarPush_(cfg, msg) {
     return {
       url: "https://fcm.googleapis.com/v1/projects/" + cfg.projeto + "/messages:send",
       method: "post", contentType: "application/json", muteHttpExceptions: true,
-      headers: { Authorization: "Bearer " + token },
+      headers: cfg.conta ? { Authorization: "Bearer " + token, "x-goog-user-project": cfg.projeto } : { Authorization: "Bearer " + token },
       payload: JSON.stringify({ message: { token: t.token, data: dados, webpush: { headers: { Urgency: "high", TTL: "21600" } } } })
     };
   });
@@ -1955,7 +1963,6 @@ function acaoCobRegistrarPush_(body) {
   var id = String(body.parcelaId || ""), dia = String(body.dia || "");
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id) || dia !== cobHoje_() || body.assinatura !== cobAssinar_(id, dia)) return { ok: false, erro: "Registro inválido." };
   var cfg = fbConfig_();
-  if (!cfg) return { ok: false, erro: "FIREBASE_SERVICE_ACCOUNT não configurada." };
   cobGravar_(fbAccessToken_(cfg), "registrosCobranca/" + id + "_" + dia, { parcelaId: id, data: dia, criadoEm: new Date() });
   return { ok: true };
 }
@@ -1964,7 +1971,6 @@ function acaoCobRegistrarPush_(body) {
 
 function cobrancaRotina() {
   var cfg = fbConfig_();
-  if (!cfg) { console.log("cobrancaRotina: falta a Script Property FIREBASE_SERVICE_ACCOUNT."); return; }
   var token = fbAccessToken_(cfg);
   var hoje = cobHoje_();
   var abertas = cobConsultar_(token, "parcelas", "status", "esperado");
@@ -2026,8 +2032,7 @@ function instalarGatilhoCobranca() {
 // do financeiro recebem a notificação.
 function conferirCobranca() {
   var cfg = fbConfig_();
-  if (!cfg) { console.log("Falta a Script Property FIREBASE_SERVICE_ACCOUNT."); return; }
   var token = fbAccessToken_(cfg);
-  console.log("Conta de serviço OK (" + cfg.email + "). Parcelas em aberto: " + cobConsultar_(token, "parcelas", "status", "esperado").length +
+  console.log("Acesso ao Firebase OK (" + cfg.email + "). Parcelas em aberto: " + cobConsultar_(token, "parcelas", "status", "esperado").length +
               ". Aparelhos do financeiro: " + cobAparelhos_(token).length + ".");
 }
