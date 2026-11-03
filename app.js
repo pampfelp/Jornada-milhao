@@ -3664,7 +3664,7 @@ async function cobrarParcela(parcelaId, el) {
       const wa = document.getElementById("btn-mcob-whatsapp");
       wa.href = r.waUrl;
       wa.classList.remove("hidden");
-      document.getElementById("mcob-aviso").textContent = "Mensagem pronta, com o link PicPay e o Pix. Abra no WhatsApp do financeiro e aperte enviar.";
+      document.getElementById("mcob-aviso").textContent = "Mensagem pronta, com o link PicPay (Pix ou cartão). Abra no WhatsApp do financeiro e aperte enviar.";
     } else {
       document.getElementById("mcob-aviso").textContent = "O cliente não tem celular válido no cadastro. Copie a mensagem e mande por onde der.";
     }

@@ -1726,7 +1726,7 @@ function cobMontarTexto_(p, nome, contatos, pagamento, hoje) {
     return "Fala, " + nome + "!\n" + cobSaudacao_() + "\n\n" +
       "Sou Felipe, Financeiro da Jornada do M1lhão.\n" +
       "Espero que sua Jornada esteja sendo brilhante 🤩🧭\n\n" +
-      "Estou passando aqui para lembrar que sua " + descricao + " " + quando + ", com vencimento para dia " + dataVenc + ", conforme contrato acordado. Abaixo está o link virtual para efetuar o pagamento online e a chave para pix também.\n\n" +
+      "Estou passando aqui para lembrar que sua " + descricao + " " + quando + ", com vencimento para dia " + dataVenc + ", conforme contrato acordado. Abaixo está o link virtual para efetuar o pagamento online, por Pix ou cartão.\n\n" +
       pagamento + "\n\n" +
       "Atenciosamente,\nEquipe Jornada do Milhão";
   }
@@ -1737,7 +1737,7 @@ function cobMontarTexto_(p, nome, contatos, pagamento, hoje) {
     "Sou Felipe, Financeiro da Jornada do M1lhão.\n\n" +
     abertura + " Ainda não identificamos o pagamento nem retorno sobre isso.\n\n" +
     "Você tem uma previsão para que a situação seja regularizada?\n\n" +
-    "Abaixo está o link virtual para pagamento e a chave pix:\n\n" +
+    "Abaixo está o link virtual para pagamento, por Pix ou cartão:\n\n" +
     pagamento + "\n\n" +
     "Pedimos a gentileza de confirmar o pagamento ou nos retornar aqui explicando a situação.\n\n" +
     "Atenciosamente,\nEquipe Jornada do Milhão";
@@ -1820,8 +1820,8 @@ function cobPrepararParcela_(token, parcelaId, teste, registrar) {
     cobDarBaixa_(token, p, pg.pago);
     throw new Error("Esta parcela já foi paga pelo link anterior. A baixa foi feita agora.");
   }
-  var pagamento = pg.link + (pg.brcode ? "\n\nPix copia e cola:\n" + pg.brcode : "");
-  var texto = cobMontarTexto_(p, nome, Object.keys(dias).length, pagamento, hoje);
+  // Só o link: a página da PicPay já oferece Pix e cartão (pedido dele, 03/11).
+  var texto = cobMontarTexto_(p, nome, Object.keys(dias).length, pg.link, hoje);
   if (registrar) cobGravar_(token, "registrosCobranca/" + parcelaId + "_" + hoje, { parcelaId: parcelaId, data: hoje, criadoEm: new Date() });
   var telefone = cobTelefone_(cliente && cliente.telefone);
   return {
