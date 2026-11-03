@@ -1,4 +1,4 @@
-const CACHE_NAME = "jm-v5";
+const CACHE_NAME = "jm-v6";
 const CORE_ASSETS = [
   "./",
   "./index.html",
@@ -53,4 +53,39 @@ self.addEventListener("fetch", (event) => {
       })
       .catch(() => caches.match(event.request))
   );
+});
+
+// ── Lembretes de cobrança (2026-11-03) ──
+// O Code.gs (cobrancaRotina) manda pelo Firebase Cloud Messaging uma
+// mensagem só de dados: titulo, corpo, url (o WhatsApp do mentorado com a
+// mensagem pronta), tag e, no lembrete, parcelaId/dia/assinatura. Quem
+// desenha a notificação é este arquivo, sem o SDK do Firebase aqui dentro.
+// Mesma URL de APPS_SCRIPT_PROXY_URL, em firebase-init.js.
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzdJNroawGvXFRMELv_VeLqVTkENBtq6Veou3n3nST5vjjiNqF70L-r-ZLFNT-GupRN_w/exec";
+
+self.addEventListener("push", (event) => {
+  let d = {};
+  try {
+    const j = event.data ? event.data.json() : {};
+    d = j.data || j.notification || j;
+  } catch (e) { d = {}; }
+  event.waitUntil(self.registration.showNotification(d.titulo || "Jornada do Milhão", {
+    body: d.corpo || "",
+    icon: "icon-192.png",
+    badge: "icon-192.png",
+    tag: d.tag || undefined,
+    data: { url: d.url || "./", parcelaId: d.parcelaId || "", dia: d.dia || "", assinatura: d.assinatura || "" }
+  }));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const dados = event.notification.data || {};
+  const alvo = new URL(dados.url || "./", self.registration.scope).href;
+  // O toque conta como o contato do dia: a próxima notificação de hoje não
+  // sai pra esta parcela, e a mensagem de amanhã já diz "contato nº N".
+  const registro = dados.parcelaId
+    ? fetch(APPS_SCRIPT_URL, { method: "POST", mode: "no-cors", body: JSON.stringify({ action: "cobRegistrarPush", parcelaId: dados.parcelaId, dia: dados.dia, assinatura: dados.assinatura }) }).catch(() => {})
+    : Promise.resolve();
+  event.waitUntil(Promise.all([self.clients.openWindow(alvo), registro]));
 });

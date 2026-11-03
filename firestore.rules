@@ -366,6 +366,17 @@ service cloud.firestore {
       allow delete: if fFinanceiro();
     }
 
+    // Aparelhos que recebem os lembretes de cobrança (2026-11-03). Cada um
+    // grava só o próprio; quem lê e manda é o Code.gs, pela conta de serviço.
+    match /push_tokens/{id} {
+      allow create, update: if fFinanceiro()
+                    && request.resource.data.keys().hasOnly(['token', 'uid', 'aparelho', 'atualizadoEm'])
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.token is string
+                    && request.resource.data.token.size() < 500;
+      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
+    }
+
     /* ══════════════ módulo de tarefas/rotina ══════════════ */
 
     match /tarefas/{id} {

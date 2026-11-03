@@ -38,6 +38,8 @@
  *   6. Checkout do Fast Start ("fsRegistrar", "fsContrato", "fsContratoStatus",
  *      "fsPagamento", "fsStatus")
  *      — ver a seção FAST START no fim deste arquivo.
+ *   7. Cobrança das parcelas pelo WhatsApp ("cobPreparar", "cobRegistrarPush")
+ *      — ver a seção COBRANÇA DAS PARCELAS no fim deste arquivo.
  *
  * ESCOPO — SÓ CRIAÇÃO de evento na Agenda, SÓ CRIAÇÃO de arquivo no Drive:
  * nenhuma ação aqui lê, edita ou apaga evento da Agenda, nem apaga arquivo
@@ -123,6 +125,8 @@ function rotear_(body) {
       case "fsStatus": return acaoFsStatus_(body);
       case "fsContrato": return acaoFsContrato_(body);
       case "fsContratoStatus": return acaoFsContratoStatus_(body);
+      case "cobPreparar": return acaoCobPreparar_(body);
+      case "cobRegistrarPush": return acaoCobRegistrarPush_(body);
       default: return { ok: false, erro: "Ação desconhecida: " + body.action };
     }
   } catch (err) {
@@ -1590,4 +1594,440 @@ ${p("8.4", "E, por estarem justas e contratadas, as partes firmam o presente con
 
 </td></tr></tbody></table>
 </body></html>`;
+}
+
+// ══════════════ COBRANÇA DAS PARCELAS (2026-11-03) ══════════════
+//
+// Semiautomático, como na Solar Green: o sistema cria o link PicPay da
+// parcela, monta a mensagem e abre o WhatsApp; quem está com o aparelho do
+// financeiro (91 98506-6464) aperta enviar. O texto mora SÓ aqui (o app.js
+// pede pronto), pra botão e notificação dizerem a mesma coisa.
+//
+//   cobPreparar       botão "Cobrar pelo WhatsApp" do ERP. Lê e grava no
+//                     Firestore com o login de quem clicou (body.idToken):
+//                     sem acesso ao financeiro, o próprio Firestore recusa.
+//   cobRegistrarPush  o toque na notificação conta como contato do dia;
+//                     chega do service-worker.js com assinatura própria.
+//   cobrancaRotina    gatilho de 15 em 15 min (instalarGatilhoCobranca):
+//                     confere na PicPay os links das parcelas em aberto, dá
+//                     baixa no que foi pago, cria a tarefa de agradecer e,
+//                     nos horários de cobrança, manda a notificação.
+//
+// A rotina não tem ninguém logado: usa a conta de serviço do Firebase, na
+// Script Property FIREBASE_SERVICE_ACCOUNT (o .json inteiro, Firebase >
+// Configurações do projeto > Contas de serviço > Gerar nova chave privada).
+// Ela também é quem manda o push (Firebase Cloud Messaging). Sem ela, o
+// botão funciona e a baixa e as notificações ficam paradas.
+//
+// Link de teste: no ERP aberto com ?modo=teste, o link nasce no sandbox da
+// PicPay, que dá tudo como pago. Por isso só vale em parcela de cliente com
+// "teste" no nome: uma parcela real nunca recebe baixa falsa.
+
+var COB_DIAS_LINK_ = 3;
+var COB_ERP_URL_ = "https://pampfelp.github.io/Jornada-milhao/";
+// Dia da semana pelo Utilities.formatDate(..., "u"): 1 = segunda ... 7 = domingo.
+var COB_HORARIOS_ = { 1: [8, 15, 18], 2: [8, 15, 18], 3: [8, 15, 18], 4: [8, 15, 18], 5: [8, 15, 18], 6: [8, 12] };
+// Parcela que ainda não venceu só ganha aviso às 8h, a 3 dias e no dia.
+var COB_DIAS_LEMBRETE_ = [3, 0];
+var COB_MESES_ = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+
+function cobHoje_() { return Utilities.formatDate(new Date(), "America/Belem", "yyyy-MM-dd"); }
+function cobDiasAte_(iso, hoje) { return Math.round((Date.parse(iso + "T12:00:00Z") - Date.parse(hoje + "T12:00:00Z")) / 86400000); }
+function cobMoeda_(v) {
+  var s = (Number(v) || 0).toFixed(2).split(".");
+  return "R$ " + s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".") + "," + s[1];
+}
+function cobDataCurta_(iso) { var p = String(iso || "").split("-"); return p.length === 3 ? p[2] + "/" + p[1] : "—"; }
+
+// ── Firestore por REST com qualquer token (o do login ou o da conta de serviço) ──
+
+function cobFsUrl_(caminho) {
+  return "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents" + (caminho ? "/" + caminho : "");
+}
+function cobFsPedir_(token, metodo, url, corpo) {
+  var opcoes = { method: metodo, muteHttpExceptions: true, headers: { Authorization: "Bearer " + token } };
+  if (corpo) { opcoes.contentType = "application/json"; opcoes.payload = JSON.stringify(corpo); }
+  var resp = UrlFetchApp.fetch(url, opcoes);
+  var cod = resp.getResponseCode();
+  var json = {};
+  try { json = JSON.parse(resp.getContentText() || "{}"); } catch (err) {}
+  if (cod === 401 || cod === 403) throw new Error("Sem permissão para cobrar. Entre de novo no sistema com uma conta do financeiro.");
+  if (cod >= 400 && cod !== 404) throw new Error("Firestore " + cod + ": " + ((json.error && json.error.message) || "").slice(0, 200));
+  return { status: cod, json: json };
+}
+function cobDeValor_(f) {
+  if (!f) return null;
+  if (f.stringValue != null) return f.stringValue;
+  if (f.booleanValue != null) return f.booleanValue;
+  if (f.doubleValue != null) return Number(f.doubleValue);
+  if (f.integerValue != null) return Number(f.integerValue);
+  if (f.timestampValue != null) return f.timestampValue;
+  if (f.arrayValue) return (f.arrayValue.values || []).map(cobDeValor_);
+  if (f.mapValue) return cobDeCampos_(f.mapValue.fields);
+  return null;
+}
+function cobDeCampos_(fields) {
+  var saida = {};
+  Object.keys(fields || {}).forEach(function (k) { saida[k] = cobDeValor_(fields[k]); });
+  return saida;
+}
+function cobDoc_(d) { var o = cobDeCampos_(d.fields); o._id = d.name.split("/").pop(); return o; }
+function cobLer_(token, caminho) {
+  var r = cobFsPedir_(token, "get", cobFsUrl_(caminho));
+  return r.status === 404 ? null : cobDoc_(r.json);
+}
+// Grava só os campos passados (merge). Documento que não existe nasce.
+function cobGravar_(token, caminho, dados) {
+  var fields = {}, mascara = [];
+  Object.keys(dados).forEach(function (k) {
+    var v = dados[k];
+    fields[k] = v instanceof Date ? { timestampValue: v.toISOString() } : valorFirestore_(v);
+    mascara.push("updateMask.fieldPaths=" + encodeURIComponent(k));
+  });
+  cobFsPedir_(token, "patch", cobFsUrl_(caminho) + "?" + mascara.join("&"), { fields: fields });
+}
+function cobConsultar_(token, colecao, campo, valor) {
+  var r = cobFsPedir_(token, "post", cobFsUrl_("") + ":runQuery", { structuredQuery: {
+    from: [{ collectionId: colecao }],
+    where: { fieldFilter: { field: { fieldPath: campo }, op: "EQUAL", value: { stringValue: valor } } }
+  } });
+  return (Array.isArray(r.json) ? r.json : []).filter(function (l) { return l.document; }).map(function (l) { return cobDoc_(l.document); });
+}
+function cobListar_(token, colecao) {
+  var r = cobFsPedir_(token, "get", cobFsUrl_(colecao) + "?pageSize=300");
+  return (r.json.documents || []).map(cobDoc_);
+}
+
+// ── Texto da mensagem (o mesmo que o "Copiar cobrança" montava) ──
+
+function cobSaudacao_() {
+  var h = Number(Utilities.formatDate(new Date(), "America/Belem", "H"));
+  return h < 12 ? "Bom dia" : h < 18 ? "Boa tarde" : "Boa noite";
+}
+function cobRefMesAno_(iso) {
+  var p = String(iso || "").split("-");
+  if (p.length < 2) return "—";
+  var nome = COB_MESES_[Number(p[1]) - 1] || "";
+  return nome.charAt(0).toUpperCase() + nome.slice(1) + "/" + p[0];
+}
+function cobDataExtenso_(iso) {
+  var p = String(iso || "").split("-");
+  if (p.length < 3) return "—";
+  return Number(p[2]) + " de " + COB_MESES_[Number(p[1]) - 1] + " de " + p[0];
+}
+function cobMontarTexto_(p, nome, contatos, pagamento, hoje) {
+  var descricao = "parcela " + (p.numero === 0 ? "de entrada" : "número " + p.numero) + ", Ref. " + cobRefMesAno_(p.vencimento);
+  var dataVenc = cobDataExtenso_(p.vencimento);
+  var dias = cobDiasAte_(p.vencimento, hoje);
+  if (dias >= 0) {
+    var quando = dias === 0 ? "vence HOJE" : "vence em " + dias + " DIA" + (dias > 1 ? "S" : "");
+    return "Fala, " + nome + "!\n" + cobSaudacao_() + "\n\n" +
+      "Sou Felipe, Financeiro da Jornada do M1lhão.\n" +
+      "Espero que sua Jornada esteja sendo brilhante 🤩🧭\n\n" +
+      "Estou passando aqui para lembrar que sua " + descricao + " " + quando + ", com vencimento para dia " + dataVenc + ", conforme contrato acordado. Abaixo está o link virtual para efetuar o pagamento online e a chave para pix também.\n\n" +
+      pagamento + "\n\n" +
+      "Atenciosamente,\nEquipe Jornada do Milhão";
+  }
+  var abertura = contatos === 1
+    ? "Estou passando aqui sobre a sua " + descricao + ", com vencimento para dia " + dataVenc + ", que segue em aberto até o momento."
+    : "Estou passando aqui novamente sobre a sua " + descricao + ", com vencimento para dia " + dataVenc + ", que segue em aberto até o momento — esse já é o nosso contato nº " + contatos + " sobre essa parcela.";
+  return cobSaudacao_() + ", " + nome + "! Tudo bem?\n\n" +
+    "Sou Felipe, Financeiro da Jornada do M1lhão.\n\n" +
+    abertura + " Ainda não identificamos o pagamento nem retorno sobre isso.\n\n" +
+    "Você tem uma previsão para que a situação seja regularizada?\n\n" +
+    "Abaixo está o link virtual para pagamento e a chave pix:\n\n" +
+    pagamento + "\n\n" +
+    "Pedimos a gentileza de confirmar o pagamento ou nos retornar aqui explicando a situação.\n\n" +
+    "Atenciosamente,\nEquipe Jornada do Milhão";
+}
+function cobTelefone_(t) {
+  var d = String(t || "").replace(/\D/g, "");
+  if (d.length === 10 || d.length === 11) return "55" + d;
+  if ((d.length === 12 || d.length === 13) && d.indexOf("55") === 0) return d;
+  return "";
+}
+
+// ── Link PicPay da parcela ──
+
+// Pergunta à PicPay se o link tem transação paga. Devolve a transação ou null.
+function cobTransacaoPaga_(linkId, ambiente) {
+  var r = picpay_("get", "/paymentlink/" + encodeURIComponent(linkId) + "/transactions", null, ambiente);
+  if (r.status !== 200 || !r.json || !Array.isArray(r.json.transactions)) throw new Error("A PicPay não respondeu a consulta do pagamento (" + r.status + ").");
+  return r.json.transactions.filter(function (t) { return t.status === "PAYED"; })[0] || null;
+}
+
+// Reaproveita o link enquanto vale, com o mesmo valor e ambiente. Antes de
+// trocar um link, confere se ele não foi pago e o inativa, pra parcela
+// nunca ficar com dois links pagáveis.
+function cobGarantirLink_(token, p, ambiente, hoje) {
+  var centavos = Math.round((Number(p.valor) || 0) * 100);
+  if (p.cobLinkId && p.cobAmbiente === ambiente && p.cobValorCentavos === centavos && p.cobLinkExpiraEm > hoje) {
+    return { link: p.cobLink, brcode: p.cobBrcode || "" };
+  }
+  if (p.cobLinkId) {
+    var paga = cobTransacaoPaga_(p.cobLinkId, p.cobAmbiente);
+    if (paga) return { pago: paga };
+    picpay_("post", "/paymentlink/" + encodeURIComponent(p.cobLinkId) + "/inactive", {}, p.cobAmbiente);
+  }
+  var expira = Utilities.formatDate(new Date(Date.now() + COB_DIAS_LINK_ * 24 * 3600 * 1000), "America/Belem", "yyyy-MM-dd");
+  var r = picpay_("post", "/paymentlink/create", {
+    charge: {
+      name: "Jornada do M1lhão",
+      description: ((p.numero === 0 ? "Entrada" : "Parcela " + p.numero) + " - " + (p.clienteNome || "")).slice(0, 120),
+      order_number: (String(p._id).slice(0, 8) + Date.now().toString(36).slice(-6)),
+      redirect_url: COB_ERP_URL_,
+      payment: { methods: ["CREDIT_CARD", "BRCODE"], brcode_arrangements: ["PIX"] },
+      amounts: { product: centavos }
+    },
+    options: { allow_create_pix_key: true, card_max_installment_number: 1, expired_at: expira }
+  }, ambiente);
+  if (r.status !== 201 && r.status !== 200) {
+    var msg = r.json && r.json.error && r.json.error.message;
+    throw new Error("A PicPay não criou o link" + (msg ? ": " + msg : " (" + r.status + ")") + ".");
+  }
+  var link = r.json.link || "";
+  var dados = { cobLink: link, cobLinkId: link.split("/").pop(), cobBrcode: r.json.brcode || "", cobLinkExpiraEm: expira, cobAmbiente: ambiente, cobValorCentavos: centavos };
+  cobGravar_(token, "parcelas/" + p._id, dados);
+  return { link: link, brcode: dados.cobBrcode };
+}
+
+// Junta tudo o que a mensagem precisa. `registrar` grava o contato do dia
+// (o botão grava; a notificação só grava quando é tocada).
+function cobPrepararParcela_(token, parcelaId, teste, registrar) {
+  var hoje = cobHoje_();
+  var p = cobLer_(token, "parcelas/" + parcelaId);
+  if (!p) throw new Error("Parcela não encontrada.");
+  if (p.status === "realizado") throw new Error("Esta parcela já está paga.");
+  if (!p.vencimento) throw new Error("A parcela está sem vencimento.");
+  if (!(Number(p.valor) >= 1)) throw new Error("A parcela está sem valor para cobrar.");
+  if (teste && !/teste/i.test(p.clienteNome || "")) throw new Error("O modo de teste só cobra parcela de cliente com \"teste\" no nome.");
+
+  // Lida primeiro: é ela que confere se quem pediu tem acesso ao financeiro.
+  var dias = {};
+  cobConsultar_(token, "registrosCobranca", "parcelaId", parcelaId).forEach(function (r) { dias[r.data] = true; });
+  dias[hoje] = true;
+
+  var contrato = p.contratoId ? cobLer_(token, "contratos/" + p.contratoId) : null;
+  var clienteId = (contrato && contrato.clienteId) || p.clienteId;
+  var cliente = clienteId ? cobLer_(token, "clientes/" + clienteId) : null;
+  var nome = (cliente && (cliente.representanteNome || cliente.nome)) || p.clienteNome || "cliente";
+
+  var ambiente = teste ? "sandbox" : picpayConfig_().ambiente;
+  var pg = cobGarantirLink_(token, p, ambiente, hoje);
+  if (pg.pago) {
+    cobDarBaixa_(token, p, pg.pago);
+    throw new Error("Esta parcela já foi paga pelo link anterior. A baixa foi feita agora.");
+  }
+  var pagamento = pg.link + (pg.brcode ? "\n\nPix copia e cola:\n" + pg.brcode : "");
+  var texto = cobMontarTexto_(p, nome, Object.keys(dias).length, pagamento, hoje);
+  if (registrar) cobGravar_(token, "registrosCobranca/" + parcelaId + "_" + hoje, { parcelaId: parcelaId, data: hoje, criadoEm: new Date() });
+  var telefone = cobTelefone_(cliente && cliente.telefone);
+  return {
+    parcela: p, nome: nome, texto: texto, link: pg.link, brcode: pg.brcode, telefone: telefone,
+    waUrl: telefone ? "https://wa.me/" + telefone + "?text=" + encodeURIComponent(texto) : ""
+  };
+}
+
+function acaoCobPreparar_(body) {
+  if (!body.idToken || !/^[A-Za-z0-9_-]{1,64}$/.test(String(body.parcelaId || ""))) return { ok: false, erro: "Pedido incompleto." };
+  var r = cobPrepararParcela_(String(body.idToken), String(body.parcelaId), body.teste === true, true);
+  return { ok: true, texto: r.texto, link: r.link, telefone: r.telefone, waUrl: r.waUrl };
+}
+
+// ── Baixa automática ──
+
+// Marca a parcela como paga, cria a tarefa de agradecer e avisa o
+// financeiro. O lock e a releitura impedem duas tarefas pelo mesmo pagamento.
+function cobDarBaixa_(token, p, tx) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var atual = cobLer_(token, "parcelas/" + p._id);
+    if (!atual || atual.status === "realizado") return;
+    var hoje = cobHoje_();
+    var valor = Number(tx.amount || 0);
+    cobGravar_(token, "parcelas/" + p._id, {
+      status: "realizado", dataPagamento: hoje, cobPagoEm: new Date().toISOString(), cobTransacaoId: tx.id || "", cobValorPagoCentavos: valor
+    });
+    var teste = atual.cobAmbiente === "sandbox";
+    var rotulo = (atual.numero === 0 ? "entrada" : "parcela " + atual.numero) + " (" + cobMoeda_(valor / 100) + ")";
+    criarDocumentoFirestore_("tarefas", {
+      titulo: "Agradecer pagamento: " + (atual.clienteNome || "mentorado") + (teste ? " (TESTE)" : ""),
+      descricao: "A PicPay confirmou o pagamento da " + rotulo + " em " + Utilities.formatDate(new Date(), "America/Belem", "dd/MM/yyyy HH:mm") + ".\n" +
+                 "A parcela já foi marcada como paga no sistema.\n" +
+                 "Fazer: agradecer pelo WhatsApp. Se foi no cartão, lançar a taxa.\n" +
+                 "Parcela " + p._id + ", link PicPay " + (atual.cobLinkId || "") + ".",
+      responsavelUid: "", etapa: fsPrimeiraEtapa_("etapasTarefaConfig", "a_fazer"),
+      dataReferencia: hoje, prazo: "", subtarefas: []
+    });
+    var cfg = fbConfig_();
+    if (cfg) cobEnviarPush_(cfg, { titulo: (atual.clienteNome || "Mentorado") + " pagou", corpo: "A " + rotulo + " já está paga no sistema. Falta agradecer.", url: COB_ERP_URL_, tag: "cob_pago_" + p._id });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ── Notificações (Firebase Cloud Messaging) ──
+
+function fbConfig_() {
+  var bruto = PropertiesService.getScriptProperties().getProperty("FIREBASE_SERVICE_ACCOUNT");
+  if (!bruto) return null;
+  var sa = JSON.parse(bruto);
+  return { projeto: sa.project_id, email: sa.client_email, chave: sa.private_key };
+}
+
+function fbAccessToken_(cfg) {
+  var cache = CacheService.getScriptCache();
+  var guardado = cache.get("JM_FB_TOKEN");
+  if (guardado) return guardado;
+  var agora = Math.floor(Date.now() / 1000);
+  function b64(x) { return Utilities.base64EncodeWebSafe(x).replace(/=+$/, ""); }
+  var cab = b64(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  var corpo = b64(JSON.stringify({
+    iss: cfg.email, aud: "https://oauth2.googleapis.com/token", iat: agora, exp: agora + 3600,
+    scope: "https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/firebase.messaging"
+  }));
+  var assinatura = b64(Utilities.computeRsaSha256Signature(cab + "." + corpo, cfg.chave));
+  var resp = UrlFetchApp.fetch("https://oauth2.googleapis.com/token", {
+    method: "post", muteHttpExceptions: true,
+    payload: { grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: cab + "." + corpo + "." + assinatura }
+  });
+  if (resp.getResponseCode() !== 200) throw new Error("Google recusou a conta de serviço: " + resp.getContentText().slice(0, 200));
+  var token = JSON.parse(resp.getContentText()).access_token;
+  cache.put("JM_FB_TOKEN", token, 3000);
+  return token;
+}
+
+// Aparelhos cadastrados (push_tokens) de quem tem acesso ao financeiro.
+function cobAparelhos_(token) {
+  var podem = {};
+  return cobListar_(token, "push_tokens").filter(function (t) {
+    if (!t.token || !t.uid) return false;
+    if (!(t.uid in podem)) {
+      var u = cobLer_(token, "usuarios/" + t.uid);
+      podem[t.uid] = !!(u && u.ativo === true && (u.papel === "admin" || u.papel === "gerente" || (u.areasExtras || []).indexOf("financeiro") !== -1));
+    }
+    return podem[t.uid];
+  });
+}
+
+function cobEnviarPush_(cfg, msg) {
+  var token = fbAccessToken_(cfg);
+  var aparelhos = cobAparelhos_(token);
+  if (!aparelhos.length) return 0;
+  var dados = {};
+  Object.keys(msg).forEach(function (k) { dados[k] = String(msg[k] == null ? "" : msg[k]); });
+  var pedidos = aparelhos.map(function (t) {
+    return {
+      url: "https://fcm.googleapis.com/v1/projects/" + cfg.projeto + "/messages:send",
+      method: "post", contentType: "application/json", muteHttpExceptions: true,
+      headers: { Authorization: "Bearer " + token },
+      payload: JSON.stringify({ message: { token: t.token, data: dados, webpush: { headers: { Urgency: "high", TTL: "21600" } } } })
+    };
+  });
+  var enviados = 0;
+  UrlFetchApp.fetchAll(pedidos).forEach(function (resp, i) {
+    var cod = resp.getResponseCode();
+    if (cod === 200) { enviados++; return; }
+    var texto = resp.getContentText();
+    if (cod === 404 || texto.indexOf("UNREGISTERED") !== -1) {
+      cobFsPedir_(token, "delete", cobFsUrl_("push_tokens/" + aparelhos[i]._id));
+    } else {
+      console.error("Push recusado (" + cod + "): " + texto.slice(0, 300));
+    }
+  });
+  return enviados;
+}
+
+// Assinatura do toque na notificação: o service worker não tem login, então
+// o Code.gs assina (parcela, dia) ao mandar e confere ao receber.
+function cobSegredo_() {
+  var props = PropertiesService.getScriptProperties();
+  var s = props.getProperty("COB_SEGREDO");
+  if (!s) { s = Utilities.getUuid() + Utilities.getUuid(); props.setProperty("COB_SEGREDO", s); }
+  return s;
+}
+function cobAssinar_(parcelaId, dia) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(parcelaId + "|" + dia, cobSegredo_())).replace(/=+$/, "");
+}
+
+function acaoCobRegistrarPush_(body) {
+  var id = String(body.parcelaId || ""), dia = String(body.dia || "");
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id) || dia !== cobHoje_() || body.assinatura !== cobAssinar_(id, dia)) return { ok: false, erro: "Registro inválido." };
+  var cfg = fbConfig_();
+  if (!cfg) return { ok: false, erro: "FIREBASE_SERVICE_ACCOUNT não configurada." };
+  cobGravar_(fbAccessToken_(cfg), "registrosCobranca/" + id + "_" + dia, { parcelaId: id, data: dia, criadoEm: new Date() });
+  return { ok: true };
+}
+
+// ── Rotina de 15 em 15 minutos ──
+
+function cobrancaRotina() {
+  var cfg = fbConfig_();
+  if (!cfg) { console.log("cobrancaRotina: falta a Script Property FIREBASE_SERVICE_ACCOUNT."); return; }
+  var token = fbAccessToken_(cfg);
+  var hoje = cobHoje_();
+  var abertas = cobConsultar_(token, "parcelas", "status", "esperado");
+
+  // 1. Baixa: link com pagamento confirmado.
+  abertas = abertas.filter(function (p) {
+    if (!p.cobLinkId) return true;
+    try {
+      var tx = cobTransacaoPaga_(p.cobLinkId, p.cobAmbiente);
+      if (tx) { cobDarBaixa_(token, p, tx); return false; }
+    } catch (err) { console.error("cobrancaRotina, parcela " + p._id + ": " + err); }
+    return true;
+  });
+
+  // 2. Notificação, uma vez por horário de cobrança.
+  var agora = new Date();
+  var hora = Number(Utilities.formatDate(agora, "America/Belem", "H"));
+  var horarios = COB_HORARIOS_[Number(Utilities.formatDate(agora, "America/Belem", "u"))] || [];
+  if (horarios.indexOf(hora) === -1) return;
+  var props = PropertiesService.getScriptProperties();
+  var marca = hoje + "_" + hora;
+  if (props.getProperty("COB_ULTIMO_HORARIO") === marca) return;
+  props.setProperty("COB_ULTIMO_HORARIO", marca);
+
+  var cobradasHoje = {};
+  cobConsultar_(token, "registrosCobranca", "data", hoje).forEach(function (r) { cobradasHoje[r.parcelaId] = true; });
+  abertas.forEach(function (p) {
+    if (!p.vencimento || !(Number(p.valor) >= 1) || cobradasHoje[p._id]) return;
+    var dias = cobDiasAte_(p.vencimento, hoje);
+    if (!(dias < 0 || (hora === 8 && COB_DIAS_LEMBRETE_.indexOf(dias) !== -1))) return;
+    // Parcela de teste só entra quando já nasceu no sandbox.
+    var teste = p.cobAmbiente === "sandbox";
+    if (/teste/i.test(p.clienteNome || "") !== teste) return;
+    try {
+      var r = cobPrepararParcela_(token, p._id, teste, false);
+      var rotulo = (p.numero === 0 ? "Entrada" : "Parcela " + p.numero) + " de " + cobMoeda_(p.valor);
+      cobEnviarPush_(cfg, {
+        titulo: "Cobrar " + r.nome + (r.telefone ? " pelo WhatsApp" : " (sem celular)"),
+        corpo: rotulo + (dias < 0 ? ", venceu em " + cobDataCurta_(p.vencimento) : dias === 0 ? ", vence hoje" : ", vence em " + dias + " dias") + ". Toque para abrir a mensagem.",
+        // O FCM aceita até 4 KB de dados; mensagem maior (ou sem celular)
+        // abre o ERP, que prepara a mesma cobrança pelo ?cobrar=.
+        url: r.waUrl && r.waUrl.length < 3000 ? r.waUrl : COB_ERP_URL_ + "?cobrar=" + p._id, tag: "cob_" + p._id,
+        parcelaId: p._id, dia: hoje, assinatura: cobAssinar_(p._id, hoje)
+      });
+    } catch (err) { console.error("cobrancaRotina, aviso " + p._id + ": " + err); }
+  });
+}
+
+// Rode uma vez no editor (▶) pra ligar a rotina da cobrança.
+function instalarGatilhoCobranca() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "cobrancaRotina") return;
+  }
+  ScriptApp.newTrigger("cobrancaRotina").timeBased().everyMinutes(15).create();
+}
+
+// Rode no editor (▶): diz se a conta de serviço entra e quantos aparelhos
+// do financeiro recebem a notificação.
+function conferirCobranca() {
+  var cfg = fbConfig_();
+  if (!cfg) { console.log("Falta a Script Property FIREBASE_SERVICE_ACCOUNT."); return; }
+  var token = fbAccessToken_(cfg);
+  console.log("Conta de serviço OK (" + cfg.email + "). Parcelas em aberto: " + cobConsultar_(token, "parcelas", "status", "esperado").length +
+              ". Aparelhos do financeiro: " + cobAparelhos_(token).length + ".");
 }

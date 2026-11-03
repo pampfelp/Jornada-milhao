@@ -2,7 +2,8 @@
 // sem Cloud Functions. Ver README.md para as decisões tomadas nas perguntas
 // em aberto do plano original (plano_financeiro_funil.md).
 
-import { db, APPS_SCRIPT_PROXY_URL } from "./firebase-init.js";
+import { db, auth, firebaseApp, APPS_SCRIPT_PROXY_URL } from "./firebase-init.js";
+import { getMessaging, getToken, isSupported } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-messaging.js";
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, setDoc, getDocs, getDocsFromServer,
   onSnapshot, query, orderBy, serverTimestamp, Timestamp, runTransaction
@@ -22,7 +23,6 @@ const STATE = {
   oportunidades: [],
   contratos: [],
   parcelas: [],
-  registrosCobranca: [], // {parcelaId, data} — 1 por parcela por dia em que "Copiar cobrança" foi usado
   despesas: [],
   despesasRecorrentes: [],
   entradas: [],
@@ -3632,125 +3632,131 @@ function abrirDetalheParcela(id) {
   });
 }
 
-// Monta o texto de cobrança de uma parcela em aberto, pronto pra colar no
-// WhatsApp. Só preenche o que o sistema TEM de verdade — link de pagamento
-// e chave PIX o Felipe cola na hora (o PicPay gera um link novo por
-// cobrança, o sistema não tem como saber esse link), e "quantos contatos já
-// foram feitos" também não é um dado que o sistema guarda, então fica de
-// fora em vez de inventar "segundo contato" sempre.
+// Cobrança semiautomática (2026-11-03): o Code.gs (cobPreparar) cria o
+// link PicPay da parcela, monta a mensagem e devolve o endereço do WhatsApp
+// do mentorado; quem está com o aparelho do financeiro aperta enviar. O
+// texto mora só no Code.gs, pra botão e notificação dizerem a mesma coisa.
+// O contato do dia ("contato nº N") também é gravado lá.
 //
-// Nome usado é o da PESSOA (representanteNome, quando o cliente é PJ),
-// nunca o nome da empresa — pedido dele: "eu uso o nome das pessoas".
-// Cai pro nome do cliente (que já É uma pessoa, se for PF) e, na falta de
-// tudo, pro clienteNome gravado na própria parcela.
-function nomeParaCobranca_(p) {
-  const cliente = STATE.clientes.find((c) => c.id === p.clienteId);
-  return (cliente && (cliente.representanteNome || cliente.nome)) || p.clienteNome || "cliente";
-}
-// Bom dia/Boa tarde/Boa noite pela hora de quem está copiando a mensagem
-// (é ele que vai mandar agora, não importa quando a parcela venceu).
-function saudacaoHorario_() {
-  const h = new Date().getHours();
-  if (h < 12) return "Bom dia";
-  if (h < 18) return "Boa tarde";
-  return "Boa noite";
-}
+// ?modo=teste na URL cria o link no sandbox da PicPay, e só em parcela de
+// cliente com "teste" no nome (o sandbox dá tudo como pago).
+const MODO_TESTE_COBRANCA = new URLSearchParams(location.search).get("modo") === "teste";
+// Parcela pedida pela notificação (?cobrar=<id>), aberta assim que as
+// parcelas carregarem.
+let cobrarAoCarregar = new URLSearchParams(location.search).get("cobrar");
 
-const MESES_PT_ = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
-// "Ref." é o MÊS do vencimento (não o número sequencial da parcela) —
-// pedido dele. "18/09/2026" -> "Setembro/2026".
-function refMesAno_(vencimentoIso) {
-  const [ano, mes] = (vencimentoIso || "").split("-");
-  if (!ano || !mes) return "—";
-  const nome = MESES_PT_[Number(mes) - 1] || "";
-  return `${nome.charAt(0).toUpperCase()}${nome.slice(1)}/${ano}`;
-}
-// Data por extenso, do jeito que se fala: "18 de setembro de 2026".
-function dataExtenso_(vencimentoIso) {
-  const [ano, mes, dia] = (vencimentoIso || "").split("-");
-  if (!ano || !mes || !dia) return "—";
-  return `${Number(dia)} de ${MESES_PT_[Number(mes) - 1]} de ${ano}`;
-}
-// "trata-se da parcela número X, Ref. Mês/Ano" — o pedaço que identifica
-// QUAL parcela é essa, comum aos dois modelos de mensagem.
-function descricaoParcela_(p) {
-  const numeroTexto = p.numero === 0 ? "de entrada" : `número ${p.numero}`;
-  return `parcela ${numeroTexto}, Ref. ${refMesAno_(p.vencimento)}`;
-}
-
-// Quantos DIAS DIFERENTES já teve cobrança copiada pra essa parcela,
-// contando o de hoje (a mensagem que está sendo montada agora É um desses
-// contatos, mesmo antes do registro em registrosCobranca terminar de
-// gravar — por isso soma aqui, sem esperar o Firestore confirmar).
-// Um por dia, não por clique: clicar 5x no mesmo dia continua sendo 1.
-function contagemContatosParcela_(p) {
-  const dias = new Set(STATE.registrosCobranca.filter((r) => r.parcelaId === p.id).map((r) => r.data));
-  dias.add(hojeStr());
-  return dias.size;
-}
-
-function montarTextoCobranca(p) {
-  const nome = nomeParaCobranca_(p);
-  const descricao = descricaoParcela_(p);
-  const dataVenc = dataExtenso_(p.vencimento);
-  const hoje = hojeStr();
-  const diasParaVencer = p.vencimento ? Math.round((new Date(p.vencimento + "T12:00:00") - new Date(hoje + "T12:00:00")) / 86400000) : null;
-
-  // Vencimento hoje ou no futuro: antecipada, com a contagem de dias. Não
-  // soma no contador de tentativas — é lembrete, não cobrança de atraso.
-  if (diasParaVencer != null && diasParaVencer >= 0) {
-    const quando = diasParaVencer === 0 ? "vence HOJE" : `vence em ${diasParaVencer} DIA${diasParaVencer > 1 ? "S" : ""}`;
-    return `Fala, ${nome}!\n${saudacaoHorario_()}\n\n` +
-      `Sou Felipe, Financeiro da Jornada do M1lhão.\n` +
-      `Espero que sua Jornada esteja sendo brilhante 🤩🧭\n\n` +
-      `Estou passando aqui para lembrar que sua ${descricao} ${quando}, com vencimento para dia ${dataVenc}, conforme contrato acordado. Abaixo está o link virtual para efetuar o pagamento online e a chave para pix também.\n\n` +
-      `[LINK DE PAGAMENTO]\n\n` +
-      `Atenciosamente,\nEquipe Jornada do Milhão`;
-  }
-
-  // Vencimento já passou: cobrança. "Novamente" e "já é o nosso contato
-  // nº N" só entram a partir do 2º dia de contato — no primeiro dia ainda
-  // não é "de novo" nada.
-  const n = contagemContatosParcela_(p);
-  const abertura = n === 1
-    ? `Estou passando aqui sobre a sua ${descricao}, com vencimento para dia ${dataVenc}, que segue em aberto até o momento.`
-    : `Estou passando aqui novamente sobre a sua ${descricao}, com vencimento para dia ${dataVenc}, que segue em aberto até o momento — esse já é o nosso contato nº ${n} sobre essa parcela.`;
-  return `${saudacaoHorario_()}, ${nome}! Tudo bem?\n\n` +
-    `Sou Felipe, Financeiro da Jornada do M1lhão.\n\n` +
-    `${abertura} Ainda não identificamos o pagamento nem retorno sobre isso.\n\n` +
-    `Você tem uma previsão para que a situação seja regularizada?\n\n` +
-    `Abaixo está o link virtual para pagamento e a chave pix:\n\n` +
-    `[LINK DE PAGAMENTO]\n\n` +
-    `Pedimos a gentileza de confirmar o pagamento ou nos retornar aqui explicando a situação.\n\n` +
-    `Atenciosamente,\nEquipe Jornada do Milhão`;
-}
-// Um registro por parcela por dia — o ID do documento É "parcelaId_data",
-// então clicar em "Copiar cobrança" 5x no mesmo dia só regrava o mesmo
-// documento (merge idempotente), nunca cria um segundo. É essa contagem
-// de dias distintos (contagemContatosParcela_, acima) que vira o "contato
-// nº N" na mensagem de cobrança.
-function registrarContatoParcela_(parcelaId) {
-  const hoje = hojeStr();
-  return setDoc(doc(db, "registrosCobranca", `${parcelaId}_${hoje}`), {
-    parcelaId, data: hoje, criadoEm: serverTimestamp()
-  }, { merge: true });
-}
-async function copiarTextoCobranca(parcelaId, el) {
+async function cobrarParcela(parcelaId, el) {
   const p = STATE.parcelas.find((x) => x.id === parcelaId);
   if (!p) return;
+  if (el) { el.disabled = true; el.textContent = "Preparando…"; }
+  document.getElementById("mcob-titulo").textContent = `Cobrar ${p.clienteNome}${MODO_TESTE_COBRANCA ? " (teste)" : ""}`;
+  document.getElementById("mcob-aviso").textContent = "Criando o link na PicPay…";
+  document.getElementById("mcob-texto").value = "";
+  document.getElementById("btn-mcob-whatsapp").classList.add("hidden");
+  document.getElementById("btn-mcob-copiar").disabled = true;
+  abrirModal("modal-cobranca");
   try {
-    await navigator.clipboard.writeText(montarTextoCobranca(p));
+    const idToken = await auth.currentUser.getIdToken();
+    const r = await chamarAppsScript("cobPreparar", { idToken, parcelaId, teste: MODO_TESTE_COBRANCA });
+    document.getElementById("mcob-texto").value = r.texto;
+    document.getElementById("btn-mcob-copiar").disabled = false;
+    if (r.waUrl) {
+      const wa = document.getElementById("btn-mcob-whatsapp");
+      wa.href = r.waUrl;
+      wa.classList.remove("hidden");
+      document.getElementById("mcob-aviso").textContent = "Mensagem pronta, com o link PicPay e o Pix. Abra no WhatsApp do financeiro e aperte enviar.";
+    } else {
+      document.getElementById("mcob-aviso").textContent = "O cliente não tem celular válido no cadastro. Copie a mensagem e mande por onde der.";
+    }
   } catch (err) {
-    mostrarErro("Não foi possível copiar. Tente de novo.");
-    return;
+    fecharModal("modal-cobranca");
+    mostrarErro(err.message);
+  } finally {
+    if (el) { el.disabled = false; el.textContent = "Cobrar pelo WhatsApp"; }
   }
-  mostrarToast("Mensagem de cobrança copiada — falta só colar o link de pagamento.");
-  if (el) { el.classList.add("copiado"); setTimeout(() => el.classList.remove("copiado"), 900); }
-  // Best-effort: se o registro falhar (ex: sem internet por 1 segundo), a
-  // mensagem já foi copiada e a pessoa já vai mandar — não é motivo pra
-  // travar isso com um erro na tela.
-  registrarContatoParcela_(parcelaId).catch(() => {});
 }
+
+document.getElementById("btn-mcob-copiar").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(document.getElementById("mcob-texto").value);
+    mostrarToast("Mensagem copiada.");
+  } catch (err) {
+    mostrarErro("Não foi possível copiar. Selecione o texto e copie à mão.");
+  }
+});
+document.getElementById("btn-mcob-whatsapp").addEventListener("click", () => fecharModal("modal-cobranca"));
+
+function abrirCobrancaPedida_() {
+  if (!cobrarAoCarregar || !podeVer("financeiro")) return;
+  if (!STATE.parcelas.some((p) => p.id === cobrarAoCarregar)) return;
+  const id = cobrarAoCarregar;
+  cobrarAoCarregar = null;
+  history.replaceState(null, "", location.pathname + (MODO_TESTE_COBRANCA ? "?modo=teste" : ""));
+  cobrarParcela(id);
+}
+
+// ── Lembretes de cobrança por notificação neste aparelho ──
+// O Code.gs (cobrancaRotina) manda nos horários de cobrança, pelo Firebase
+// Cloud Messaging, pros aparelhos guardados em push_tokens. O toque abre o
+// WhatsApp com a mensagem pronta (service-worker.js).
+// Chave pública do certificado Web Push (Firebase > Configurações do
+// projeto > Cloud Messaging > Certificados push da Web). Não é segredo.
+const VAPID_KEY_COBRANCA = "BNCSnncJ_i-62VQ7IOrfy5PUicX3XRrmFLG_kfYbq5HMqgUFabGAn49hfT9UxbW6yQFPqQMeAMmhTIZHEEmxCmQ";
+const CHAVE_LOCAL_PUSH = "jm_push_token";
+
+function lerPushLocal_() { try { return JSON.parse(localStorage.getItem(CHAVE_LOCAL_PUSH) || "null"); } catch (e) { return null; } }
+function gravarPushLocal_(v) { try { localStorage.setItem(CHAVE_LOCAL_PUSH, JSON.stringify(v)); } catch (e) { /* sem storage: só pede de novo depois */ } }
+
+async function pushPossivel_() {
+  return !!(VAPID_KEY_COBRANCA && "serviceWorker" in navigator && "Notification" in window && (await isSupported().catch(() => false)));
+}
+
+async function renderPushCobranca() {
+  const texto = document.getElementById("cob-push-texto");
+  const btn = document.getElementById("btn-cob-push");
+  if (!texto) return;
+  let msg, botao = false;
+  if (!(await pushPossivel_())) msg = "Este navegador não recebe notificação com o sistema fechado. No iPhone, instale o sistema na tela inicial e abra por lá.";
+  else if (Notification.permission === "denied") msg = "As notificações foram bloqueadas neste navegador. Libere nas configurações do site para receber os lembretes.";
+  else if (Notification.permission === "granted" && lerPushLocal_()) msg = "Lembretes ligados neste aparelho: seg. a sex. às 8h, 15h e 18h; sábado às 8h e 12h. O toque abre o WhatsApp com a mensagem.";
+  else { msg = "Ligue neste aparelho (o do WhatsApp do financeiro) para receber os lembretes de cobrança."; botao = true; }
+  texto.textContent = msg;
+  btn.classList.toggle("hidden", !botao);
+}
+
+// Guarda o endereço de push deste aparelho em nome de quem está logado.
+// Roda também a cada abertura, porque o navegador troca o token às vezes.
+async function registrarPushCobranca_(forcar) {
+  if (!(await pushPossivel_()) || Notification.permission !== "granted" || !auth.currentUser) return;
+  const reg = await navigator.serviceWorker.ready;
+  const token = await getToken(getMessaging(firebaseApp), { vapidKey: VAPID_KEY_COBRANCA, serviceWorkerRegistration: reg });
+  if (!token) return;
+  const uid = auth.currentUser.uid;
+  const salvo = lerPushLocal_();
+  if (!forcar && salvo && salvo.token === token && salvo.uid === uid) return;
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)));
+  const id = Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 40);
+  if (salvo && salvo.id && salvo.id !== id) deleteDoc(doc(db, "push_tokens", salvo.id)).catch(() => {});
+  await setDoc(doc(db, "push_tokens", id), { token, uid, aparelho: navigator.userAgent.slice(0, 200), atualizadoEm: serverTimestamp() });
+  gravarPushLocal_({ id, token, uid });
+}
+
+document.getElementById("btn-cob-push").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const permissao = await Notification.requestPermission();
+    if (permissao === "granted") {
+      await registrarPushCobranca_(true);
+      mostrarToast("Lembretes de cobrança ligados neste aparelho.");
+    }
+  } catch (err) {
+    mostrarErro("Não foi possível ligar as notificações: " + err.message);
+  } finally {
+    btn.disabled = false;
+    renderPushCobranca();
+  }
+});
 
 function renderFinanceiro() {
   // Chamado pelos listeners de contratos e parcelas, que a SDR também tem.
@@ -3827,7 +3833,7 @@ function renderFinanceiro() {
     <td>${fmtData(p.vencimento)}</td><td class="num">${fmtMoeda(p.valor)}</td>
     <td>
       <button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('parcela','${p.id}')">Marcar paga</button>
-      <button class="btn-small" onclick="event.stopPropagation();window.__jm.copiarTextoCobranca('${p.id}',this)">Copiar cobrança</button>
+      <button class="btn-small" onclick="event.stopPropagation();window.__jm.cobrarParcela('${p.id}',this)">Cobrar pelo WhatsApp</button>
     </td>
   </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Nenhuma parcela vencida.</div></td></tr>`;
 
@@ -3839,7 +3845,7 @@ function renderFinanceiro() {
       <td><span class="stamp ${p.status}">${p.status === "realizado" ? "Pago" : "Esperado"}</span></td>
       <td>${p.status === "esperado"
         ? `<button class="btn-small" onclick="event.stopPropagation();window.__jm.abrirModalMarcarPago('parcela','${p.id}')">Marcar paga</button>
-           <button class="btn-small" onclick="event.stopPropagation();window.__jm.copiarTextoCobranca('${p.id}',this)">Copiar cobrança</button>`
+           <button class="btn-small" onclick="event.stopPropagation();window.__jm.cobrarParcela('${p.id}',this)">Cobrar pelo WhatsApp</button>`
         : `<button class="btn-small" onclick="event.stopPropagation();window.__jm.desmarcarPago('parcela','${p.id}')">Desfazer</button>`}</td>
     </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nenhuma parcela neste período.</div></td></tr>`;
 
@@ -4969,6 +4975,7 @@ async function iniciarListeners() {
     STATE.parcelas = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderTabelaContratos();
     renderFinanceiro();
+    abrirCobrancaPedida_();
     rastrearSincronizacao("parcelas", snap);
   }, (err) => mostrarErro("Erro de conexão (parcelas): " + err.message));
 
@@ -5034,16 +5041,6 @@ async function iniciarListeners() {
     }, (err) => mostrarErro("Erro de conexão (entradas): " + err.message));
   }
 
-  // Contagem de "contato nº N" na mensagem de cobrança (montarTextoCobranca)
-  // depende disso — mesmo gate de "financeiro" porque é só quem vê o Painel
-  // Financeiro que copia cobrança.
-  if (podeVer("financeiro")) {
-    onSnapshot(collection(db, "registrosCobranca"), { includeMetadataChanges: true }, (snap) => {
-      STATE.registrosCobranca = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      renderFinanceiro();
-    }, (err) => mostrarErro("Erro de conexão (registros de cobrança): " + err.message));
-  }
-
   onSnapshot(query(collection(db, "etapasAdminConfig"), orderBy("ordem")), { includeMetadataChanges: true }, (snap) => {
     STATE.etapasAdmin = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderKanbanAdministrativo();
@@ -5061,7 +5058,7 @@ async function iniciarListeners() {
 // Funções chamadas a partir de HTML gerado por string (onclick inline) —
 // só assim dá pra referenciá-las de dentro de innerHTML num ES module.
 window.__jm = {
-  abrirModalMarcarPago, desmarcarPago, copiarTextoCobranca,
+  abrirModalMarcarPago, desmarcarPago, cobrarParcela,
   abrirDetalheCliente, abrirDetalheDespesa, abrirDetalheRecorrente, abrirDetalheContrato, abrirDetalheParcela, abrirDetalheEntrada,
   abrirDetalheEtapaAgendamento, abrirDetalheEtapaVenda, abrirDetalheEtapaAdmin,
   gerarPdfContratoExistente, enviarContratoParaAssinatura,
@@ -5368,6 +5365,10 @@ iniciarAuth(async (estado) => {
     listenersIniciados = true;
     papelDosListeners = assinaturaAcesso();
     iniciarListeners();
+  }
+  if (podeVer("financeiro")) {
+    renderPushCobranca();
+    registrarPushCobranca_(false).catch((err) => console.warn("[push] token não renovado:", err.message));
   }
   if (podeVer("usuarios") && !listenerUsuariosIniciado) {
     listenerUsuariosIniciado = true;

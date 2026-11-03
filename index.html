@@ -157,7 +157,13 @@
     <div class="kpi-grid" id="fin-kpis"></div>
 
     <div class="card">
-      <h2>Parcelas vencidas e não pagas <span style="color:var(--ink-faint);font-weight:500;font-size:12px;">— sinalizadas para cobrança manual</span></h2>
+      <h2>Lembretes de cobrança no celular</h2>
+      <p id="cob-push-texto" style="color:var(--ink-faint);font-size:13px;margin:0 0 10px;"></p>
+      <button class="btn-small hidden" id="btn-cob-push">Ativar neste aparelho</button>
+    </div>
+
+    <div class="card">
+      <h2>Parcelas vencidas e não pagas <span style="color:var(--ink-faint);font-weight:500;font-size:12px;">— "Cobrar pelo WhatsApp" cria o link PicPay e abre a mensagem</span></h2>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Cliente</th><th>Parcela</th><th>Vencimento</th><th>Valor</th><th></th></tr></thead>
@@ -927,6 +933,20 @@
   </div>
 </div>
 
+<!-- ═══ MODAL: COBRANÇA PELO WHATSAPP ═══ -->
+<div class="modal-overlay" id="modal-cobranca">
+  <div class="modal-box">
+    <h2 id="mcob-titulo">Cobrar pelo WhatsApp</h2>
+    <p id="mcob-aviso" style="color:var(--ink-faint);font-size:13px;margin:0 0 12px;"></p>
+    <div class="field"><label>Mensagem</label><textarea id="mcob-texto" rows="12" readonly></textarea></div>
+    <div class="modal-actions">
+      <button class="btn" data-fechar-modal="modal-cobranca">Fechar</button>
+      <button class="btn" id="btn-mcob-copiar">Copiar mensagem</button>
+      <a class="btn btn-primary hidden" id="btn-mcob-whatsapp" target="_blank" rel="noopener" style="text-decoration:none;">Abrir no WhatsApp</a>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ MODAL: DESPESA / CUSTO ═══ -->
 <div class="modal-overlay" id="modal-despesa">
   <div class="modal-box">
@@ -1277,7 +1297,7 @@
   arquivo direto do disco (file://) para testar, veja o README.
 -->
 <script type="module" src="firebase-init.js"></script>
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=20261103a"></script>
 <script>
   // Registra o service worker — sem isso o navegador não considera o site
   // "instalável" (ícone de instalar some do menu, e o Android não mostra o
