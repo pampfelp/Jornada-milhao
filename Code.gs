@@ -701,8 +701,8 @@ function acaoReceberLeadTallyInterno_(e) {
     convertido: false, enviadoAgenda: false, motivoPerda: "",
     observacoes: observacoes, formCompleto: false, tallyResponseId: d.responseId,
     instagram: "", estabelecimento: qualificacao.estabelecimento,
-    timeComercial: qualificacao.timeComercial, faturamento6meses: qualificacao.faturamento6meses,
-    ondeTrava: qualificacao.ondeTrava
+    timeComercial: qualificacao.timeComercial, faturamento6meses: null,
+    faturamentoMensal: qualificacao.faturamentoMensal, ondeTrava: qualificacao.ondeTrava
   });
   if (lead.jaExistia) {
     console.log("Lead já existe para a resposta Tally " + d.responseId + " (reenvio).");
@@ -736,16 +736,22 @@ function respostasTally_(fields) {
 }
 
 // Qualificação do "Formulário de Qualificação | Benedito Viegas" (Tally).
-// Estabelecimento e time comercial: casa pelo texto EXATO da opção, que é
-// único no formulário. Opção fora daqui não preenche o campo e continua
-// nas observações. Faturamento e "onde trava" vão por aproximação (abaixo),
-// porque as opções do Tally são outras.
+// Estabelecimento, time comercial e faturamento por mês: casa pelo texto
+// EXATO da opção, que é único no formulário. Opção fora daqui não preenche
+// o campo e continua nas observações. "Onde trava" vai por palavra-chave
+// (abaixo). O faturamento do Tally é mensal e vai pro campo
+// faturamentoMensal; o de 6 meses (faturamento6meses) fica pra YayForms, e
+// qualquer um dos dois satisfaz a qualificação no app.
 var OPCOES_QUALIFICACAO_TALLY_ = {
   "Possuímos escritório ou ponto comercial físico, próprio ou alugado.": { chave: "estabelecimento", codigo: "ponto_fixo" },
   "Ainda trabalhamos de forma remota ou em home office, sem escritório comercial.": { chave: "estabelecimento", codigo: "remoto_online" },
   "Sempre trabalhei sozinho e não tenho intenção de contratar vendedores.": { chave: "timeComercial", codigo: "0_1" },
   "Tenho de 1 a 2 vendedores, mas ainda enfrento dificuldades de treinamento e resultados.": { chave: "timeComercial", codigo: "ate_2" },
-  "Tenho 3 ou mais vendedores ativos e quero melhorar o desempenho da equipe.": { chave: "timeComercial", codigo: "equipe" }
+  "Tenho 3 ou mais vendedores ativos e quero melhorar o desempenho da equipe.": { chave: "timeComercial", codigo: "equipe" },
+  "Abaixo de R$ 150 mil.": { chave: "faturamentoMensal", codigo: "ate_150k" },
+  "De R$ 150 mil a menos de R$ 300 mil.": { chave: "faturamentoMensal", codigo: "150k_300k" },
+  "De R$ 300 mil a R$ 700 mil.": { chave: "faturamentoMensal", codigo: "300k_700k" },
+  "Acima de R$ 700 mil.": { chave: "faturamentoMensal", codigo: "acima_700k" }
   // "Já tive uma equipe comercial, mas precisei reduzir ou encerrar as
   // contratações." não diz quantos vendedores há hoje: fica pra SDR.
 };
@@ -757,9 +763,10 @@ var OPCOES_QUALIFICACAO_TALLY_ = {
 // importa, a primeira regra que bate vence. Resposta sem palavra-chave não
 // marca nada e continua nas observações.
 var ONDE_TRAVA_POR_PALAVRA_TALLY_ = [
-  { palavras: ["contrat", "trein", "desenvolver vendedor"], opcao: "Dificuldade em contratar e remunerar time comercial" },
-  { palavras: ["depend"], opcao: "Não consigo escalar as vendas mesmo tendo equipe" },
-  { palavras: ["preço", "desconto", "margem", "negocia"], opcao: "Margem caindo, mesmo vendendo" },
+  { palavras: ["contrat", "trein", "desenvolver vendedor"], opcao: "Dificuldade para contratar, treinar e desenvolver vendedores" },
+  { palavras: ["depend"], opcao: "As vendas dependem de mim" },
+  { palavras: ["preço", "desconto", "negocia"], opcao: "Perco propostas por preço e desconto" },
+  { palavras: ["margem"], opcao: "Margem caindo, mesmo vendendo" },
   { palavras: ["oscila", "previs", "instab", "queda", "oportunidade"], opcao: "Falta de previsibilidade - mês bom, mês ruim" },
   { palavras: ["gestão", "gerir", "desempenho"], opcao: "Gestão de time comercial" },
   { palavras: ["estrutura", "comporta", "capacidade"], opcao: "Minha operação não comporta crescer mais" }
@@ -776,37 +783,8 @@ function ondeTravaPorAproximacao_(texto) {
   return null;
 }
 
-// Faturamento por aproximação: o CRM guarda o faturamento de 6 MESES em
-// faixas (menos de 500 mil ... acima de 2 milhões). Lê os valores da
-// resposta ("R$ 150 mil", "1,2 milhão"), pega o ponto médio da faixa
-// ("Abaixo de X" vira X/2; "Acima de X" vira X), multiplica por 6 se a
-// pergunta for mensal e cai na faixa do CRM onde esse número está.
-// Ex.: "De R$ 150 mil a menos de R$ 300 mil" por mês → 225 mil x 6 =
-// 1,35 milhão → "Entre R$ 1,2 milhão e R$ 2 milhões".
-function faturamento6mesesPorAproximacao_(titulo, texto) {
-  var t = String(texto).toLowerCase();
-  var valores = [];
-  var re = /(\d+(?:[.,]\d+)?)\s*(mil|milh)/g, m;
-  while ((m = re.exec(t)) !== null) {
-    var n = Number(m[1].replace(".", "").replace(",", "."));
-    valores.push(m[2] === "mil" ? n * 1000 : n * 1000000);
-  }
-  if (!valores.length) return null;
-  var base;
-  if (valores.length >= 2) base = (valores[0] + valores[1]) / 2;
-  else if (/^(abaixo|menos|até|ate)\b/.test(t.trim())) base = valores[0] / 2;
-  else base = valores[0];
-  var tituloLower = String(titulo).toLowerCase();
-  if (tituloLower.indexOf("mensal") > -1 || tituloLower.indexOf("por mês") > -1) base = base * 6;
-  if (base < 500000) return "menos_500k";
-  if (base < 800000) return "500k_800k";
-  if (base < 1200000) return "800k_1_2mi";
-  if (base <= 2000000) return "1_2mi_2mi";
-  return "acima_2mi";
-}
-
 function mapearQualificacaoTally_(respostas) {
-  var q = { estabelecimento: null, timeComercial: null, faturamento6meses: null, ondeTrava: [] };
+  var q = { estabelecimento: null, timeComercial: null, faturamentoMensal: null, ondeTrava: [] };
   respostas.forEach(function (r) {
     var valores = Array.isArray(r.content) ? r.content : [r.content];
     var titulo = String(r.fieldPlainTitle || "").toLowerCase();
@@ -817,9 +795,6 @@ function mapearQualificacaoTally_(respostas) {
       if (titulo.indexOf("problema") > -1 || titulo.indexOf("desafio") > -1) {
         var opcao = ondeTravaPorAproximacao_(v);
         if (opcao && q.ondeTrava.indexOf(opcao) === -1) q.ondeTrava.push(opcao);
-      }
-      if (titulo.indexOf("faturamento") > -1 && !q.faturamento6meses) {
-        q.faturamento6meses = faturamento6mesesPorAproximacao_(titulo, v);
       }
     });
   });

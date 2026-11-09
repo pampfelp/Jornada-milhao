@@ -704,6 +704,9 @@
           <option value="equipe">Equipe comercial</option>
         </select>
       </div>
+    </div>
+    <p class="hint" style="margin:4px 0 6px;">Faturamento: basta um dos dois, por mês ou dos últimos 6 meses.</p>
+    <div class="row">
       <div class="field">
         <label>Faturamento nos últimos 6 meses</label>
         <select id="ma-faturamento">
@@ -713,6 +716,16 @@
           <option value="800k_1_2mi">Entre R$ 800.000,00 e R$ 1,2 milhão</option>
           <option value="1_2mi_2mi">Entre R$ 1,2 milhão e R$ 2 milhões</option>
           <option value="acima_2mi">Acima de R$ 2 milhões</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Faturamento médio por mês</label>
+        <select id="ma-faturamento-mensal">
+          <option value="">Selecione...</option>
+          <option value="ate_150k">Abaixo de R$ 150 mil</option>
+          <option value="150k_300k">De R$ 150 mil a menos de R$ 300 mil</option>
+          <option value="300k_700k">De R$ 300 mil a R$ 700 mil</option>
+          <option value="acima_700k">Acima de R$ 700 mil</option>
         </select>
       </div>
     </div>
@@ -1297,7 +1310,7 @@
   arquivo direto do disco (file://) para testar, veja o README.
 -->
 <script type="module" src="firebase-init.js"></script>
-<script type="module" src="app.js?v=20261109"></script>
+<script type="module" src="app.js?v=20261109b"></script>
 <script>
   // Registra o service worker — sem isso o navegador não considera o site
   // "instalável" (ícone de instalar some do menu, e o Android não mostra o

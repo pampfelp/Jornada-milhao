@@ -234,12 +234,18 @@ nas observações. O webhook do Tally já traz a resposta inteira, então
    O log de eventos do webhook (ícone de relógio) mostra cada envio.
 
 No "Formulário de Qualificação | Benedito Viegas", "operação física" e
-"equipe de vendas" preenchem Estabelecimento e Time comercial pelo texto
-exato da opção (`OPCOES_QUALIFICACAO_TALLY_` no `Code.gs`). "Onde trava"
-sai por palavra-chave das perguntas de problema e desafio
-(`ONDE_TRAVA_POR_PALAVRA_TALLY_`), e o faturamento por aproximação: ponto
-médio da faixa mensal x 6, na faixa de 6 meses do CRM. O card ganha a
+"equipe de vendas" e "faturamento médio mensal" preenchem Estabelecimento,
+Time comercial e Faturamento por mês pelo texto exato da opção
+(`OPCOES_QUALIFICACAO_TALLY_` no `Code.gs`). "Onde trava" sai por
+palavra-chave das perguntas de problema e desafio
+(`ONDE_TRAVA_POR_PALAVRA_TALLY_`), com três opções criadas para o Tally:
+"Dificuldade para contratar, treinar e desenvolver vendedores", "As vendas
+dependem de mim" e "Perco propostas por preço e desconto". O card ganha a
 etiqueta "Tally completo".
+
+O lead tem dois campos de faturamento: por mês (`faturamentoMensal`, o do
+Tally) e dos últimos 6 meses (`faturamento6meses`, o da YayForms). Para
+avançar na etapa que exige qualificação, basta um dos dois.
 
 Reenvio do Tally (ele tenta de novo por até 1 dia se não receber 2xx) não
 duplica: cliente e lead nascem com o ID `tally_<responseId>`.

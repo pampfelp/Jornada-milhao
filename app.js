@@ -693,7 +693,10 @@ const OPCOES_ONDE_TRAVA = [
   "Minha operação não comporta crescer mais",
   "Falta de previsibilidade - mês bom, mês ruim",
   "Gestão de time comercial",
-  "Dificuldade em contratar e remunerar time comercial"
+  "Dificuldade em contratar e remunerar time comercial",
+  "Dificuldade para contratar, treinar e desenvolver vendedores",
+  "As vendas dependem de mim",
+  "Perco propostas por preço e desconto"
 ];
 const LABEL_TIME_COMERCIAL = { "0_1": "0 a 1 vendedores", ate_2: "Até 2 vendedores", ate_3: "Até 3 vendedores", equipe: "Equipe comercial" };
 const LABEL_FATURAMENTO = {
@@ -702,6 +705,14 @@ const LABEL_FATURAMENTO = {
   "800k_1_2mi": "Entre R$ 800.000,00 e R$ 1,2 milhão",
   "1_2mi_2mi": "Entre R$ 1,2 milhão e R$ 2 milhões",
   acima_2mi: "Acima de R$ 2 milhões"
+};
+// Faturamento por mês (formulário do Tally) ou nos últimos 6 meses
+// (YayForms): qualquer um dos dois satisfaz a qualificação.
+const LABEL_FATURAMENTO_MENSAL = {
+  ate_150k: "Abaixo de R$ 150 mil",
+  "150k_300k": "De R$ 150 mil a menos de R$ 300 mil",
+  "300k_700k": "De R$ 300 mil a R$ 700 mil",
+  acima_700k: "Acima de R$ 700 mil"
 };
 const LABEL_ESTABELECIMENTO = { ponto_fixo: "Ponto fixo", remoto_online: "Remoto/Online" };
 
@@ -1346,7 +1357,7 @@ function requisitosFaltantesEtapa(etapaCfg, cliente, ag) {
     if (!ag?.instagram) faltando.push("Instagram da empresa");
     if (!ag?.estabelecimento) faltando.push("estabelecimento (ponto fixo/remoto)");
     if (!ag?.timeComercial) faltando.push("time comercial");
-    if (!ag?.faturamento6meses) faltando.push("faturamento dos últimos 6 meses");
+    if (!ag?.faturamento6meses && !ag?.faturamentoMensal) faltando.push("faturamento (por mês ou dos últimos 6 meses)");
     if (!(Array.isArray(ag?.ondeTrava) && ag.ondeTrava.length)) faltando.push("onde a empresa trava");
     if (ag?.comprometimento == null) faltando.push("nível de comprometimento (0 a 10)");
     if (ag?.nivelInteresse == null) faltando.push("nível de interesse");
@@ -1427,6 +1438,7 @@ async function processarAgendamentoAgendado(agendamentoId, dados) {
           email: dados.email || "", nivelInteresse: dados.nivelInteresse || null,
           instagram: dados.instagram || "", estabelecimento: dados.estabelecimento || null,
           timeComercial: dados.timeComercial || null, faturamento6meses: dados.faturamento6meses || null,
+          faturamentoMensal: dados.faturamentoMensal || null,
           ondeTrava: Array.isArray(dados.ondeTrava) ? dados.ondeTrava : [], comprometimento: dados.comprometimento != null ? dados.comprometimento : null,
           data: dados.data || "", hora: dados.hora || "",
           agendamentoId, etapa: primeiraEtapaVenda.id, valorProposto: 0, observacoes: dados.observacoes || "",
@@ -1601,6 +1613,7 @@ function resetCamposQualificacaoAgendamento() {
   pickerEstabelecimento.set(null);
   document.getElementById("ma-time-comercial").value = "";
   document.getElementById("ma-faturamento").value = "";
+  document.getElementById("ma-faturamento-mensal").value = "";
   checkboxOndeTrava.setSelecionados([]);
   pickerComprometimento.set(null);
 }
@@ -1609,6 +1622,7 @@ function preencherCamposQualificacaoAgendamento(a) {
   pickerEstabelecimento.set(a.estabelecimento || null);
   document.getElementById("ma-time-comercial").value = a.timeComercial || "";
   document.getElementById("ma-faturamento").value = a.faturamento6meses || "";
+  document.getElementById("ma-faturamento-mensal").value = a.faturamentoMensal || "";
   checkboxOndeTrava.setSelecionados(Array.isArray(a.ondeTrava) ? a.ondeTrava : []);
   pickerComprometimento.set(a.comprometimento != null ? String(a.comprometimento) : null);
 }
@@ -1672,6 +1686,7 @@ function lerCamposQualificacaoAgendamento() {
     estabelecimento: pickerEstabelecimento.valor,
     timeComercial: document.getElementById("ma-time-comercial").value,
     faturamento6meses: document.getElementById("ma-faturamento").value,
+    faturamentoMensal: document.getElementById("ma-faturamento-mensal").value,
     ondeTrava: checkboxOndeTrava.getSelecionados(),
     comprometimento: pickerComprometimento.valor != null ? Number(pickerComprometimento.valor) : null
   };
@@ -1783,6 +1798,7 @@ function abrirDetalheAgendamento(id) {
         ["Instagram da empresa", esc(a.instagram || "—")],
         ["Estabelecimento", esc(LABEL_ESTABELECIMENTO[a.estabelecimento] || "—")],
         ["Time comercial", esc(LABEL_TIME_COMERCIAL[a.timeComercial] || "—")],
+        ["Faturamento por mês", esc(LABEL_FATURAMENTO_MENSAL[a.faturamentoMensal] || "—")],
         ["Faturamento (últimos 6 meses)", esc(LABEL_FATURAMENTO[a.faturamento6meses] || "—")],
         ["Onde a empresa trava", (Array.isArray(a.ondeTrava) && a.ondeTrava.length) ? esc(a.ondeTrava.join("; ")) : "—"],
         ["Comprometimento (0 a 10)", a.comprometimento != null ? `${a.comprometimento}/10` : "—"],
@@ -2021,6 +2037,7 @@ function abrirDetalheOportunidade(id) {
       ["Instagram da empresa", esc(o.instagram || "—")],
       ["Estabelecimento", esc(LABEL_ESTABELECIMENTO[o.estabelecimento] || "—")],
       ["Time comercial", esc(LABEL_TIME_COMERCIAL[o.timeComercial] || "—")],
+      ["Faturamento por mês", esc(LABEL_FATURAMENTO_MENSAL[o.faturamentoMensal] || "—")],
       ["Faturamento (últimos 6 meses)", esc(LABEL_FATURAMENTO[o.faturamento6meses] || "—")],
       ["Onde a empresa trava", (Array.isArray(o.ondeTrava) && o.ondeTrava.length) ? esc(o.ondeTrava.join("; ")) : "—"],
       ["Comprometimento (0 a 10)", o.comprometimento != null ? `${o.comprometimento}/10` : "—"],
