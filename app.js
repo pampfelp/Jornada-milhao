@@ -1169,7 +1169,7 @@ function renderListaFunil(funil, cards, etapasRaw, getEtapaFn, detalheFn) {
   document.getElementById(`lista-${funil}-corpo`).innerHTML = linhas.length ? linhas.map((c) => {
     const etapaCfg = etapasRaw.find((e) => e.id === getEtapaFn(c));
     return `<tr class="linha-clicavel" onclick="window.__jm.onCardClick('${funil}','${esc(c.id)}')">
-      <td>${esc(c.clienteNome || "—")}${c.nivelInteresse ? ` <span class="kcard-nivel" title="${esc(labelNivelInteresse(c.nivelInteresse))}">${c.nivelInteresse}</span>` : ""}${c.formCompleto ? ` <span class="kcard-tag-yay" title="Respondeu o formulário YayForms até o fim">Yay completo</span>` : ""}</td>
+      <td>${esc(c.clienteNome || "—")}${c.nivelInteresse ? ` <span class="kcard-nivel" title="${esc(labelNivelInteresse(c.nivelInteresse))}">${c.nivelInteresse}</span>` : ""}${c.formCompleto ? ` <span class="kcard-tag-yay" title="Respondeu o formulário YayForms até o fim">Yay completo</span>` : ""}${c.tallyResponseId ? ` <span class="kcard-tag-yay kcard-tag-tally" title="Respondeu o formulário do Tally até o fim">Tally completo</span>` : ""}</td>
       <td>${etapaSelecionavel(funil, c.id, getEtapaFn(c), etapasRaw)}</td>
       <td>${detalheFn(c)}</td>
       <td>${renderBadgeSla(c.dataEntrouEtapa, etapaCfg) || "—"}</td>
@@ -1289,7 +1289,7 @@ function onCardClick(funil, cardId) {
 function renderCardAgendamento(a) {
   const etapaCfg = STATE.etapasAgendamento.find((e) => e.id === a.etapa);
   return `
-    <div class="kcard-nome">${esc(a.clienteNome)}${a.nivelInteresse ? ` <span class="kcard-nivel" title="${esc(labelNivelInteresse(a.nivelInteresse))}">${a.nivelInteresse}</span>` : ""}${a.formCompleto ? ` <span class="kcard-tag-yay" title="Respondeu o formulário YayForms até o fim">Yay completo</span>` : ""}</div>
+    <div class="kcard-nome">${esc(a.clienteNome)}${a.nivelInteresse ? ` <span class="kcard-nivel" title="${esc(labelNivelInteresse(a.nivelInteresse))}">${a.nivelInteresse}</span>` : ""}${a.formCompleto ? ` <span class="kcard-tag-yay" title="Respondeu o formulário YayForms até o fim">Yay completo</span>` : ""}${a.tallyResponseId ? ` <span class="kcard-tag-yay kcard-tag-tally" title="Respondeu o formulário do Tally até o fim">Tally completo</span>` : ""}</div>
     <div class="kcard-sub">${esc(a.telefone || "")}</div>
     <div class="kcard-foot">
       <span class="kcard-prazo">${a.data ? `${fmtData(a.data)} ${esc(a.hora || "")}` : ""}</span>

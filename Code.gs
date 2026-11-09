@@ -108,6 +108,9 @@ function doPost(e) {
   if (e.parameter && e.parameter.origem === "yayforms") {
     return json_(acaoReceberLeadYayforms_(e));
   }
+  if (e.parameter && e.parameter.origem === "tally") {
+    return json_(acaoReceberLeadTally_(e));
+  }
   var body = {};
   try { body = JSON.parse(e.postData.contents); } catch (err) {}
   return json_(rotear_(body));
@@ -630,6 +633,199 @@ function extrairContatoRespostaYayforms_(answers) {
   return { nome: nome, telefone: telefone, email: email, linhas: linhas };
 }
 
+// ══════════════ TALLY → NOVO LEAD NO FUNIL DE AGENDAMENTO ══════════════
+//
+// Mesmo desenho da YayForms: no formulário do Tally, Integrations →
+// Webhooks → Connect, com a URL deste Code.gs + "?origem=tally&token=...".
+// O token bate com a Script Property TALLY_WEBHOOK_TOKEN (Apps Script não
+// lê o header Tally-Signature, então a senha vai na URL).
+//
+// Diferente da YayForms, o webhook do Tally já traz a resposta inteira
+// (data.fields), então não precisa de chave de API: nenhuma chamada volta
+// ao Tally.
+//
+// Duplicado: o Tally reenvia se não receber 2xx em 10 s (5 tentativas, até
+// 1 dia), e o /exec do Apps Script responde com redirecionamento. A
+// conta-robô não pode LER agendamentos (regras), então em vez de consultar
+// antes, cliente e lead nascem com ID fixo "tally_<responseId>": no reenvio
+// o Firestore recusa criar de novo e nada se duplica.
+function acaoReceberLeadTally_(e) {
+  try {
+    var result = acaoReceberLeadTallyInterno_(e);
+    if (!result.ok) console.error("Erro Tally Webhook:", result.erro);
+    return result;
+  } catch (err) {
+    console.error("Exceção Tally Webhook:", String(err));
+    return { ok: false, erro: String(err) };
+  }
+}
+
+function acaoReceberLeadTallyInterno_(e) {
+  var tokenEsperado = PropertiesService.getScriptProperties().getProperty("TALLY_WEBHOOK_TOKEN");
+  if (!tokenEsperado || !e.parameter || e.parameter.token !== tokenEsperado) {
+    return { ok: false, erro: "Token do webhook ausente ou inválido." };
+  }
+
+  var corpoTexto = (e.postData && e.postData.contents) || "{}";
+  console.log("Payload recebido do Tally:", corpoTexto);
+  var corpo = {};
+  try { corpo = JSON.parse(corpoTexto); } catch (err) {}
+  var d = corpo.data;
+  if (corpo.eventType !== "FORM_RESPONSE" || !d || !d.responseId || !Array.isArray(d.fields)) {
+    return { ok: false, erro: "Webhook do Tally sem data.responseId/fields." };
+  }
+  var nomeFormulario = d.formName || "Formulário Tally";
+
+  var respostas = respostasTally_(d.fields);
+  var contato = extrairContatoRespostaYayforms_(respostas);
+  var qualificacao = mapearQualificacaoTally_(respostas);
+
+  var etapaInicialId = obterPrimeiraEtapaAgendamento_();
+  if (!etapaInicialId) return { ok: false, erro: "Cadastre ao menos uma etapa no Funil de Agendamento (Configurações) antes de ligar essa integração." };
+
+  var nome = contato.nome || ("Lead sem nome — " + nomeFormulario);
+  var observacoes = "Formulário: " + nomeFormulario + " (Tally, resposta " + d.responseId + ")"
+    + "\nStatus: respondido até o fim"
+    + "\n\n" + contato.linhas.join("\n");
+  var docId = "tally_" + d.responseId;
+
+  var cliente = criarDocumentoFirestoreComId_("clientes", docId, {
+    nome: nome, telefone: contato.telefone, email: contato.email, cpfCnpj: "", endereco: "",
+    representanteNome: "", representanteCpf: "", origem: nomeFormulario, observacoes: ""
+  });
+  if (!cliente.ok && !cliente.jaExistia) return { ok: false, erro: cliente.erro };
+
+  var lead = criarDocumentoFirestoreComId_("agendamentos", docId, {
+    clienteId: docId, clienteNome: nome, telefone: contato.telefone, email: contato.email,
+    data: "", hora: "", etapa: etapaInicialId,
+    convertido: false, enviadoAgenda: false, motivoPerda: "",
+    observacoes: observacoes, formCompleto: false, tallyResponseId: d.responseId,
+    instagram: "", estabelecimento: qualificacao.estabelecimento,
+    timeComercial: qualificacao.timeComercial, faturamento6meses: qualificacao.faturamento6meses,
+    ondeTrava: qualificacao.ondeTrava
+  });
+  if (lead.jaExistia) {
+    console.log("Lead já existe para a resposta Tally " + d.responseId + " (reenvio).");
+    return { ok: true, jaExistia: true, formulario: nomeFormulario };
+  }
+  if (!lead.ok) return { ok: false, erro: lead.erro };
+  return { ok: true, clienteId: docId, formulario: nomeFormulario };
+}
+
+// Converte data.fields do Tally pro formato que extrairContatoRespostaYayforms_
+// já entende ({fieldPlainTitle, content}). Escolha (MULTIPLE_CHOICE,
+// DROPDOWN, MULTI_SELECT...) vem como lista de IDs de opção; aqui vira o
+// texto da opção. Os campos booleanos de CHECKBOXES (um por opção) saem,
+// porque o campo do grupo já traz as opções marcadas.
+function respostasTally_(fields) {
+  var lista = [];
+  fields.forEach(function (f) {
+    if (typeof f.value === "boolean") return;
+    var valor = f.value;
+    if (Array.isArray(valor) && Array.isArray(f.options)) {
+      valor = valor.map(function (id) {
+        var op = f.options.filter(function (o) { return o.id === id; })[0];
+        return op ? op.text : id;
+      });
+    } else if (valor !== null && valor !== undefined && typeof valor === "object") {
+      valor = JSON.stringify(valor);
+    }
+    lista.push({ fieldPlainTitle: f.label || f.key, content: valor });
+  });
+  return lista;
+}
+
+// Qualificação do "Formulário de Qualificação | Benedito Viegas" (Tally).
+// Estabelecimento e time comercial: casa pelo texto EXATO da opção, que é
+// único no formulário. Opção fora daqui não preenche o campo e continua
+// nas observações. Faturamento e "onde trava" vão por aproximação (abaixo),
+// porque as opções do Tally são outras.
+var OPCOES_QUALIFICACAO_TALLY_ = {
+  "Possuímos escritório ou ponto comercial físico, próprio ou alugado.": { chave: "estabelecimento", codigo: "ponto_fixo" },
+  "Ainda trabalhamos de forma remota ou em home office, sem escritório comercial.": { chave: "estabelecimento", codigo: "remoto_online" },
+  "Sempre trabalhei sozinho e não tenho intenção de contratar vendedores.": { chave: "timeComercial", codigo: "0_1" },
+  "Tenho de 1 a 2 vendedores, mas ainda enfrento dificuldades de treinamento e resultados.": { chave: "timeComercial", codigo: "ate_2" },
+  "Tenho 3 ou mais vendedores ativos e quero melhorar o desempenho da equipe.": { chave: "timeComercial", codigo: "equipe" }
+  // "Já tive uma equipe comercial, mas precisei reduzir ou encerrar as
+  // contratações." não diz quantos vendedores há hoje: fica pra SDR.
+};
+
+// "Onde trava" por palavra-chave, só nas perguntas cujo título fala de
+// "problema" ou "desafio" (no Tally são duas: o problema que limita o
+// crescimento e o principal desafio comercial). Cada resposta cai na opção
+// mais próxima da lista do CRM (OPCOES_ONDE_TRAVA no app.js); a ordem
+// importa, a primeira regra que bate vence. Resposta sem palavra-chave não
+// marca nada e continua nas observações.
+var ONDE_TRAVA_POR_PALAVRA_TALLY_ = [
+  { palavras: ["contrat", "trein", "desenvolver vendedor"], opcao: "Dificuldade em contratar e remunerar time comercial" },
+  { palavras: ["depend"], opcao: "Não consigo escalar as vendas mesmo tendo equipe" },
+  { palavras: ["preço", "desconto", "margem", "negocia"], opcao: "Margem caindo, mesmo vendendo" },
+  { palavras: ["oscila", "previs", "instab", "queda", "oportunidade"], opcao: "Falta de previsibilidade - mês bom, mês ruim" },
+  { palavras: ["gestão", "gerir", "desempenho"], opcao: "Gestão de time comercial" },
+  { palavras: ["estrutura", "comporta", "capacidade"], opcao: "Minha operação não comporta crescer mais" }
+];
+
+function ondeTravaPorAproximacao_(texto) {
+  var t = String(texto).toLowerCase();
+  for (var i = 0; i < ONDE_TRAVA_POR_PALAVRA_TALLY_.length; i++) {
+    var regra = ONDE_TRAVA_POR_PALAVRA_TALLY_[i];
+    for (var j = 0; j < regra.palavras.length; j++) {
+      if (t.indexOf(regra.palavras[j]) > -1) return regra.opcao;
+    }
+  }
+  return null;
+}
+
+// Faturamento por aproximação: o CRM guarda o faturamento de 6 MESES em
+// faixas (menos de 500 mil ... acima de 2 milhões). Lê os valores da
+// resposta ("R$ 150 mil", "1,2 milhão"), pega o ponto médio da faixa
+// ("Abaixo de X" vira X/2; "Acima de X" vira X), multiplica por 6 se a
+// pergunta for mensal e cai na faixa do CRM onde esse número está.
+// Ex.: "De R$ 150 mil a menos de R$ 300 mil" por mês → 225 mil x 6 =
+// 1,35 milhão → "Entre R$ 1,2 milhão e R$ 2 milhões".
+function faturamento6mesesPorAproximacao_(titulo, texto) {
+  var t = String(texto).toLowerCase();
+  var valores = [];
+  var re = /(\d+(?:[.,]\d+)?)\s*(mil|milh)/g, m;
+  while ((m = re.exec(t)) !== null) {
+    var n = Number(m[1].replace(".", "").replace(",", "."));
+    valores.push(m[2] === "mil" ? n * 1000 : n * 1000000);
+  }
+  if (!valores.length) return null;
+  var base;
+  if (valores.length >= 2) base = (valores[0] + valores[1]) / 2;
+  else if (/^(abaixo|menos|até|ate)\b/.test(t.trim())) base = valores[0] / 2;
+  else base = valores[0];
+  var tituloLower = String(titulo).toLowerCase();
+  if (tituloLower.indexOf("mensal") > -1 || tituloLower.indexOf("por mês") > -1) base = base * 6;
+  if (base < 500000) return "menos_500k";
+  if (base < 800000) return "500k_800k";
+  if (base < 1200000) return "800k_1_2mi";
+  if (base <= 2000000) return "1_2mi_2mi";
+  return "acima_2mi";
+}
+
+function mapearQualificacaoTally_(respostas) {
+  var q = { estabelecimento: null, timeComercial: null, faturamento6meses: null, ondeTrava: [] };
+  respostas.forEach(function (r) {
+    var valores = Array.isArray(r.content) ? r.content : [r.content];
+    var titulo = String(r.fieldPlainTitle || "").toLowerCase();
+    valores.forEach(function (v) {
+      if (v === null || v === undefined) return;
+      var cfg = OPCOES_QUALIFICACAO_TALLY_[String(v).trim()];
+      if (cfg && !q[cfg.chave]) q[cfg.chave] = cfg.codigo;
+      if (titulo.indexOf("problema") > -1 || titulo.indexOf("desafio") > -1) {
+        var opcao = ondeTravaPorAproximacao_(v);
+        if (opcao && q.ondeTrava.indexOf(opcao) === -1) q.ondeTrava.push(opcao);
+      }
+      if (titulo.indexOf("faturamento") > -1 && !q.faturamento6meses) {
+        q.faturamento6meses = faturamento6mesesPorAproximacao_(titulo, v);
+      }
+    });
+  });
+  return q;
+}
+
 // ══════════════ FIRESTORE REST (só usado pelo webhook da YayForms) ══════════════
 //
 // O resto deste sistema fala com o Firestore direto do navegador, via SDK
@@ -692,6 +888,29 @@ function criarDocumentoFirestore_(colecao, dados) {
   if (json.error) throw new Error("Firestore (" + colecao + "): " + json.error.message);
   var partes = json.name.split("/");
   return partes[partes.length - 1];
+}
+
+// Igual ao de cima, mas com ID escolhido. Se o documento já existe, o
+// Firestore recusa a criação e nada é sobrescrito; ALREADY_EXISTS volta
+// como jaExistia (reenvio do webhook).
+function criarDocumentoFirestoreComId_(colecao, docId, dados) {
+  var fields = {};
+  Object.keys(dados).forEach(function (k) { fields[k] = valorFirestore_(dados[k]); });
+  var agora = new Date().toISOString();
+  fields.createdAt = { timestampValue: agora };
+  fields.updatedAt = { timestampValue: agora };
+  if (colecao === "agendamentos") fields.dataEntrouEtapa = { timestampValue: agora };
+  var url = "https://firestore.googleapis.com/v1/projects/" + FIRESTORE_PROJECT_ID_ + "/databases/(default)/documents/" + colecao
+    + "?documentId=" + encodeURIComponent(docId) + "&key=" + FIRESTORE_API_KEY_;
+  var resp = UrlFetchApp.fetch(url, {
+    method: "post", contentType: "application/json",
+    headers: { Authorization: "Bearer " + obterIdTokenRobo_() },
+    payload: JSON.stringify({ fields: fields }), muteHttpExceptions: true
+  });
+  var json = JSON.parse(resp.getContentText());
+  if (!json.error) return { ok: true };
+  if (json.error.status === "ALREADY_EXISTS") return { ok: false, jaExistia: true };
+  return { ok: false, erro: "Firestore (" + colecao + "): " + json.error.status + " " + json.error.message };
 }
 
 // Acha a etapa com menor "ordem" em etapasAgendamentoConfig (normalmente

@@ -217,6 +217,30 @@ qualquer outro lead incompleto criado manualmente.
   de um jeito muito diferente podem não ser reconhecidas, mas a resposta
   continua salva (só cai em "observações" em vez do campo certo).
 
+### 2.6. Leads automáticos (Tally → Funil de Agendamento)
+
+Mesmo resultado da YayForms: cada resposta enviada num formulário do
+[Tally](https://tally.so) vira cliente + lead na 1ª etapa do Funil de
+Agendamento, com a origem igual ao nome do formulário e todas as respostas
+nas observações. O webhook do Tally já traz a resposta inteira, então
+**não precisa de chave de API do Tally**.
+
+1. Script Property `TALLY_WEBHOOK_TOKEN` com uma senha longa e aleatória
+   (mesma função do token da YayForms: sem ela, qualquer um forja lead).
+2. No Tally, em cada formulário: **Integrations → Webhooks → Connect** →
+   URL do `Code.gs` (`.../exec`) com `?origem=tally&token=SEU_TOKEN` no
+   final. Signing secret e headers ficam em branco.
+3. Teste respondendo o formulário uma vez; o lead aparece em "Novo Lead".
+   O log de eventos do webhook (ícone de relógio) mostra cada envio.
+
+No "Formulário de Qualificação | Benedito Viegas", "operação física" e
+"equipe de vendas" preenchem Estabelecimento e Time comercial
+(`OPCOES_QUALIFICACAO_TALLY_` no `Code.gs`). Faturamento não: o Tally
+pergunta o mensal e o CRM guarda o de 6 meses, em faixas diferentes.
+
+Reenvio do Tally (ele tenta de novo por até 1 dia se não receber 2xx) não
+duplica: cliente e lead nascem com o ID `tally_<responseId>`.
+
 ## 3. Acesso e papéis (Firebase Auth)
 
 O sistema exige login desde 2026-09-02. Antes disso qualquer pessoa com a
