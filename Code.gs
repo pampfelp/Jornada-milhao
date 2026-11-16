@@ -14,8 +14,7 @@
  *      qual Agenda os agendamentos criados no sistema são lançados).
  *   2. "criarEventoAgenda" — cria um evento novo na Agenda quando um
  *      agendamento é criado (ou reagendado) no sistema. O fluxo é sempre
- *      Firestore → Agenda, nunca o contrário: este sistema NÃO lê/importa
- *      eventos da Agenda.
+ *      Firestore → Agenda. A única leitura da Agenda é a do item 8.
  *   3. "gerarContratoPDF" — recebe o HTML do contrato já pronto (montado
  *      no app.js — mesmo padrão do SolarGreen-ERP: nada de Google Docs
  *      modelo, o texto inteiro já vem com os dados substituídos), converte
@@ -40,10 +39,13 @@
  *      — ver a seção FAST START no fim deste arquivo.
  *   7. Cobrança das parcelas pelo WhatsApp ("cobPreparar", "cobRegistrarPush")
  *      — ver a seção COBRANÇA DAS PARCELAS no fim deste arquivo.
+ *   8. Autoagendamento pelo Calendly ("autoagendamentoRotina", gatilho de
+ *      15 min) — LÊ as reuniões que o Calendly lança na agenda do Benedito e
+ *      leva o lead pra "Agendado". Ver a seção AUTOAGENDAMENTO no fim.
  *
- * ESCOPO — SÓ CRIAÇÃO de evento na Agenda, SÓ CRIAÇÃO de arquivo no Drive:
- * nenhuma ação aqui lê, edita ou apaga evento da Agenda, nem apaga arquivo
- * do Drive.
+ * ESCOPO — na Agenda, só cria evento e só lê os do Calendly (item 8); no
+ * Drive, só cria arquivo. Nenhuma ação aqui edita ou apaga evento da Agenda,
+ * nem apaga arquivo do Drive.
  *
  * COMO USAR:
  * 1. Crie uma planilha Google Sheets em branco, só para servir de "casa"
@@ -2240,4 +2242,294 @@ function conferirCobranca() {
   var token = fbAccessToken_(cfg);
   console.log("Acesso ao Firebase OK (" + cfg.email + "). Parcelas em aberto: " + cobConsultar_(token, "parcelas", "status", "esperado").length +
               ". Aparelhos do financeiro: " + cobAparelhos_(token).length + ".");
+}
+
+// ══════════════ AUTOAGENDAMENTO PELO CALENDLY ══════════════
+//
+// O formulário do Tally termina com o Calendly embutido
+// (calendly.com/expansao-viegas/30min). O Tally não fica sabendo do horário
+// escolhido: o webhook traz só as respostas, e o lead nasce em Novo Lead. O
+// Calendly lança a reunião na agenda expansao.viegas@gmail.com, que a conta
+// dona deste script enxerga (compartilhada).
+//
+// A rotina de 15 em 15 minutos (instalarGatilhoAutoagendamento) lê essa
+// agenda, acha o lead pelo e-mail ou pelo celular do convidado e faz o mesmo
+// que o ERP faz ao arrastar o card para "Agendado": grava data e hora, muda a
+// etapa, cria a oportunidade no Funil de Vendas e marca enviadoAgenda (o
+// evento já existe; sem isso o ERP criaria outro). Reagendamento no Calendly
+// vira evento novo: o lead e a oportunidade ganham a data nova.
+//
+// Lê e grava pela conta dona do script, a mesma da cobrança, porque a
+// conta-robô não lê agendamentos. Evento sem lead espera AGD_HORAS_SEM_LEAD_
+// (a pessoa pode agendar antes de enviar o formulário); passado isso, o lead
+// nasce do próprio evento, direto em "Agendado".
+
+var AGD_CALENDARIO_PADRAO_ = "expansao.viegas@gmail.com";
+var AGD_DIAS_A_FRENTE_ = 90;
+var AGD_HORAS_SEM_LEAD_ = 2;
+var AGD_MINUTOS_ESPERA_ = 10;
+
+function agdCalendario_() {
+  var id = PropertiesService.getScriptProperties().getProperty("CALENDLY_CALENDAR_ID") || AGD_CALENDARIO_PADRAO_;
+  var cal = CalendarApp.getCalendarById(id);
+  if (!cal) throw new Error("A conta dona do script não enxerga a agenda " + id + ".");
+  return cal;
+}
+
+function agdSoDigitos_(t) { return String(t || "").replace(/\D/g, ""); }
+function agdFinal8_(t) { var d = agdSoDigitos_(t); return d.length >= 8 ? d.slice(-8) : ""; }
+function agdEmail_(t) { return String(t || "").trim().toLowerCase(); }
+function agdTextoPuro_(t) { return String(t || "").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " "); }
+
+// Reuniões do Calendly na janela (ontem até AGD_DIAS_A_FRENTE_). A descrição
+// que o Calendly escreve sempre tem um link calendly.com (cancelar/reagendar);
+// evento criado pelo ERP não tem, e fica de fora.
+function agdEventosCalendly_() {
+  var cal = agdCalendario_();
+  var agora = new Date();
+  var inicio = new Date(agora.getTime() - 24 * 3600 * 1000);
+  var fim = new Date(agora.getTime() + AGD_DIAS_A_FRENTE_ * 24 * 3600 * 1000);
+  var dono = agdEmail_(cal.getId());
+  return cal.getEvents(inicio, fim).filter(function (ev) {
+    return /calendly\.com/i.test(ev.getDescription() || "");
+  }).map(function (ev) {
+    var desc = agdTextoPuro_(ev.getDescription());
+    var convidados = ev.getGuestList(false).filter(function (g) { return agdEmail_(g.getEmail()) !== dono; });
+    // Sem os links: o código do evento no link do Calendly tem trechos que
+    // parecem número de celular.
+    var telefones = (desc.replace(/https?:\/\/\S+/g, " ").match(/\+?\d[\d\s().-]{8,}\d/g) || []).map(agdFinal8_).filter(Boolean);
+    return {
+      id: ev.getId(), inicio: ev.getStartTime(), criadoEm: ev.getDateCreated(), titulo: ev.getTitle(), descricao: desc,
+      emails: convidados.map(function (g) { return agdEmail_(g.getEmail()); }).filter(Boolean),
+      nomes: convidados.map(function (g) { return g.getName(); }).filter(Boolean),
+      telefones: telefones
+    };
+  });
+}
+
+// Todos os leads, com os campos crus (pra transicoes manter timestamp).
+function agdListarLeads_(token) {
+  var lista = [], pagina = "";
+  do {
+    var r = cobFsPedir_(token, "get", cobFsUrl_("agendamentos") + "?pageSize=300" + (pagina ? "&pageToken=" + encodeURIComponent(pagina) : ""));
+    (r.json.documents || []).forEach(function (d) { lista.push({ lead: cobDoc_(d), cru: d.fields || {} }); });
+    pagina = r.json.nextPageToken || "";
+  } while (pagina);
+  return lista;
+}
+
+// Lead do convidado: e-mail igual ou mesmo final de celular. Havendo mais de
+// um, o mais recente.
+function agdAcharLead_(leads, ev) {
+  var achados = leads.filter(function (l) {
+    var e = agdEmail_(l.lead.email), t = agdFinal8_(l.lead.telefone);
+    return (e && ev.emails.indexOf(e) !== -1) || (t && ev.telefones.indexOf(t) !== -1);
+  });
+  achados.sort(function (a, b) { return String(b.lead.createdAt || "").localeCompare(String(a.lead.createdAt || "")); });
+  return achados[0] || null;
+}
+
+function agdEtapas_(token, colecao) {
+  return cobListar_(token, colecao).sort(function (a, b) { return (a.ordem || 0) - (b.ordem || 0); });
+}
+
+// Igual a transicoesAtuais do app.js: card sem transicoes reconstrói a
+// partir do historico antigo e do createdAt, sem inventar nada.
+function agdTransicoesCruas_(token, item) {
+  var cru = item.cru, lead = item.lead;
+  if (cru.transicoes && cru.transicoes.arrayValue) {
+    var passadas = (lead.etapasPassadas && lead.etapasPassadas.length) ? lead.etapasPassadas : [lead.etapa];
+    return { passadas: passadas, transicoes: cru.transicoes.arrayValue.values || [] };
+  }
+  var hist = cobFsPedir_(token, "get", cobFsUrl_("agendamentos/" + lead._id + "/historico") + "?pageSize=300");
+  var eventos = (hist.json.documents || []).map(function (d) { return d.fields || {}; })
+    .filter(function (h) { return h.tipo && h.tipo.stringValue === "mudanca_etapa" && h.para && h.para.stringValue; })
+    .sort(function (a, b) { return String((a.timestamp || {}).timestampValue || "").localeCompare(String((b.timestamp || {}).timestampValue || "")); });
+  var inicial = eventos.length ? ((eventos[0].de || {}).stringValue || lead.etapa) : lead.etapa;
+  var transicoes = [], vistos = [lead.etapa];
+  if (inicial && cru.createdAt) transicoes.push({ mapValue: { fields: { etapa: { stringValue: inicial }, em: cru.createdAt } } });
+  if (inicial && vistos.indexOf(inicial) === -1) vistos.push(inicial);
+  eventos.forEach(function (h) {
+    var f = { etapa: h.para, em: h.timestamp || { nullValue: null } };
+    if (h.motivoPerda) f.motivo = h.motivoPerda;
+    transicoes.push({ mapValue: { fields: f } });
+    if (vistos.indexOf(h.para.stringValue) === -1) vistos.push(h.para.stringValue);
+  });
+  return { passadas: vistos, transicoes: transicoes };
+}
+
+// Grava campos já no formato do Firestore (merge).
+function agdGravarCru_(token, caminho, fields) {
+  var mascara = Object.keys(fields).map(function (k) { return "updateMask.fieldPaths=" + encodeURIComponent(k); });
+  cobFsPedir_(token, "patch", cobFsUrl_(caminho) + "?" + mascara.join("&"), { fields: fields });
+}
+function agdCampos_(dados) {
+  var f = {};
+  Object.keys(dados).forEach(function (k) {
+    var v = dados[k];
+    f[k] = v instanceof Date ? { timestampValue: v.toISOString() } : valorFirestore_(v);
+  });
+  return f;
+}
+function agdTransicao_(etapaId, quando) {
+  return { mapValue: { fields: { etapa: { stringValue: etapaId }, em: { timestampValue: quando.toISOString() } } } };
+}
+
+// Mesmos campos que processarAgendamentoAgendado (app.js) grava.
+function agdCriarOportunidade_(token, lead, leadId, etapaVendaId, data, hora) {
+  var agora = new Date();
+  var fields = agdCampos_({
+    clienteId: lead.clienteId || null, clienteNome: lead.clienteNome || "", telefone: lead.telefone || "",
+    email: lead.email || "", nivelInteresse: lead.nivelInteresse || null,
+    instagram: lead.instagram || "", estabelecimento: lead.estabelecimento || null,
+    timeComercial: lead.timeComercial || null, faturamento6meses: lead.faturamento6meses || null,
+    faturamentoMensal: lead.faturamentoMensal || null,
+    ondeTrava: Array.isArray(lead.ondeTrava) ? lead.ondeTrava : [],
+    comprometimento: lead.comprometimento != null ? lead.comprometimento : null,
+    data: data, hora: hora, agendamentoId: leadId, etapa: etapaVendaId, valorProposto: 0,
+    observacoes: lead.observacoes || "", perdida: false, motivoPerda: "", fechada: false,
+    dataEntrouEtapa: agora, createdAt: agora, updatedAt: agora, etapasPassadas: [etapaVendaId]
+  });
+  fields.transicoes = { arrayValue: { values: [agdTransicao_(etapaVendaId, agora)] } };
+  cobFsPedir_(token, "post", cobFsUrl_("oportunidades"), { fields: fields });
+}
+
+// Leva o lead pra "Agendado" com a data do evento (ou só troca a data, se
+// já estava lá). Devolve o que fez, pro log.
+function agdAplicar_(token, item, ev, ctx) {
+  var lead = item.lead, id = lead._id;
+  var data = Utilities.formatDate(ev.inicio, "America/Belem", "yyyy-MM-dd");
+  var hora = Utilities.formatDate(ev.inicio, "America/Belem", "HH:mm");
+  var agora = new Date();
+  var fields = agdCampos_({ data: data, hora: hora, calendlyEventId: ev.id, enviadoAgenda: true, updatedAt: agora });
+  // Evento que o ERP já criou fica como referência; o do Calendly vai em calendlyEventId.
+  if (!lead.googleEventId || lead.googleEventId === lead.calendlyEventId) fields.googleEventId = { stringValue: ev.id };
+  var moveu = lead.etapa !== ctx.agendado._id;
+  if (moveu) {
+    var base = agdTransicoesCruas_(token, item);
+    var passadas = base.passadas.indexOf(ctx.agendado._id) === -1 ? base.passadas.concat([ctx.agendado._id]) : base.passadas;
+    fields.etapa = { stringValue: ctx.agendado._id };
+    fields.dataEntrouEtapa = { timestampValue: agora.toISOString() };
+    fields.etapasPassadas = valorFirestore_(passadas);
+    fields.transicoes = { arrayValue: { values: base.transicoes.concat([agdTransicao_(ctx.agendado._id, agora)]) } };
+  }
+  var nota = "Autoagendou pelo Calendly: " + Utilities.formatDate(ev.inicio, "America/Belem", "dd/MM/yyyy 'às' HH:mm") + ".";
+  if (String(lead.observacoes || "").indexOf(nota) === -1) {
+    fields.observacoes = { stringValue: (lead.observacoes ? lead.observacoes + "\n\n" : "") + nota };
+  }
+  agdGravarCru_(token, "agendamentos/" + id, fields);
+
+  if (!lead.convertido) {
+    if (!ctx.etapaVenda) throw new Error("Funil de Vendas sem etapa: o lead " + id + " foi para Agendado, mas sem oportunidade.");
+    agdCriarOportunidade_(token, lead, id, ctx.etapaVenda._id, data, hora);
+    agdGravarCru_(token, "agendamentos/" + id, { convertido: { booleanValue: true } });
+    return (moveu ? "movido para Agendado" : "data gravada") + " e oportunidade criada";
+  }
+  cobConsultar_(token, "oportunidades", "agendamentoId", id).forEach(function (o) {
+    agdGravarCru_(token, "oportunidades/" + o._id, agdCampos_({ data: data, hora: hora, updatedAt: agora }));
+  });
+  return (moveu ? "movido para Agendado" : "data atualizada") + ", oportunidade com a data nova";
+}
+
+// Evento que passou do prazo sem lead: cliente e lead nascem dele, com ID
+// fixo (calendly_<hash do evento>), então rodar de novo não duplica.
+function agdCriarLeadDoEvento_(token, ev, ctx) {
+  var hash = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, ev.id).map(function (b) {
+    var h = ((b + 256) % 256).toString(16); return h.length === 1 ? "0" + h : h;
+  }).join("");
+  var docId = "calendly_" + hash;
+  var nome = ev.nomes[0] || ev.emails[0] || "Lead do Calendly";
+  var email = ev.emails[0] || "";
+  var telefone = (ev.descricao.match(/\+?\d[\d\s().-]{8,}\d/) || [""])[0].trim();
+  var cliente = criarDocumentoFirestoreComId_("clientes", docId, {
+    nome: nome, telefone: telefone, email: email, cpfCnpj: "", endereco: "",
+    representanteNome: "", representanteCpf: "", origem: "Calendly", observacoes: ""
+  });
+  if (!cliente.ok && !cliente.jaExistia) throw new Error(cliente.erro);
+  var lead = criarDocumentoFirestoreComId_("agendamentos", docId, {
+    clienteId: docId, clienteNome: nome, telefone: telefone, email: email, data: "", hora: "", etapa: ctx.primeira._id,
+    convertido: false, enviadoAgenda: false, motivoPerda: "",
+    observacoes: "Agendou pelo Calendly, mas não chegou resposta do formulário com o mesmo e-mail ou celular.\n\n" + ev.titulo + "\n" + ev.descricao.slice(0, 1500),
+    formCompleto: false, instagram: "", estabelecimento: null, timeComercial: null, faturamento6meses: null, faturamentoMensal: null, ondeTrava: []
+  });
+  if (!lead.ok && !lead.jaExistia) throw new Error(lead.erro);
+  var lido = cobFsPedir_(token, "get", cobFsUrl_("agendamentos/" + docId));
+  return { lead: cobDoc_(lido.json), cru: lido.json.fields || {} };
+}
+
+// gravar=false só diz no log o que faria (conferirAutoagendamento).
+function agdProcessar_(gravar) {
+  var props = PropertiesService.getScriptProperties();
+  var feitos = {};
+  try { feitos = JSON.parse(props.getProperty("AGD_CALENDLY_FEITOS") || "{}"); } catch (err) {}
+  var eventos = agdEventosCalendly_();
+  var novos = eventos.filter(function (ev) { return !feitos[ev.id]; });
+  var relato = [];
+  if (novos.length) {
+    var token = fbAccessToken_(fbConfig_());
+    var etapas = agdEtapas_(token, "etapasAgendamentoConfig");
+    var ctx = {
+      agendado: etapas.filter(function (e) { return e.entraFunilVendas === true; })[0],
+      primeira: etapas[0],
+      etapaVenda: agdEtapas_(token, "etapasVendaConfig")[0]
+    };
+    if (!ctx.agendado) throw new Error("Nenhuma etapa do Funil de Agendamento entra no Funil de Vendas (a \"Agendado\").");
+    var leads = agdListarLeads_(token);
+    novos.forEach(function (ev) {
+      var quem = Utilities.formatDate(ev.inicio, "America/Belem", "dd/MM HH:mm") + " " + (ev.emails.join(",") || ev.titulo);
+      try {
+        var horas = (Date.now() - ev.criadoEm.getTime()) / 3600000;
+        // Dá tempo de a resposta do Tally chegar: sem isso, quem já era lead
+        // antigo teria o card velho movido antes de o novo nascer.
+        if (horas < AGD_MINUTOS_ESPERA_ / 60) { relato.push(quem + ": recém-criado, espera o formulário"); return; }
+        var item = agdAcharLead_(leads, ev);
+        if (!item) {
+          if (horas < AGD_HORAS_SEM_LEAD_) { relato.push(quem + ": sem lead ainda, espera o formulário"); return; }
+          if (!gravar) { relato.push(quem + ": sem lead, criaria um a partir do evento"); return; }
+          item = agdCriarLeadDoEvento_(token, ev, ctx);
+        }
+        if (!gravar) {
+          var etapaAtual = etapas.filter(function (e) { return e._id === item.lead.etapa; })[0];
+          relato.push(quem + ": lead " + item.lead._id + " (" + item.lead.clienteNome + "), hoje em " + (etapaAtual ? etapaAtual.nome : item.lead.etapa) +
+            ", data " + (item.lead.data || "vazia") + " " + (item.lead.hora || "") + (item.lead.convertido ? ", já com oportunidade" : ""));
+          return;
+        }
+        relato.push(quem + ": " + agdAplicar_(token, item, ev, ctx));
+        feitos[ev.id] = ev.inicio.getTime();
+      } catch (err) {
+        relato.push(quem + ": ERRO " + err);
+        console.error("Autoagendamento, evento " + ev.id + ": " + err);
+      }
+    });
+  }
+  if (gravar) {
+    var limite = Date.now() - 2 * 24 * 3600 * 1000;
+    Object.keys(feitos).forEach(function (k) { if (feitos[k] < limite) delete feitos[k]; });
+    props.setProperty("AGD_CALENDLY_FEITOS", JSON.stringify(feitos));
+  }
+  return { eventos: eventos.length, novos: novos.length, relato: relato };
+}
+
+function autoagendamentoRotina() {
+  var r = agdProcessar_(true);
+  if (r.relato.length) console.log("Autoagendamento: " + r.relato.join(" | "));
+}
+
+// Rode no editor (▶): mostra as reuniões do Calendly e o lead de cada uma,
+// sem gravar nada.
+function conferirAutoagendamento() {
+  agdEventosCalendly_().slice(0, 5).forEach(function (ev) {
+    console.log(JSON.stringify({ id: ev.id, inicio: ev.inicio, criadoEm: ev.criadoEm, titulo: ev.titulo, emails: ev.emails, nomes: ev.nomes, telefones: ev.telefones, descricao: ev.descricao.slice(0, 800) }));
+  });
+  var r = agdProcessar_(false);
+  console.log("Reuniões do Calendly na janela: " + r.eventos + ". Ainda não aplicadas: " + r.novos + ".\n" + r.relato.join("\n"));
+}
+
+// Rode uma vez no editor (▶) pra ligar a rotina.
+function instalarGatilhoAutoagendamento() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "autoagendamentoRotina") return;
+  }
+  ScriptApp.newTrigger("autoagendamentoRotina").timeBased().everyMinutes(15).create();
 }
