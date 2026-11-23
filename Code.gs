@@ -124,6 +124,7 @@ function rotear_(body) {
       case "listarCalendarios": return acaoListarCalendarios_();
       case "criarEventoAgenda": return acaoCriarEventoAgenda_(body.calendarId, body.clienteNome, body.clienteEmail, body.observacoes, body.inicio, body.duracaoMinutos);
       case "gerarContratoPDF": return acaoGerarContratoPDF_(body.html, body.clienteNome);
+      case "criarPastaCliente": return acaoCriarPastaCliente_(body.agendamentoId);
       case "enviarParaAssinatura": return acaoEnviarParaAssinatura_(body.fileId, body.clienteNome, body.clienteEmail, body.nomeDocumento);
       case "fsRegistrar": return acaoFsRegistrar_(body);
       case "fsPagamento": return acaoFsPagamento_(body);
@@ -2423,11 +2424,13 @@ function agdAplicar_(token, item, ev, ctx) {
     if (!ctx.etapaVenda) throw new Error("Funil de Vendas sem etapa: o lead " + id + " foi para Agendado, mas sem oportunidade.");
     agdCriarOportunidade_(token, lead, id, ctx.etapaVenda._id, data, hora);
     agdGravarCru_(token, "agendamentos/" + id, { convertido: { booleanValue: true } });
+    agdPastaDrive_(id);
     return (moveu ? "movido para Agendado" : "data gravada") + " e oportunidade criada";
   }
   cobConsultar_(token, "oportunidades", "agendamentoId", id).forEach(function (o) {
     agdGravarCru_(token, "oportunidades/" + o._id, agdCampos_({ data: data, hora: hora, updatedAt: agora }));
   });
+  agdPastaDrive_(id);
   return (moveu ? "movido para Agendado" : "data atualizada") + ", oportunidade com a data nova";
 }
 
@@ -2532,4 +2535,211 @@ function instalarGatilhoAutoagendamento() {
     if (triggers[i].getHandlerFunction() === "autoagendamentoRotina") return;
   }
   ScriptApp.newTrigger("autoagendamentoRotina").timeBased().everyMinutes(15).create();
+}
+
+// ══════════════ PASTA DO CLIENTE NO DRIVE + PLANILHA DE DIAGNÓSTICO ══════════════
+//
+// Quando o lead vira "Agendado" (arrastando no ERP ou pelo Calendly), cria
+// PROSPECT > MENTORIA > NOME - EMPRESA > Planilha de diagnóstico e grava o
+// link da pasta no agendamento e na oportunidade (botão "Abrir pasta no
+// Drive" no cadastro). Cria na conta dona do script. Quem da equipe precisa
+// abrir compartilha a pasta PROSPECT com essas pessoas no Drive.
+//
+// Idempotente: se o lead já tem pasta, devolve a que existe. Campo que o
+// CRM não tem fica em branco; nada é inventado. Escopo novo: spreadsheets
+// (appsscript.json). Depois de colar, rode "autorizar" uma vez no editor.
+
+var DRV_COR_VERDE_ = "#00ff00";
+var DRV_COR_AZUL_ = "#1155cc";
+var DRV_LABEL_ESTAB_ = { ponto_fixo: "Ponto fixo", remoto_online: "Remoto/Online" };
+var DRV_LABEL_TIME_ = { "0_1": "0 a 1 vendedores", ate_2: "Até 2 vendedores", ate_3: "Até 3 vendedores", equipe: "Equipe comercial" };
+var DRV_LABEL_FAT_MES_ = {
+  ate_150k: "Abaixo de R$ 150 mil", "150k_300k": "De R$ 150 mil a menos de R$ 300 mil",
+  "300k_700k": "De R$ 300 mil a R$ 700 mil", acima_700k: "Acima de R$ 700 mil"
+};
+var DRV_LABEL_FAT_6M_ = {
+  menos_500k: "Menos de R$ 500.000,00", "500k_800k": "Entre R$ 500.000,00 e R$ 800.000,00",
+  "800k_1_2mi": "Entre R$ 800.000,00 e R$ 1,2 milhão", "1_2mi_2mi": "Entre R$ 1,2 milhão e R$ 2 milhões",
+  acima_2mi: "Acima de R$ 2 milhões"
+};
+
+function acaoCriarPastaCliente_(agendamentoId) {
+  if (!agendamentoId) return { ok: false, erro: "Falta o ID do agendamento." };
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var token = fbAccessToken_(fbConfig_());
+    var lead = cobLer_(token, "agendamentos/" + agendamentoId);
+    if (!lead) return { ok: false, erro: "Agendamento não encontrado." };
+    if (lead.pastaDriveId) {
+      try {
+        var existente = DriveApp.getFolderById(lead.pastaDriveId);
+        return { ok: true, jaExistia: true, pastaUrl: existente.getUrl(), planilhaUrl: lead.planilhaDriveUrl || "" };
+      } catch (err) { /* pasta apagada: cria de novo abaixo */ }
+    }
+    var linhas = drvLinhasObservacoes_(lead.observacoes);
+    var empresa = drvAcharEmpresa_(linhas);
+    var nomePasta = drvNomePasta_(lead.clienteNome, empresa);
+
+    var mentoria = drvPastaFilha_(drvPastaFilha_(DriveApp.getRootFolder(), "PROSPECT"), "MENTORIA");
+    var pasta = drvPastaFilha_(mentoria, nomePasta);
+    var planilha = drvPlanilhaDaPasta_(pasta, nomePasta);
+    drvPreencherPlanilha_(planilha, lead, linhas, empresa);
+
+    var dados = { pastaDriveId: pasta.getId(), pastaDriveUrl: pasta.getUrl(), planilhaDriveUrl: planilha.getUrl() };
+    cobGravar_(token, "agendamentos/" + agendamentoId, dados);
+    cobConsultar_(token, "oportunidades", "agendamentoId", agendamentoId).forEach(function (o) {
+      cobGravar_(token, "oportunidades/" + o._id, dados);
+    });
+    return { ok: true, pastaUrl: dados.pastaDriveUrl, planilhaUrl: dados.planilhaDriveUrl };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function drvPastaFilha_(pai, nome) {
+  var it = pai.getFoldersByName(nome);
+  return it.hasNext() ? it.next() : pai.createFolder(nome);
+}
+
+function drvNomePasta_(cliente, empresa) {
+  var limpa = function (s) { return String(s || "").replace(/[\\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim().toUpperCase(); };
+  var c = limpa(cliente) || "SEM NOME", e = limpa(empresa);
+  return e ? c + " - " + e : c;
+}
+
+// "Pergunta: resposta", uma por linha, como o webhook grava nas observações.
+// O que não tem esse formato (notas da equipe) entra com pergunta vazia.
+function drvLinhasObservacoes_(obs) {
+  var itens = [];
+  String(obs || "").split("\n").forEach(function (l) {
+    l = l.trim();
+    if (!l) return;
+    var i = l.indexOf(": ");
+    if (i > 0 && i < 200 && !/^(Formulário|Status|UTM)$/.test(l.slice(0, i))) itens.push({ pergunta: l.slice(0, i), resposta: l.slice(i + 2).trim(), usada: false });
+    else itens.push({ pergunta: "", resposta: l, usada: false });
+  });
+  return itens;
+}
+
+function drvAcharResposta_(linhas, regex, excluir) {
+  for (var i = 0; i < linhas.length; i++) {
+    var p = linhas[i].pergunta;
+    if (p && regex.test(p) && !(excluir && excluir.test(p))) { linhas[i].usada = true; return linhas[i].resposta; }
+  }
+  return "";
+}
+
+function drvAcharEmpresa_(linhas) {
+  var r = drvAcharResposta_(linhas, /empresa|negócio|negocio/i, /faturamento|funcion|tempo|vendedor|problema|desafio|equipe|cidade|site|instagram/i);
+  return r.length <= 60 ? r : "";
+}
+
+// Procura uma planilha já criada na pasta; senão cria uma.
+function drvPlanilhaDaPasta_(pasta, nomePasta) {
+  var nome = "Planilha de diagnóstico - " + nomePasta;
+  var it = pasta.getFilesByName(nome);
+  if (it.hasNext()) return SpreadsheetApp.open(it.next());
+  var ss = SpreadsheetApp.create(nome);
+  var arq = DriveApp.getFileById(ss.getId());
+  pasta.addFile(arq);
+  DriveApp.getRootFolder().removeFile(arq);
+  return ss;
+}
+
+function drvPreencherPlanilha_(ss, lead, linhas, empresa) {
+  var sh = ss.getSheets()[0];
+  sh.setName("Diagnóstico");
+  sh.clear();
+  var R = [];
+  var titulo = function (t) { R.push({ t: t, tipo: "titulo" }); };
+  var secao = function (t, cor) { R.push({ t: t, tipo: "secao", cor: cor }); };
+  var linha = function (t, forte) { R.push({ t: t, tipo: forte ? "forte" : "linha" }); };
+  var campo = function (rotulo, valor) { linha(rotulo + ": " + (valor || "")); };
+
+  var achar = function (re, ex) { return drvAcharResposta_(linhas, re, ex); };
+  var cidade = achar(/cidade|estado|onde (fica|você mora|voce mora)/i);
+  var socio = achar(/sócio|socio/i);
+  var cargo = achar(/cargo|função|funcao/i);
+  var func = achar(/funcion|colaborador/i);
+  var tempo = achar(/tempo de (mercado|empresa|atua)|há quanto tempo|anos de/i);
+  var gestor = achar(/gestor comercial|gerente comercial/i);
+  var media = achar(/média de faturamento|media de faturamento/i);
+  var situacao = achar(/situação atual|situacao atual/i);
+  var objetivo = achar(/objetivo|expectativa|meta/i);
+  var motivo = achar(/motivo|por que (procur|busc)|o que (te|o) (trouxe|levou)/i);
+
+  titulo("CHECKLIST CONSULTORIA GRÁTIS");
+  secao("● RAPPORT:", DRV_COR_VERDE_);
+  linha(drvNomePasta_(lead.clienteNome, empresa), true);
+  campo("WhatsApp", lead.telefone);
+  campo("E-mail", lead.email);
+  campo("Instagram", lead.instagram);
+  campo("Cidade/Estado", cidade);
+  campo("Sócio", socio);
+  campo("Cargo/função do cliente", cargo);
+  campo("Funcionários", func);
+  campo("Tempo de mercado", tempo);
+  campo("Ponto fixo ou remoto", DRV_LABEL_ESTAB_[lead.estabelecimento] || "");
+  campo("Time comercial", DRV_LABEL_TIME_[lead.timeComercial] || "");
+  campo("Gestor comercial", gestor);
+  campo("Faturamento por mês", DRV_LABEL_FAT_MES_[lead.faturamentoMensal] || "");
+  campo("Faturamento (últimos 6 meses)", DRV_LABEL_FAT_6M_[lead.faturamento6meses] || "");
+  campo("Média de faturamento", media);
+  campo("Situação atual da empresa", situacao);
+  campo("Reunião", lead.data ? lead.data.split("-").reverse().join("/") + (lead.hora ? " " + lead.hora : "") : "");
+  linha(""); linha("");
+
+  secao("● MOTIVO DELE ESTAR AQUI:", DRV_COR_AZUL_);
+  campo("Motivo", motivo);
+  campo("Principais dificuldades", Array.isArray(lead.ondeTrava) ? lead.ondeTrava.join("; ") : "");
+  campo("Objetivos e expectativas", objetivo);
+  campo("Comprometimento (0 a 10)", lead.comprometimento != null ? lead.comprometimento + "/10" : "");
+  // Todo o resto que o lead respondeu ou que a equipe anotou.
+  linhas.forEach(function (l) {
+    if (l.usada) return;
+    if (l.pergunta) {
+      if (l.resposta === lead.telefone || l.resposta === lead.email) return;
+      linha(l.pergunta + ": " + l.resposta);
+    } else linha(l.resposta);
+  });
+  linha(""); linha("");
+
+  secao("● DIAGNÓSTICO:", DRV_COR_VERDE_);
+  linha(""); linha(""); linha(""); linha("");
+
+  // Formato da planilha modelo: coluna A com ~545 px, título Arial 15 em
+  // negrito, faixas Arial 11 com borda fina, linhas Calibri 11 só com borda à direita.
+  sh.setColumnWidth(1, 545);
+  var preto = "#000000", fino = SpreadsheetApp.BorderStyle.SOLID, grosso = SpreadsheetApp.BorderStyle.SOLID_MEDIUM;
+  R.forEach(function (r, i) {
+    var cel = sh.getRange(i + 1, 1);
+    cel.setValue(r.t).setVerticalAlignment("middle");
+    if (r.tipo === "titulo") {
+      cel.setFontFamily("Arial").setFontSize(15).setFontWeight("bold").setHorizontalAlignment("center").setWrap(false)
+        .setBorder(true, true, true, true, false, false, preto, grosso);
+    } else if (r.tipo === "secao") {
+      cel.setFontFamily("Arial").setFontSize(11).setFontWeight("bold").setBackground(r.cor).setWrap(true)
+        .setBorder(true, true, true, true, false, false, preto, fino);
+    } else {
+      cel.setFontFamily("Calibri").setFontSize(11).setFontWeight(r.tipo === "forte" ? "bold" : "normal").setWrap(true)
+        .setBorder(false, false, false, true, false, false, preto, fino);
+    }
+  });
+  SpreadsheetApp.flush();
+}
+
+// Pasta no Drive: falhar aqui não pode desfazer o agendamento.
+function agdPastaDrive_(leadId) {
+  try {
+    var r = acaoCriarPastaCliente_(leadId);
+    if (!r.ok) console.error("Pasta do Drive, lead " + leadId + ": " + r.erro);
+  } catch (err) { console.error("Pasta do Drive, lead " + leadId + ": " + err); }
+}
+
+// Rode no editor (▶): cria a pasta do lead cujo ID está na Script Property
+// TESTE_AGENDAMENTO_ID e mostra o resultado no log.
+function testarPastaCliente() {
+  var id = PropertiesService.getScriptProperties().getProperty("TESTE_AGENDAMENTO_ID");
+  console.log(JSON.stringify(acaoCriarPastaCliente_(id)));
 }

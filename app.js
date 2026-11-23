@@ -1465,6 +1465,20 @@ async function processarAgendamentoAgendado(agendamentoId, dados) {
       mostrarErro("Agendamento salvo, mas não foi possível criar o evento na Agenda: " + err.message);
     }
   }
+  // Pasta + planilha de diagnóstico no Drive. Em segundo plano: o card não
+  // espera, e o botão aparece no cadastro quando o Firestore atualizar.
+  if (!dados.pastaDriveId) {
+    chamarAppsScript("criarPastaCliente", { agendamentoId }).catch((err) => {
+      mostrarErro("Agendamento salvo, mas não foi possível criar a pasta no Drive: " + err.message);
+    });
+  }
+}
+
+// Botão de acesso à pasta do cliente. O link vem do Apps Script; só vira
+// <a> se for do Google Drive.
+function botaoPastaDrive(url) {
+  if (!/^https:\/\/drive\.google\.com\//.test(url || "")) return "—";
+  return `<a class="btn-small" href="${esc(url)}" target="_blank" rel="noopener">Abrir pasta no Drive</a>`;
 }
 
 // Exclusão em cascata do histórico E das atividades — sem isso, os
@@ -1808,6 +1822,7 @@ function abrirDetalheAgendamento(id) {
         ["Observações", esc(a.observacoes || "—")],
         ["Já virou oportunidade?", a.convertido ? "Sim" : "Não"],
         ["Evento criado na Agenda?", a.enviadoAgenda ? "Sim" : "Não"],
+        ["Pasta no Google Drive", botaoPastaDrive(a.pastaDriveUrl)],
         ...(a.motivoPerda ? [["Motivo da perda", esc(a.motivoPerda)]] : [])
       ],
       onEditar: () => editarAgendamento(id),
@@ -2046,6 +2061,7 @@ function abrirDetalheOportunidade(id) {
       ["Hora do agendamento", esc(o.hora || "—")],
       ["Valor proposto", esc(fmtMoeda(o.valorProposto))],
       ["Observações", esc(o.observacoes || "—")],
+      ["Pasta no Google Drive", botaoPastaDrive(o.pastaDriveUrl || STATE.agendamentos.find((x) => x.id === o.agendamentoId)?.pastaDriveUrl)],
       ["Fechada?", o.fechada ? "Sim" : "Não"],
       ...(o.motivoPerda ? [["Motivo da perda", esc(o.motivoPerda)]] : [])
     ],
