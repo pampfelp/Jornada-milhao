@@ -2753,6 +2753,5 @@ function testarPastaCliente() {
 function verificarPastaMentoria() {
   var id = PropertiesService.getScriptProperties().getProperty("DRIVE_MENTORIA_FOLDER_ID");
   var pasta = DriveApp.getFolderById(id);
-  console.log("Pasta: " + pasta.getName() + " | dono: " + (pasta.getOwner() ? pasta.getOwner().getEmail() : "?") +
-    " | seu acesso: " + (pasta.getAccess(Session.getActiveUser()) || "?") + " | URL: " + pasta.getUrl());
+  console.log("Pasta: " + pasta.getName() + " | dono: " + (pasta.getOwner() ? pasta.getOwner().getEmail() : "?") + " | URL: " + pasta.getUrl());
 }
