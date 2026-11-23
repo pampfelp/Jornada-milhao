@@ -2581,7 +2581,11 @@ function acaoCriarPastaCliente_(agendamentoId) {
     var empresa = drvAcharEmpresa_(linhas);
     var nomePasta = drvNomePasta_(lead.clienteNome, empresa);
 
-    var mentoria = drvPastaFilha_(drvPastaFilha_(DriveApp.getRootFolder(), "PROSPECT"), "MENTORIA");
+    // A pasta MENTORIA mora no Drive do expansao.viegas, compartilhada como
+    // editor com a conta dona do script. O ID fica em Script Properties.
+    var idMentoria = PropertiesService.getScriptProperties().getProperty("DRIVE_MENTORIA_FOLDER_ID");
+    if (!idMentoria) return { ok: false, erro: "Falta a Script Property DRIVE_MENTORIA_FOLDER_ID (pasta MENTORIA do Drive do expansao.viegas)." };
+    var mentoria = DriveApp.getFolderById(idMentoria);
     var pasta = drvPastaFilha_(mentoria, nomePasta);
     var planilha = drvPlanilhaDaPasta_(pasta, nomePasta);
     drvPreencherPlanilha_(planilha, lead, linhas, empresa);
