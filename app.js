@@ -1843,7 +1843,7 @@ function abrirDetalheAgendamento(id) {
         ["Observações", esc(a.observacoes || "—")],
         ["Já virou oportunidade?", a.convertido ? "Sim" : "Não"],
         ["Evento criado na Agenda?", a.enviadoAgenda ? "Sim" : "Não"],
-        ["Pasta no Google Drive", botaoPastaDrive(a.pastaDriveUrl, (a.convertido || a.data) ? id : null)],
+        ["Pasta no Google Drive", botaoPastaDrive(a.pastaDriveUrl, (a.convertido || STATE.etapasAgendamento.find((e) => e.id === a.etapa)?.entraFunilVendas) ? id : null)],
         ...(a.motivoPerda ? [["Motivo da perda", esc(a.motivoPerda)]] : [])
       ],
       onEditar: () => editarAgendamento(id),
