@@ -2581,10 +2581,11 @@ function acaoCriarPastaCliente_(agendamentoId) {
     var empresa = drvAcharEmpresa_(linhas);
     var nomePasta = drvNomePasta_(lead.clienteNome, empresa);
 
-    // A pasta MENTORIA mora no Drive do expansao.viegas, compartilhada como
-    // editor com a conta dona do script. O ID fica em Script Properties.
+    // A pasta dos clientes (MENTORIA > PROSPECTS) mora no Drive do
+    // expansao.viegas, compartilhada como editor com a conta dona do script.
+    // O ID fica em Script Properties.
     var idMentoria = PropertiesService.getScriptProperties().getProperty("DRIVE_MENTORIA_FOLDER_ID");
-    if (!idMentoria) return { ok: false, erro: "Falta a Script Property DRIVE_MENTORIA_FOLDER_ID (pasta MENTORIA do Drive do expansao.viegas)." };
+    if (!idMentoria) return { ok: false, erro: "Falta a Script Property DRIVE_MENTORIA_FOLDER_ID (pasta PROSPECTS, dentro da MENTORIA, no Drive do expansao.viegas)." };
     var mentoria = DriveApp.getFolderById(idMentoria);
     var pasta = drvPastaFilha_(mentoria, nomePasta);
     var planilha = drvPlanilhaDaPasta_(pasta, nomePasta);
@@ -2754,4 +2755,24 @@ function verificarPastaMentoria() {
   var id = PropertiesService.getScriptProperties().getProperty("DRIVE_MENTORIA_FOLDER_ID");
   var pasta = DriveApp.getFolderById(id);
   console.log("Pasta: " + pasta.getName() + " | dono: " + (pasta.getOwner() ? pasta.getOwner().getEmail() : "?") + " | URL: " + pasta.getUrl());
+}
+
+// Rode no editor (▶): leads que ganharam pasta antes de a pasta de destino
+// estar configurada (ficaram no Drive da conta do script) são MOVIDOS para a
+// pasta configurada. O ID da pasta não muda, então links e o que a equipe
+// já escreveu na planilha continuam valendo.
+function migrarPastasParaDestino() {
+  var destino = DriveApp.getFolderById(PropertiesService.getScriptProperties().getProperty("DRIVE_MENTORIA_FOLDER_ID"));
+  var token = fbAccessToken_(fbConfig_());
+  cobListar_(token, "agendamentos").forEach(function (lead) {
+    if (!lead.pastaDriveId) return;
+    try {
+      var pasta = DriveApp.getFolderById(lead.pastaDriveId);
+      var jaEsta = false, pais = pasta.getParents();
+      while (pais.hasNext()) if (pais.next().getId() === destino.getId()) jaEsta = true;
+      if (jaEsta) { console.log(lead.clienteNome + ": já está no destino"); return; }
+      pasta.moveTo(destino);
+      console.log(lead.clienteNome + ": movida para " + destino.getName());
+    } catch (err) { console.error(lead.clienteNome + ": " + err); }
+  });
 }
