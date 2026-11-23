@@ -1476,10 +1476,31 @@ async function processarAgendamentoAgendado(agendamentoId, dados) {
 
 // Botão de acesso à pasta do cliente. O link vem do Apps Script; só vira
 // <a> se for do Google Drive.
-function botaoPastaDrive(url) {
-  if (!/^https:\/\/drive\.google\.com\//.test(url || "")) return "—";
+function botaoPastaDrive(url, agendamentoId) {
+  if (!/^https:\/\/drive\.google\.com\//.test(url || "")) {
+    if (!agendamentoId) return "—";
+    return `<button type="button" class="btn-small" data-criar-pasta="${esc(agendamentoId)}">Criar pasta no Drive</button>`;
+  }
   return `<a class="btn-small" href="${esc(url)}" target="_blank" rel="noopener">Abrir pasta no Drive</a>`;
 }
+
+// Cria a pasta de quem já estava agendado antes da integração (ou cuja
+// criação falhou). O Apps Script é idempotente: clicar de novo não duplica.
+document.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("[data-criar-pasta]");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = "Criando...";
+  try {
+    const resp = await chamarAppsScript("criarPastaCliente", { agendamentoId: btn.dataset.criarPasta });
+    btn.parentElement.innerHTML = botaoPastaDrive(resp.pastaUrl);
+    mostrarToast("Pasta criada no Drive.");
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "Criar pasta no Drive";
+    mostrarErro("Não foi possível criar a pasta no Drive: " + err.message);
+  }
+});
 
 // Exclusão em cascata do histórico E das atividades — sem isso, os
 // subdocumentos ficam órfãos no Firestore pra sempre (as regras já
@@ -1822,7 +1843,7 @@ function abrirDetalheAgendamento(id) {
         ["Observações", esc(a.observacoes || "—")],
         ["Já virou oportunidade?", a.convertido ? "Sim" : "Não"],
         ["Evento criado na Agenda?", a.enviadoAgenda ? "Sim" : "Não"],
-        ["Pasta no Google Drive", botaoPastaDrive(a.pastaDriveUrl)],
+        ["Pasta no Google Drive", botaoPastaDrive(a.pastaDriveUrl, (a.convertido || a.data) ? id : null)],
         ...(a.motivoPerda ? [["Motivo da perda", esc(a.motivoPerda)]] : [])
       ],
       onEditar: () => editarAgendamento(id),
@@ -2061,7 +2082,7 @@ function abrirDetalheOportunidade(id) {
       ["Hora do agendamento", esc(o.hora || "—")],
       ["Valor proposto", esc(fmtMoeda(o.valorProposto))],
       ["Observações", esc(o.observacoes || "—")],
-      ["Pasta no Google Drive", botaoPastaDrive(o.pastaDriveUrl || STATE.agendamentos.find((x) => x.id === o.agendamentoId)?.pastaDriveUrl)],
+      ["Pasta no Google Drive", botaoPastaDrive(o.pastaDriveUrl || STATE.agendamentos.find((x) => x.id === o.agendamentoId)?.pastaDriveUrl, o.agendamentoId)],
       ["Fechada?", o.fechada ? "Sim" : "Não"],
       ...(o.motivoPerda ? [["Motivo da perda", esc(o.motivoPerda)]] : [])
     ],
