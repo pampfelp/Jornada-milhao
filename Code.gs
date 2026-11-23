@@ -2557,11 +2557,6 @@ var DRV_LABEL_FAT_MES_ = {
   ate_150k: "Abaixo de R$ 150 mil", "150k_300k": "De R$ 150 mil a menos de R$ 300 mil",
   "300k_700k": "De R$ 300 mil a R$ 700 mil", acima_700k: "Acima de R$ 700 mil"
 };
-var DRV_LABEL_FAT_6M_ = {
-  menos_500k: "Menos de R$ 500.000,00", "500k_800k": "Entre R$ 500.000,00 e R$ 800.000,00",
-  "800k_1_2mi": "Entre R$ 800.000,00 e R$ 1,2 milhão", "1_2mi_2mi": "Entre R$ 1,2 milhão e R$ 2 milhões",
-  acima_2mi: "Acima de R$ 2 milhões"
-};
 
 function acaoCriarPastaCliente_(agendamentoId) {
   if (!agendamentoId) return { ok: false, erro: "Falta o ID do agendamento." };
@@ -2665,49 +2660,27 @@ function drvPreencherPlanilha_(ss, lead, linhas, empresa) {
   var achar = function (re, ex) { return drvAcharResposta_(linhas, re, ex); };
   var cidade = achar(/cidade|estado|onde (fica|você mora|voce mora)/i);
   var socio = achar(/sócio|socio/i);
-  var cargo = achar(/cargo|função|funcao/i);
   var func = achar(/funcion|colaborador/i);
   var tempo = achar(/tempo de (mercado|empresa|atua)|há quanto tempo|anos de/i);
   var gestor = achar(/gestor comercial|gerente comercial/i);
-  var media = achar(/média de faturamento|media de faturamento/i);
-  var situacao = achar(/situação atual|situacao atual/i);
-  var objetivo = achar(/objetivo|expectativa|meta/i);
   var motivo = achar(/motivo|por que (procur|busc)|o que (te|o) (trouxe|levou)/i);
 
   titulo("CHECKLIST CONSULTORIA GRÁTIS");
   secao("● RAPPORT:", DRV_COR_VERDE_);
   linha(drvNomePasta_(lead.clienteNome, empresa), true);
-  campo("WhatsApp", lead.telefone);
-  campo("E-mail", lead.email);
-  campo("Instagram", lead.instagram);
   campo("Cidade/Estado", cidade);
   campo("Sócio", socio);
-  campo("Cargo/função do cliente", cargo);
   campo("Funcionários", func);
   campo("Tempo de mercado", tempo);
   campo("Ponto fixo ou remoto", DRV_LABEL_ESTAB_[lead.estabelecimento] || "");
   campo("Time comercial", DRV_LABEL_TIME_[lead.timeComercial] || "");
   campo("Gestor comercial", gestor);
   campo("Faturamento por mês", DRV_LABEL_FAT_MES_[lead.faturamentoMensal] || "");
-  campo("Faturamento (últimos 6 meses)", DRV_LABEL_FAT_6M_[lead.faturamento6meses] || "");
-  campo("Média de faturamento", media);
-  campo("Situação atual da empresa", situacao);
-  campo("Reunião", lead.data ? lead.data.split("-").reverse().join("/") + (lead.hora ? " " + lead.hora : "") : "");
   linha(""); linha("");
 
   secao("● MOTIVO DELE ESTAR AQUI:", DRV_COR_AZUL_);
   campo("Motivo", motivo);
   campo("Principais dificuldades", Array.isArray(lead.ondeTrava) ? lead.ondeTrava.join("; ") : "");
-  campo("Objetivos e expectativas", objetivo);
-  campo("Comprometimento (0 a 10)", lead.comprometimento != null ? lead.comprometimento + "/10" : "");
-  // Todo o resto que o lead respondeu ou que a equipe anotou.
-  linhas.forEach(function (l) {
-    if (l.usada) return;
-    if (l.pergunta) {
-      if (l.resposta === lead.telefone || l.resposta === lead.email) return;
-      linha(l.pergunta + ": " + l.resposta);
-    } else linha(l.resposta);
-  });
   linha(""); linha("");
 
   secao("● DIAGNÓSTICO:", DRV_COR_VERDE_);
