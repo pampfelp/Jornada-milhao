@@ -2747,3 +2747,12 @@ function testarPastaCliente() {
   var id = PropertiesService.getScriptProperties().getProperty("TESTE_AGENDAMENTO_ID");
   console.log(JSON.stringify(acaoCriarPastaCliente_(id)));
 }
+
+// Rode no editor (▶): confirma que a conta do script enxerga a pasta
+// MENTORIA configurada e pode criar dentro dela (não cria nada).
+function verificarPastaMentoria() {
+  var id = PropertiesService.getScriptProperties().getProperty("DRIVE_MENTORIA_FOLDER_ID");
+  var pasta = DriveApp.getFolderById(id);
+  console.log("Pasta: " + pasta.getName() + " | dono: " + (pasta.getOwner() ? pasta.getOwner().getEmail() : "?") +
+    " | seu acesso: " + (pasta.getAccess(Session.getActiveUser()) || "?") + " | URL: " + pasta.getUrl());
+}
